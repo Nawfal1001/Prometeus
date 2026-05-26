@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: prometheus-trading
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: TRADING_MODE
+        value: paper
+      - key: EXCHANGE
+        value: binance
+      - key: LOG_LEVEL
+        value: INFO
+      # Add your secret keys in Render dashboard under Environment
+      # BINANCE_API_KEY, BINANCE_API_SECRET, TELEGRAM_BOT_TOKEN, etc.

@@ -1,0 +1,163 @@
+/* ── PROMETHEUS UI — style.css ─────────────────────────────── */
+:root {
+  --bg:       #0d0f14;
+  --bg2:      #151820;
+  --bg3:      #1e2130;
+  --border:   #2a2d3e;
+  --text:     #e2e8f0;
+  --muted:    #6b7280;
+  --green:    #10b981;
+  --red:      #ef4444;
+  --yellow:   #f59e0b;
+  --blue:     #3b82f6;
+  --purple:   #8b5cf6;
+  --radius:   8px;
+  --shadow:   0 4px 24px rgba(0,0,0,0.4);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ── Navbar ────────────────────────────────────────────────── */
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 12px 24px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+}
+.nav-brand { font-weight: 700; font-size: 18px; color: var(--yellow); letter-spacing: 1px; }
+.nav-links  { display: flex; gap: 16px; }
+.nav-links a { color: var(--muted); text-decoration: none; padding: 4px 10px; border-radius: 6px; transition: .2s; }
+.nav-links a:hover, .nav-links a.active { color: var(--text); background: var(--bg3); }
+.nav-status { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* ── Badges ────────────────────────────────────────────────── */
+.badge { padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+.badge-stopped { background: var(--bg3); color: var(--muted); }
+.badge-paper   { background: #1a3a2a; color: var(--green); }
+.badge-live    { background: #3a1a1a; color: var(--red); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:.5 } }
+
+/* ── Buttons ───────────────────────────────────────────────── */
+.btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: .15s; }
+.btn-primary   { background: var(--blue);   color: #fff; }
+.btn-danger    { background: var(--red);    color: #fff; }
+.btn-warning   { background: var(--yellow); color: #000; }
+.btn-secondary { background: var(--bg3);   color: var(--text); border: 1px solid var(--border); }
+.btn:hover { filter: brightness(1.15); }
+
+/* ── Container ─────────────────────────────────────────────── */
+.container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+.mt { margin-top: 16px; }
+
+/* ── Stats Grid ────────────────────────────────────────────── */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-card  { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.stat-value { font-size: 22px; font-weight: 700; margin: 4px 0; }
+.stat-sub   { font-size: 12px; color: var(--muted); }
+
+/* ── Cards ─────────────────────────────────────────────────── */
+.card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.card-header { padding: 12px 16px; font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg3); font-size: 13px; }
+
+/* ── Main Grid ─────────────────────────────────────────────── */
+.main-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media(max-width:900px){ .main-grid{ grid-template-columns:1fr; } }
+
+/* ── Layer Bars ────────────────────────────────────────────── */
+.layers { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.layer-row { display: flex; align-items: center; gap: 10px; }
+.layer-name { width: 90px; font-size: 12px; color: var(--muted); }
+.layer-bar-wrap { flex: 1; height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; position: relative; }
+.layer-bar { height: 100%; width: 50%; background: var(--blue); border-radius: 4px; transition: width .5s, background .5s; transform-origin: center; }
+.layer-val { width: 40px; text-align: right; font-size: 12px; font-family: monospace; }
+.fusion-row .layer-name { font-weight: 700; color: var(--text); }
+.fusion-row .layer-bar  { height: 12px; }
+.fusion-row .layer-bar-wrap { height: 12px; }
+
+/* ── Signal Panel ──────────────────────────────────────────── */
+.signal-panel { padding: 20px; }
+.signal-none  .signal-direction { color: var(--muted); }
+.signal-long  { border-top: 3px solid var(--green); }
+.signal-short { border-top: 3px solid var(--red); }
+.signal-direction { font-size: 28px; font-weight: 800; margin-bottom: 16px; }
+.signal-long  .signal-direction { color: var(--green); }
+.signal-short .signal-direction { color: var(--red); }
+.sig-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.sig-row span { color: var(--muted); }
+
+/* ── Open Trades ───────────────────────────────────────────── */
+#open-trades { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.trade-card { background: var(--bg3); border-radius: 6px; padding: 10px 14px; border-left: 3px solid var(--blue); }
+.trade-card.long  { border-left-color: var(--green); }
+.trade-card.short { border-left-color: var(--red); }
+
+/* ── Trade Table ───────────────────────────────────────────── */
+.trade-table { width: 100%; border-collapse: collapse; }
+.trade-table th { background: var(--bg3); padding: 10px 12px; text-align: left; font-size: 12px; color: var(--muted); text-transform: uppercase; }
+.trade-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.trade-table tr:hover td { background: var(--bg3); }
+.pnl-pos { color: var(--green); font-weight: 600; }
+.pnl-neg { color: var(--red);   font-weight: 600; }
+.empty-state { color: var(--muted); text-align: center; padding: 24px; }
+
+/* ── Settings ──────────────────────────────────────────────── */
+.settings-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.settings-header h1 { font-size: 22px; }
+.settings-section { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; }
+.section-title { padding: 14px 20px; font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg3); border-radius: var(--radius) var(--radius) 0 0; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; padding: 20px; }
+.field-group { display: flex; flex-direction: column; gap: 6px; }
+.field-group label { font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .3px; }
+.field-group input,
+.field-group select { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 14px; outline: none; transition: .15s; }
+.field-group input:focus,
+.field-group select:focus { border-color: var(--blue); }
+.hint { font-size: 11px; color: var(--muted); }
+.warn { color: var(--yellow); font-size: 11px; }
+.settings-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-bottom: 40px; }
+.save-msg { padding: 12px 20px; border-radius: 6px; margin-bottom: 16px; font-weight: 500; }
+.save-msg.ok    { background: #1a3a2a; color: var(--green); border: 1px solid var(--green); }
+.save-msg.error { background: #3a1a1a; color: var(--red);   border: 1px solid var(--red); }
+.weight-sum { padding: 8px 20px; color: var(--muted); font-size: 13px; }
+.weight-sum b { color: var(--yellow); }
+
+/* ── Backtest ──────────────────────────────────────────────── */
+.loading-msg { text-align: center; padding: 40px; color: var(--yellow); font-size: 16px; }
+
+/* ── Colors util ───────────────────────────────────────────── */
+.green { color: var(--green); }
+.red   { color: var(--red); }
+.yellow{ color: var(--yellow); }
+
+/* ── Optimize page additions ─────────────────────────────────── */
+.param-grid  { display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px; }
+.param-chip  { background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 14px;font-size:12px;color:var(--muted); }
+.progress-bar-wrap { height:12px;background:var(--bg3);border-radius:6px;overflow:hidden; }
+.progress-bar { height:100%;background:var(--purple);border-radius:6px;transition:width .5s;width:0% }
+.trial-feed  { margin-top:16px;max-height:180px;overflow-y:auto;font-family:monospace; }
+.trial-row   { padding:3px 0;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted); }
+.trial-row.good { color:var(--green); }
+.best-score  { font-size:48px;font-weight:800;color:var(--purple);margin-bottom:8px; }
+.imp-row     { display:flex;align-items:center;gap:10px;margin-bottom:10px; }
+.imp-name    { width:220px;font-size:12px;color:var(--muted); }
+.imp-bar-wrap{ flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden; }
+.imp-bar     { height:100%;background:var(--purple);border-radius:4px; }
+.imp-val     { width:45px;text-align:right;font-size:12px; }
+
+/* ── Market badge ─────────────────────────────────────────────── */
+.badge-futures { background:#1a2a3a;color:var(--blue); }
+.badge-margin  { background:#2a1a3a;color:var(--purple); }
+.badge-spot    { background:#1a3a1a;color:var(--green); }
+.badge-stocks  { background:#3a2a1a;color:var(--yellow); }

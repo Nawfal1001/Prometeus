@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Dashboard</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/" class="active">Dashboard</a>
+    <a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a>
+    <a href="/settings">Settings</a>
+  </div>
+  <div class="nav-status">
+    <span id="market-badge" class="badge badge-stopped" style="margin-right:6px">FUTURES</span>
+    <span id="status-badge" class="badge badge-stopped">STOPPED</span>
+    <button id="btn-paper" class="btn btn-warning">▶ Paper</button>
+    <button id="btn-live"  class="btn btn-danger">🔴 Live</button>
+    <button id="btn-stop"  class="btn btn-secondary" style="display:none">■ Stop</button>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-label">Capital</div><div class="stat-value" id="stat-capital">$50.00</div><div class="stat-sub" id="stat-return">+0.00%</div></div>
+    <div class="stat-card"><div class="stat-label">Daily P&L</div><div class="stat-value" id="stat-daily-pnl">$0.00</div><div class="stat-sub" id="stat-daily-trades">0 trades today</div></div>
+    <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="stat-winrate">0%</div><div class="stat-sub" id="stat-total-trades">0 total trades</div></div>
+    <div class="stat-card"><div class="stat-label">Max Drawdown</div><div class="stat-value" id="stat-maxdd">0%</div></div>
+    <div class="stat-card"><div class="stat-label">Price</div><div class="stat-value" id="stat-price">—</div><div class="stat-sub" id="stat-regime">Regime: RANGE</div></div>
+    <div class="stat-card"><div class="stat-label">Fear & Greed</div><div class="stat-value" id="stat-fg">50</div><div class="stat-sub" id="stat-funding">Funding: 0.000%</div></div>
+  </div>
+
+  <div class="main-grid">
+    <div class="card">
+      <div class="card-header">🧠 Layer Scores</div>
+      <div class="layers">
+        <div class="layer-row"><span class="layer-name">Regime</span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-regime"></div></div><span class="layer-val" id="val-regime">0.00</span></div>
+        <div class="layer-row"><span class="layer-name">Sentiment</span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-sentiment"></div></div><span class="layer-val" id="val-sentiment">0.00</span></div>
+        <div class="layer-row"><span class="layer-name">Whale</span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-whale"></div></div><span class="layer-val" id="val-whale">0.00</span></div>
+        <div class="layer-row"><span class="layer-name">Liquidation</span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-liquidation"></div></div><span class="layer-val" id="val-liquidation">0.00</span></div>
+        <div class="layer-row"><span class="layer-name">Entry</span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-entry"></div></div><span class="layer-val" id="val-entry">0.00</span></div>
+        <div class="layer-row fusion-row"><span class="layer-name"><b>FUSION</b></span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-fusion"></div></div><span class="layer-val" id="val-fusion">0.00</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">⚡ Last Signal</div>
+      <div id="signal-panel" class="signal-panel signal-none">
+        <div class="signal-direction" id="sig-direction">NO SIGNAL</div>
+        <div class="signal-details">
+          <div class="sig-row"><span>Confidence</span><b id="sig-conf">—</b></div>
+          <div class="sig-row"><span>Entry</span><b id="sig-entry">—</b></div>
+          <div class="sig-row"><span>Stop Loss</span><b id="sig-sl">—</b></div>
+          <div class="sig-row"><span>Take Profit</span><b id="sig-tp">—</b></div>
+          <div class="sig-row"><span>R:R Ratio</span><b id="sig-rr">—</b></div>
+          <div class="sig-row"><span>Size</span><b id="sig-size">—</b></div>
+          <div class="sig-row"><span>Market</span><b id="sig-market">—</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">📋 Open Trades</div>
+      <div id="open-trades"><div class="empty-state">No open trades</div></div>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <div class="card-header">📜 Trade Log</div>
+    <table class="trade-table">
+      <thead><tr><th>ID</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Type</th><th>Score</th></tr></thead>
+      <tbody id="trade-log-body"><tr><td colspan="7" class="empty-state">No trades yet</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>
