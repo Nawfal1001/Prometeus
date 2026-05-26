@@ -5,7 +5,10 @@
 
 import asyncio
 import json
+import os
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -31,6 +34,17 @@ _state = {
     "market_type": cfg.MARKET_TYPE, "exchange": cfg.EXCHANGE,
 }
 _ws_clients: list[WebSocket] = []
+_ui_logs = deque(maxlen=500)
+
+
+def ui_log(message: str, level: str = "INFO"):
+    item = {
+        "time": datetime.utcnow().strftime("%H:%M:%S"),
+        "level": level.upper(),
+        "message": message,
+    }
+    _ui_logs.append(item)
+    getattr(logger, level.lower(), logger.info)(f"[UI] {message}")
 
 
 async def broadcast(data: dict):
@@ -47,6 +61,60 @@ async def broadcast(data: dict):
 
 def update_state(key, value):
     _state[key] = value
+
+
+def _coerce_value(key: str, value):
+    bool_keys = {
+        "BINANCE_TESTNET", "ALPACA_PAPER", "TRADE_STOCKS_ONLY_HOURS",
+        "OPTUNA_PRUNING", "ALERT_ON_SIGNAL", "ALERT_ON_TRADE",
+        "ALERT_ON_DAILY_SUMMARY", "ALERT_ON_OPTIMIZATION",
+    }
+    int_keys = {
+        "LEVERAGE", "MAX_TRADES_PER_DAY", "EMA_FAST", "EMA_MID", "EMA_SLOW",
+        "RSI_PERIOD", "STOCHRSI_PERIOD", "BB_PERIOD", "VOLUME_MA_PERIOD",
+        "SENTIMENT_VELOCITY_WINDOW", "FEAR_GREED_BULL_THRESHOLD",
+        "FEAR_GREED_BEAR_THRESHOLD", "OPTUNA_TRIALS", "OPTUNA_TIMEOUT_SEC",
+        "OPTUNA_DATA_CANDLES",
+    }
+    float_keys = {
+        "INITIAL_CAPITAL", "MAX_RISK_PER_TRADE", "MAX_DAILY_DRAWDOWN",
+        "FUSION_THRESHOLD", "MIN_RR_RATIO", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT",
+        "BB_STD", "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
+        "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY", "REGIME_BULL_FUNDING_THRESHOLD",
+        "REGIME_CHAOS_VOLATILITY", "WHALE_MIN_TRANSFER_BTC",
+        "WHALE_EXCHANGE_INFLOW_THRESHOLD", "LIQUIDATION_GRAVITY_MIN",
+        "LIQUIDATION_PROXIMITY_PCT",
+    }
+    if key in bool_keys:
+        return str(value).lower() == "true"
+    if key in int_keys:
+        return int(value)
+    if key in float_keys:
+        return float(value)
+    return value
+
+
+def reload_runtime_settings():
+    user = load_user_settings()
+    updated = []
+    for key, value in user.items():
+        if key.startswith("_"):
+            continue
+        attr = "BINANCE_SECRET" if key == "BINANCE_API_SECRET" else key
+        attr = "ALPACA_SECRET" if key == "ALPACA_API_SECRET" else attr
+        attr = "CRYPTOCOMPARE_KEY" if key == "CRYPTOCOMPARE_API_KEY" else attr
+        attr = "ETHERSCAN_KEY" if key == "ETHERSCAN_API_KEY" else attr
+        attr = "COINGLASS_KEY" if key == "COINGLASS_API_KEY" else attr
+        attr = "POLYGON_KEY" if key == "POLYGON_API_KEY" else attr
+        if hasattr(cfg, attr):
+            try:
+                setattr(cfg, attr, _coerce_value(attr, value))
+                updated.append(attr)
+            except Exception as e:
+                ui_log(f"Could not apply setting {key}: {e}", "WARNING")
+    _state["market_type"] = cfg.MARKET_TYPE
+    _state["exchange"] = cfg.EXCHANGE
+    return updated
 
 
 # ── Pages ─────────────────────────────────────────────────────
@@ -75,6 +143,17 @@ async def get_state():
     return JSONResponse(_state)
 
 
+@app.get("/api/logs")
+async def get_logs():
+    return {"logs": list(_ui_logs)}
+
+
+@app.post("/api/logs/clear")
+async def clear_logs():
+    _ui_logs.clear()
+    return {"status": "cleared"}
+
+
 @app.get("/api/settings")
 async def get_settings():
     return {
@@ -84,8 +163,10 @@ async def get_settings():
         "TRADING_MODE":        cfg.TRADING_MODE,
         "MARGIN_MODE":         cfg.MARGIN_MODE,
         "BINANCE_API_KEY":     "***" if cfg.BINANCE_API_KEY else "",
+        "BINANCE_API_SECRET":  "***" if cfg.BINANCE_SECRET else "",
         "BINANCE_TESTNET":     cfg.BINANCE_TESTNET,
         "ALPACA_API_KEY":      "***" if cfg.ALPACA_API_KEY else "",
+        "ALPACA_API_SECRET":   "***" if cfg.ALPACA_SECRET else "",
         "ALPACA_PAPER":        cfg.ALPACA_PAPER,
         # Trading
         "SYMBOL":              cfg.SYMBOL,
@@ -139,6 +220,13 @@ async def get_settings():
 async def save_settings(request: Request):
     body = await request.json()
 
+    if body.get("_reset"):
+        settings_file = cfg.SETTINGS_FILE
+        if settings_file.exists():
+            settings_file.unlink()
+        ui_log("Settings reset requested. Restart/redeploy to fully return to defaults.", "WARNING")
+        return {"status": "reset", "keys": []}
+
     # Protect secrets
     for k in ["BINANCE_API_KEY", "BINANCE_API_SECRET", "ALPACA_API_KEY", "ALPACA_API_SECRET",
                "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_API_KEY",
@@ -146,18 +234,14 @@ async def save_settings(request: Request):
         if body.get(k) in ["***", "", None]:
             body.pop(k, None)
 
-    # Validate weights
-    wk = ["WEIGHT_REGIME","WEIGHT_SENTIMENT","WEIGHT_WHALE","WEIGHT_LIQUIDATION","WEIGHT_ENTRY"]
-    weights = [float(body.get(k, 0)) for k in wk if k in body]
-    if weights and abs(sum(weights) - 1.0) > 0.01:
-        return JSONResponse({"error": f"Weights must sum to 1.0 (got {sum(weights):.2f})"}, status_code=400)
-
     # Type coercions
     int_keys   = ["LEVERAGE","MAX_TRADES_PER_DAY","EMA_FAST","EMA_MID","EMA_SLOW","RSI_PERIOD",
                   "SENTIMENT_VELOCITY_WINDOW","FEAR_GREED_BULL_THRESHOLD","FEAR_GREED_BEAR_THRESHOLD",
                   "WHALE_EXCHANGE_INFLOW_THRESHOLD","OPTUNA_TRIALS","OPTUNA_TIMEOUT_SEC"]
     float_keys = ["INITIAL_CAPITAL","MAX_RISK_PER_TRADE","MAX_DAILY_DRAWDOWN","FUSION_THRESHOLD",
-                  "STOP_LOSS_PCT","TAKE_PROFIT_PCT","LIQUIDATION_PROXIMITY_PCT"] + wk
+                  "STOP_LOSS_PCT","TAKE_PROFIT_PCT","LIQUIDATION_PROXIMITY_PCT",
+                  "WEIGHT_REGIME","WEIGHT_SENTIMENT","WEIGHT_WHALE","WEIGHT_LIQUIDATION","WEIGHT_ENTRY"]
+    bool_keys = ["BINANCE_TESTNET", "ALPACA_PAPER", "OPTUNA_PRUNING", "ALERT_ON_SIGNAL", "ALERT_ON_OPTIMIZATION"]
 
     for k in int_keys:
         if k in body:
@@ -167,13 +251,22 @@ async def save_settings(request: Request):
         if k in body:
             try: body[k] = float(body[k])
             except: pass
+    for k in bool_keys:
+        if k in body:
+            body[k] = str(body[k]).lower() == "true"
+
+    # Validate weights after coercion
+    wk = ["WEIGHT_REGIME","WEIGHT_SENTIMENT","WEIGHT_WHALE","WEIGHT_LIQUIDATION","WEIGHT_ENTRY"]
+    weights = [float(body.get(k, 0)) for k in wk if k in body]
+    if len(weights) == len(wk) and abs(sum(weights) - 1.0) > 0.01:
+        return JSONResponse({"error": f"Weights must sum to 1.0 (got {sum(weights):.2f})"}, status_code=400)
 
     save_user_settings(body)
-    # Reload cfg module values
-    _state["market_type"] = body.get("MARKET_TYPE", cfg.MARKET_TYPE)
-    _state["exchange"]    = body.get("EXCHANGE", cfg.EXCHANGE)
+    updated = reload_runtime_settings()
+    ui_log(f"Settings saved and applied: {len(updated)} runtime values updated")
+    await broadcast({"type": "settings_updated", "data": {"updated": updated}})
 
-    return {"status": "saved", "keys": list(body.keys())}
+    return {"status": "saved", "keys": list(body.keys()), "applied": updated}
 
 
 # ── Control API ───────────────────────────────────────────────
@@ -197,23 +290,34 @@ async def run_backtest(request: Request):
     limit     = int(body.get("limit", 1500))
     mode      = body.get("mode", "walkforward")
 
+    ui_log(f"Backtest started | exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={symbol} tf={timeframe} candles={limit} mode={mode}")
     try:
         from core.exchange.factory import get_exchange
         from backtest.engine import BacktestEngine
 
+        ui_log("Creating exchange connector...")
         exchange = get_exchange()
+        ui_log("Fetching OHLCV candles...")
         df       = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
         await exchange.close()
+        ui_log(f"Fetched {len(df)} candles")
 
         if df.empty:
+            ui_log("No data returned. Check symbol, timeframe, market type, Binance access, or Render networking.", "ERROR")
             return JSONResponse({"error": "No data returned. Check symbol/timeframe."}, status_code=400)
 
         engine  = BacktestEngine()
+        ui_log("Running backtest engine...")
         results = engine.run(df, mode=mode)
         _state["backtest"] = results
+        if results.get("error"):
+            ui_log(f"Backtest returned error: {results['error']}", "ERROR")
+        else:
+            ui_log(f"Backtest finished | trades={results.get('total_trades', 0)} win_rate={results.get('win_rate')} return={results.get('total_return')}")
         return results
     except Exception as e:
         logger.error(f"[Backtest] {e}")
+        ui_log(f"Backtest crashed: {e}", "ERROR")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -231,18 +335,24 @@ async def run_optimization(request: Request):
     pruning   = body.get("pruning", cfg.OPTUNA_PRUNING)
     auto_apply = body.get("auto_apply", False)
 
+    ui_log(f"Optimization started | symbol={symbol} tf={timeframe} candles={candles} metric={metric} trials={trials} timeout={timeout}s")
     try:
         # Fetch data
         from core.exchange.factory import get_exchange
+        ui_log("Creating exchange connector for optimization...")
         exchange = get_exchange()
+        ui_log("Fetching optimization candles...")
         df       = await exchange.get_ohlcv(symbol, timeframe, limit=candles)
         await exchange.close()
+        ui_log(f"Fetched {len(df)} candles for optimization")
 
         if df.empty:
+            ui_log("No optimization data returned. Check symbol/timeframe/exchange settings.", "ERROR")
             return JSONResponse({"error": "No data returned"}, status_code=400)
 
         # Progress broadcaster
         async def progress_cb(trial_num, total, best_value, best_params, trial_results):
+            ui_log(f"Trial {trial_num}/{total} complete | best={best_value}")
             await broadcast({
                 "type": "opt_progress",
                 "data": {"trial_num": trial_num, "total": total,
@@ -256,19 +366,24 @@ async def run_optimization(request: Request):
         )
 
         loop    = asyncio.get_event_loop()
+        ui_log("Running Optuna optimizer...")
         results = await loop.run_in_executor(executor, optimizer.run)
 
         if auto_apply:
             optimizer.apply_best()
+            reload_runtime_settings()
             results["applied"] = True
+            ui_log("Best optimization parameters auto-applied to settings")
 
         _state["optimization"] = results
+        ui_log(f"Optimization finished | best={results.get('best_value')} metric={results.get('best_metric')} trials={results.get('total_trials')}")
         await broadcast({"type": "opt_complete", "data": results})
         return results
 
     except Exception as e:
         logger.error(f"[Optimize] {e}")
         import traceback
+        ui_log(f"Optimization crashed: {e}", "ERROR")
         return JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
 
 
@@ -276,8 +391,10 @@ async def run_optimization(request: Request):
 async def apply_optimization(request: Request):
     params = await request.json()
     save_user_settings(params)
+    updated = reload_runtime_settings()
+    ui_log(f"Optimization params applied: {len(updated)} runtime values updated")
     logger.info(f"[Optimize] Applied {len(params)} params to settings")
-    return {"status": "applied", "count": len(params)}
+    return {"status": "applied", "count": len(params), "applied": updated}
 
 
 @app.get("/api/optimize/last")
