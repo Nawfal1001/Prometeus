@@ -53,12 +53,19 @@
     </div>
     <div class="bt-actions">
       <button class="btn btn-primary mt" id="bt-run-btn" onclick="runBacktest()">▶ Run Backtest</button>
+      <button class="btn btn-secondary mt" onclick="clearLogs()">🧹 Clear Logs</button>
       <span class="hint mt" style="margin-left:12px">First run trains the XGBoost model — may take 30–60s</span>
     </div>
   </div>
 
   <div id="bt-loading" style="display:none" class="loading-msg">
     ⏳ Running backtest... training model on each window...
+  </div>
+
+  <!-- Troubleshooting logs -->
+  <div class="card mt">
+    <div class="card-header">🧾 Backtest Logs</div>
+    <pre id="ui-logs" class="ui-log-box">Waiting for logs...</pre>
   </div>
 
   <!-- Go/No-Go verdict -->
@@ -113,6 +120,31 @@
 </div>
 
 <script>
+async function loadLogs() {
+  try {
+    const res = await fetch('/api/logs');
+    const data = await res.json();
+    const box = document.getElementById('ui-logs');
+    if (!box) return;
+    if (!data.logs || !data.logs.length) {
+      box.textContent = 'No logs yet.';
+      return;
+    }
+    box.textContent = data.logs
+      .map(l => `[${l.time}] [${l.level}] ${l.message}`)
+      .join('\n');
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {}
+}
+
+async function clearLogs() {
+  await fetch('/api/logs/clear', { method: 'POST' });
+  loadLogs();
+}
+
+setInterval(loadLogs, 2000);
+loadLogs();
+
 // Inline mini chart (no external lib needed)
 async function runBacktest() {
   const symbol    = document.getElementById("bt-symbol").value;
@@ -124,6 +156,7 @@ async function runBacktest() {
   document.getElementById("bt-results").style.display  = "none";
   document.getElementById("bt-verdict").style.display  = "none";
   document.getElementById("bt-run-btn").disabled       = true;
+  loadLogs();
 
   try {
     const res  = await fetch("/api/backtest/run", {
@@ -139,6 +172,7 @@ async function runBacktest() {
   } finally {
     document.getElementById("bt-loading").style.display = "none";
     document.getElementById("bt-run-btn").disabled = false;
+    loadLogs();
   }
 }
 
@@ -168,7 +202,6 @@ function displayResults(r) {
   set("bt-slip",     `Slippage: ${r.slippage_pct?.toFixed(2)}%`);
   set("bt-mode-disp", r.mode || "—");
 
-  // Verdict
   if (r.go_live_ready) {
     const v = r.go_live_ready;
     const vEl = document.getElementById("bt-verdict");
@@ -180,7 +213,6 @@ function displayResults(r) {
       .join("");
   }
 
-  // Walk-forward windows
   if (r.window_stats?.length) {
     document.getElementById("wf-section").style.display = "block";
     document.getElementById("wf-tbody").innerHTML = r.window_stats.map((w, i) => `
@@ -193,7 +225,6 @@ function displayResults(r) {
       </tr>`).join("");
   }
 
-  // Trade log
   if (r.trades) {
     document.getElementById("bt-trade-log").innerHTML = r.trades.map((t, i) => `
       <tr>
@@ -207,7 +238,6 @@ function displayResults(r) {
       </tr>`).join("");
   }
 
-  // Equity curve (simple canvas chart)
   if (r.equity_curve) drawEquityCurve(r.equity_curve);
 }
 
@@ -224,8 +254,6 @@ function drawEquityCurve(curve) {
   const h     = canvas.height;
 
   ctx.clearRect(0, 0, w, h);
-
-  // Grid
   ctx.strokeStyle = "#2a2d3e";
   ctx.lineWidth   = 1;
   for (let i = 0; i <= 4; i++) {
@@ -233,7 +261,6 @@ function drawEquityCurve(curve) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
   }
 
-  // Line
   ctx.beginPath();
   ctx.strokeStyle = vals[vals.length-1] >= vals[0] ? "#10b981" : "#ef4444";
   ctx.lineWidth   = 2;
@@ -244,12 +271,10 @@ function drawEquityCurve(curve) {
   });
   ctx.stroke();
 
-  // Fill
   ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
   ctx.fillStyle = vals[vals.length-1] >= vals[0] ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)";
   ctx.fill();
 
-  // Start/end labels
   ctx.fillStyle = "#6b7280"; ctx.font = "12px monospace";
   ctx.fillText(`$${vals[0].toFixed(2)}`, 4, h - 4);
   ctx.fillText(`$${vals[vals.length-1].toFixed(2)}`, w - 70, 16);
@@ -264,6 +289,7 @@ function set(id, val) {
 <style>
 .bt-actions { padding: 0 20px 20px; }
 .loading-msg { text-align:center; padding:40px; color:var(--yellow); font-size:16px; }
+.ui-log-box { background:#050816;color:#d1d5db;padding:14px;height:260px;overflow:auto;border-radius:8px;border:1px solid var(--border);font-size:12px;line-height:1.45;white-space:pre-wrap; }
 .verdict-card { border-radius:var(--radius); padding:20px; margin:16px 0; border:2px solid; }
 .verdict-go     { background:#1a3a2a; border-color:var(--green); }
 .verdict-caution{ background:#3a3a1a; border-color:var(--yellow); }
