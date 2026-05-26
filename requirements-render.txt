@@ -1,0 +1,49 @@
+# ============================================================
+#  PROMETHEUS — Render-optimized requirements
+#  Uses --only-binary to force prebuilt wheels (no compilation)
+#  Removes torch/transformers (use VADER not FinBERT on free tier)
+# ============================================================
+
+# ── Core ─────────────────────────────────────────────────────
+python-dotenv==1.0.0
+aiohttp==3.9.3
+websockets==12.0
+requests==2.31.0
+schedule==1.2.1
+
+# ── Data & ML ────────────────────────────────────────────────
+pandas==2.2.1
+numpy==1.26.4
+scikit-learn==1.4.1
+xgboost==2.0.3
+ta==0.11.0
+joblib==1.3.2
+
+# ── Sentiment (lightweight only — no torch/transformers) ─────
+vaderSentiment==3.3.2
+
+# ── Exchange ─────────────────────────────────────────────────
+ccxt==4.2.90
+
+# ── Web Dashboard ─────────────────────────────────────────────
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+jinja2==3.1.3
+
+# ── Alerts ───────────────────────────────────────────────────
+python-telegram-bot==21.1.1
+
+# ── Storage ──────────────────────────────────────────────────
+sqlalchemy==2.0.28
+aiosqlite==0.20.0
+
+# ── Utils ────────────────────────────────────────────────────
+loguru==0.7.2
+pydantic==2.6.3
+pytz==2024.1
+
+# ── Optimization ─────────────────────────────────────────────
+optuna==3.6.1
+
+# ── Stocks (Alpaca) ──────────────────────────────────────────
+alpaca-py==0.26.0
