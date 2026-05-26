@@ -40,11 +40,16 @@ class OrderManager:
             "id":           trade_id,
             "side":         signal["side"],
             "entry_price":  price,
+            "current_price": price,
             "size":         signal["position_size"],
             "stop_loss":    signal.get("stop_loss"),
             "take_profit":  signal.get("take_profit"),
             "status":       "open",
             "open_time":    time.time(),
+            "unrealized_pnl": 0.0,
+            "unrealized_pnl_pct": 0.0,
+            "distance_to_tp_pct": None,
+            "distance_to_sl_pct": None,
             "signal":       signal,
         }
         self.open_trades[trade_id] = trade
@@ -68,11 +73,40 @@ class OrderManager:
         logger.info(f"[Live] Order placed: {result}")
         return result
 
+    def _update_paper_unrealized_pnl(self, trade: dict, current_price: float):
+        entry = float(trade["entry_price"])
+        size = float(trade["size"])
+        side = trade["side"]
+        direction = 1 if side == "long" else -1
+
+        raw_return = ((current_price - entry) / entry) * direction
+        leveraged_return = raw_return * cfg.LEVERAGE
+        pnl = size * leveraged_return
+
+        trade["current_price"] = current_price
+        trade["unrealized_pnl"] = round(pnl, 4)
+        trade["unrealized_pnl_pct"] = round(leveraged_return * 100, 3)
+        trade["last_check_time"] = time.time()
+
+        tp = trade.get("take_profit")
+        sl = trade.get("stop_loss")
+        if tp:
+            trade["distance_to_tp_pct"] = round(abs((tp - current_price) / current_price) * 100, 3)
+        if sl:
+            trade["distance_to_sl_pct"] = round(abs((current_price - sl) / current_price) * 100, 3)
+
+        logger.info(
+            f"[Paper] Check {trade['id']} | price={current_price:.2f} | "
+            f"uPnL={pnl:+.4f} ({leveraged_return*100:+.3f}%)"
+        )
+
     async def check_paper_exits(self, current_price: float):
-        """Check if any paper trades hit SL or TP."""
+        """Update fake live PnL and check if any paper trades hit SL or TP."""
         for trade_id, trade in list(self.open_trades.items()):
             if trade["status"] != "open":
                 continue
+
+            self._update_paper_unrealized_pnl(trade, current_price)
 
             sl = trade.get("stop_loss")
             tp = trade.get("take_profit")
@@ -89,7 +123,10 @@ class OrderManager:
                 pnl = (exit_price - trade["entry_price"]) * direction * (trade["size"] / trade["entry_price"]) * cfg.LEVERAGE
                 trade["status"]     = "closed"
                 trade["exit_price"] = exit_price
+                trade["current_price"] = current_price
                 trade["pnl"]        = round(pnl, 4)
+                trade["unrealized_pnl"] = round(pnl, 4)
+                trade["unrealized_pnl_pct"] = round(((exit_price - trade["entry_price"]) / trade["entry_price"]) * direction * cfg.LEVERAGE * 100, 3)
                 trade["exit_type"]  = "TP" if hit_tp else "SL"
                 self.risk.record_trade(pnl, trade["signal"])
                 logger.info(f"[Paper] {'✅ TP' if hit_tp else '❌ SL'} hit | {trade_id} | PnL={pnl:+.2f}")
