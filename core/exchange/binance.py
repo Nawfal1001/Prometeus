@@ -34,20 +34,29 @@ class BinanceExchange(BaseExchange):
         if testnet:
             self._client.set_sandbox_mode(True)
 
-        logger.info(f"[Binance] Connector ready | market={market_type} | testnet={testnet}")
+        logger.info(f"[Binance] Connector ready | market={market_type} | ccxt_type={ccxt_type} | testnet={testnet} | key_loaded={bool(api_key)}")
 
     # ── Market Data ──────────────────────────────────────────
 
     async def get_ohlcv(self, symbol, timeframe, limit=200):
         try:
+            logger.info(f"[Binance] Fetching OHLCV | symbol={symbol} timeframe={timeframe} limit={limit} market={self.market_type}")
+            await self._client.load_markets()
+            if symbol not in self._client.markets:
+                matches = [s for s in self._client.markets.keys() if symbol.replace('/', '') in s.replace('/', '').replace(':', '')][:10]
+                raise ValueError(f"Symbol '{symbol}' not found for Binance {self.market_type}. Similar: {matches}")
+
             raw = await self._client.fetch_ohlcv(symbol, timeframe, limit=limit)
+            if not raw:
+                raise ValueError(f"Binance returned empty OHLCV for {symbol} {timeframe} market={self.market_type}")
+
             df  = pd.DataFrame(raw, columns=["timestamp","open","high","low","close","volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
             return df.astype(float)
         except Exception as e:
-            logger.error(f"[Binance] get_ohlcv: {e}")
-            return pd.DataFrame()
+            logger.error(f"[Binance] get_ohlcv failed | symbol={symbol} timeframe={timeframe} market={self.market_type}: {type(e).__name__}: {e}")
+            raise
 
     async def get_orderbook(self, symbol, depth=20):
         try:
@@ -116,6 +125,7 @@ class BinanceExchange(BaseExchange):
     async def place_order(self, symbol, side, order_type, size,
                           price=None, stop_loss=None, take_profit=None, leverage=1):
         try:
+            params = {}
             if self.market_type == "futures":
                 await self.set_leverage(symbol, leverage)
 
@@ -125,7 +135,6 @@ class BinanceExchange(BaseExchange):
                 if side == "sell":
                     params["borrowQuote"] = True
 
-            params = {}
             if stop_loss:
                 params["stopLoss"]   = {"type": "market", "triggerPrice": stop_loss}
             if take_profit:
