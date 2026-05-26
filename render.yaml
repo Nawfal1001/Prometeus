@@ -6,7 +6,7 @@ services:
     startCommand: python main.py
     envVars:
       - key: PORT
-        value: 8000
+        value: 1000
       - key: TRADING_MODE
         value: paper
       - key: EXCHANGE
