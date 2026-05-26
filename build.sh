@@ -1,26 +1,17 @@
 #!/bin/bash
 # ============================================================
 #  PROMETHEUS — Render Build Script
-#  Forces pip to use prebuilt wheels — no compilation needed
-#  Build time: ~2 min instead of ~15 min
+#  Python 3.11 + prebuilt wheels only
 # ============================================================
-
 set -e
 
-echo "🔧 Installing PROMETHEUS dependencies..."
+echo "🐍 Python version: $(python --version)"
+echo "📦 Installing dependencies..."
 
 pip install --upgrade pip
 
-# Force prebuilt wheels for heavy packages (no compilation)
-pip install \
-  --only-binary=pandas \
-  --only-binary=numpy \
-  --only-binary=scikit-learn \
-  --only-binary=xgboost \
-  pandas==2.2.1 \
-  numpy==1.26.4
-
-# Install rest normally
+# Install everything from the Render-specific requirements
+# All packages here have prebuilt wheels for Python 3.11
 pip install -r requirements-render.txt
 
-echo "✅ Build complete"
+echo "✅ Build complete — $(pip list | wc -l) packages installed"

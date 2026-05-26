@@ -1,7 +1,6 @@
 # ============================================================
-#  PROMETHEUS — Render-optimized requirements
-#  Uses --only-binary to force prebuilt wheels (no compilation)
-#  Removes torch/transformers (use VADER not FinBERT on free tier)
+#  PROMETHEUS — Render requirements (Python 3.11 compatible)
+#  All packages have prebuilt wheels for Python 3.11 — no compilation
 # ============================================================
 
 # ── Core ─────────────────────────────────────────────────────
@@ -11,24 +10,25 @@ websockets==12.0
 requests==2.31.0
 schedule==1.2.1
 
-# ── Data & ML ────────────────────────────────────────────────
-pandas==2.2.1
+# ── Data & ML (all have py311 wheels on PyPI) ─────────────────
+pandas==2.1.4
 numpy==1.26.4
-scikit-learn==1.4.1
+scikit-learn==1.4.0
 xgboost==2.0.3
 ta==0.11.0
 joblib==1.3.2
 
-# ── Sentiment (lightweight only — no torch/transformers) ─────
+# ── Sentiment (no torch/transformers — VADER only) ───────────
 vaderSentiment==3.3.2
 
 # ── Exchange ─────────────────────────────────────────────────
 ccxt==4.2.90
 
-# ── Web Dashboard ─────────────────────────────────────────────
+# ── Web Dashboard ────────────────────────────────────────────
 fastapi==0.110.0
 uvicorn[standard]==0.27.1
 jinja2==3.1.3
+python-multipart==0.0.9
 
 # ── Alerts ───────────────────────────────────────────────────
 python-telegram-bot==21.1.1
@@ -45,5 +45,5 @@ pytz==2024.1
 # ── Optimization ─────────────────────────────────────────────
 optuna==3.6.1
 
-# ── Stocks (Alpaca) ──────────────────────────────────────────
+# ── Stocks ───────────────────────────────────────────────────
 alpaca-py==0.26.0
