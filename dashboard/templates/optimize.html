@@ -20,22 +20,23 @@
 
 <div class="container">
   <h1>🧬 Optuna Optimizer</h1>
-  <p style="color:var(--muted);margin-bottom:20px">Finds better strategy parameters using current exchange/settings data.</p>
+  <p style="color:var(--muted);margin-bottom:20px">Runs optimization in the background so long tests do not trigger Render 502 timeouts.</p>
 
   <div class="card">
     <div class="card-header">⚙️ Optimization Config</div>
     <div class="settings-grid" style="padding:20px">
       <div class="field-group"><label>Target Metric</label><select id="opt-metric"><option value="composite">🏆 Composite</option><option value="win_rate">🎯 Win Rate</option><option value="profit_factor">💰 Profit Factor</option><option value="sharpe">📊 Sharpe Ratio</option><option value="total_return">📈 Total Return</option></select></div>
-      <div class="field-group"><label>Number of Trials</label><input type="number" id="opt-trials" value="50" min="10" max="500" step="10"></div>
-      <div class="field-group"><label>Max Time seconds</label><input type="number" id="opt-timeout" value="300" min="60" max="3600" step="60"></div>
+      <div class="field-group"><label>Number of Trials</label><input type="number" id="opt-trials" value="50" min="5" max="500" step="5"></div>
+      <div class="field-group"><label>Max Time seconds</label><input type="number" id="opt-timeout" value="900" min="60" max="7200" step="60"></div>
       <div class="field-group"><label>Symbol</label><select id="opt-symbol"><option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option></select></div>
-      <div class="field-group"><label>Timeframe</label><select id="opt-timeframe"><option value="15m">15 min</option><option value="30m" selected>30 min</option><option value="1h">1 hour</option></select></div>
-      <div class="field-group"><label>History candles</label><input type="number" id="opt-candles" value="1500" min="500" max="3000" step="100"></div>
-      <div class="field-group"><label>Pruning</label><select id="opt-pruning"><option value="true">Yes faster</option><option value="false">No thorough</option></select></div>
-      <div class="field-group"><label>Auto-Apply Best Params</label><select id="opt-apply"><option value="false">No review first</option><option value="true">Yes apply automatically</option></select></div>
+      <div class="field-group"><label>Timeframe</label><select id="opt-timeframe"><option value="1m">1 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m" selected>30 min</option><option value="1h">1 hour</option></select></div>
+      <div class="field-group"><label>History candles</label><input type="number" id="opt-candles" value="5000" min="500" max="20000" step="500"></div>
+      <div class="field-group"><label>Pruning</label><select id="opt-pruning"><option value="false" selected>No thorough</option><option value="true">Yes faster</option></select></div>
+      <div class="field-group"><label>Auto-Apply Best Params</label><select id="opt-apply"><option value="false" selected>No review first</option><option value="true">Yes apply automatically</option></select></div>
     </div>
-    <div style="padding:0 20px 20px;display:flex;gap:10px;align-items:center">
+    <div style="padding:0 20px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-primary" id="opt-run-btn" onclick="runOptimization()">🧬 Start Optimization</button>
+      <button class="btn btn-secondary" id="opt-cancel-btn" onclick="cancelOptimization()" style="display:none">⛔ Cancel</button>
       <button class="btn btn-secondary" id="opt-apply-btn" onclick="applyBest()" style="display:none">✅ Apply Best Params</button>
       <button class="btn btn-secondary" onclick="clearLogs()">🧹 Clear Logs</button>
       <span id="opt-status-text" style="color:var(--muted);font-size:13px"></span>
@@ -52,7 +53,7 @@
     <div style="padding:20px">
       <div class="progress-bar-wrap"><div class="progress-bar" id="progress-bar"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px;color:var(--muted)">
-        <span id="prog-text">Trial 0 / 0</span><span id="prog-best">Best: —</span><span id="prog-eta">ETA: —</span>
+        <span id="prog-text">Starting background job</span><span id="prog-best">Best: —</span><span id="prog-eta">ETA: —</span>
       </div>
       <div class="trial-feed" id="trial-feed"></div>
     </div>
@@ -61,19 +62,19 @@
   <div id="opt-results" style="display:none">
     <div class="card mt"><div class="card-header">🏆 Best Result</div><div style="padding:20px"><div class="best-score" id="best-score-display">—</div><div class="stats-grid" style="margin-top:16px" id="best-metrics-grid"></div></div></div>
     <div class="card mt"><div class="card-header">🎛️ Best Parameters Found</div><div style="padding:20px"><div class="settings-grid" id="best-params-grid"></div><button class="btn btn-primary mt" onclick="applyBest()">✅ Apply These to Settings</button></div></div>
-    <div class="card mt"><div class="card-header">📊 Parameter Importance</div><div style="padding:20px" id="importance-chart"></div></div>
-    <div class="card mt"><div class="card-header">📋 Top 10 Trials</div><table class="trade-table"><thead><tr><th>Rank</th><th>Score</th><th>Win Rate</th><th>Profit Factor</th><th>Sharpe</th><th>Return</th><th>Drawdown</th><th>Trades</th></tr></thead><tbody id="top10-body"></tbody></table></div>
+    <div class="card mt"><div class="card-header">📋 Trial Results</div><table class="trade-table"><thead><tr><th>Rank</th><th>Score</th><th>Win Rate</th><th>Profit Factor</th><th>Sharpe</th><th>Return</th><th>Drawdown</th><th>Trades</th></tr></thead><tbody id="top10-body"></tbody></table></div>
   </div>
 </div>
 
 <style>
-.param-grid{display:flex;flex-wrap:wrap;gap:8px}.param-chip{background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--muted)}.progress-bar-wrap{height:12px;background:var(--bg3);border-radius:6px;overflow:hidden}.progress-bar{height:100%;background:var(--purple);border-radius:6px;transition:width .5s;width:0%}.trial-feed{margin-top:16px;max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace}.trial-row{padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted)}.trial-row.good{color:var(--green)}.best-score{font-size:48px;font-weight:800;color:var(--purple)}.imp-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}.imp-name{width:200px;font-size:12px;color:var(--muted)}.imp-bar-wrap{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}.imp-bar{height:100%;background:var(--purple);border-radius:4px}.imp-val{width:50px;text-align:right;font-size:12px}
+.param-grid{display:flex;flex-wrap:wrap;gap:8px}.param-chip{background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--muted)}.progress-bar-wrap{height:12px;background:var(--bg3);border-radius:6px;overflow:hidden}.progress-bar{height:100%;background:var(--purple);border-radius:6px;transition:width .5s;width:0%}.trial-feed{margin-top:16px;max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace}.trial-row{padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted)}.trial-row.good{color:var(--green)}.best-score{font-size:48px;font-weight:800;color:var(--purple)}
 </style>
 
 <script>
 let _bestParams = {};
 let _startTime = null;
 let _ws = null;
+let _pollTimer = null;
 
 function safeNum(v, d=2) { return Number.isFinite(Number(v)) ? Number(v).toFixed(d) : "—"; }
 function safePct(v, d=1) { return Number.isFinite(Number(v)) ? `${(Number(v)*100).toFixed(d)}%` : "—"; }
@@ -98,6 +99,7 @@ function connectWS() {
     const msg = JSON.parse(e.data);
     if (msg.type === "opt_progress") handleProgress(msg.data);
     if (msg.type === "opt_complete") handleComplete(msg.data);
+    if (msg.type === "opt_status") handleStatus(msg.data);
     if (msg.type === "status") {
       const b = document.getElementById("status-badge");
       if (b) { b.textContent = (msg.status || "stopped").toUpperCase(); b.className = `badge badge-${msg.status || "stopped"}`; }
@@ -108,6 +110,12 @@ function connectWS() {
 }
 connectWS();
 
+function setRunningUI(running) {
+  document.getElementById("opt-run-btn").disabled = running;
+  document.getElementById("opt-cancel-btn").style.display = running ? "inline-block" : "none";
+  if (running) document.getElementById("opt-progress").style.display = "block";
+}
+
 async function runOptimization() {
   const metric = document.getElementById("opt-metric").value;
   const trials = parseInt(document.getElementById("opt-trials").value);
@@ -117,26 +125,68 @@ async function runOptimization() {
   const candles = parseInt(document.getElementById("opt-candles").value);
   const pruning = document.getElementById("opt-pruning").value === "true";
   const autoApply = document.getElementById("opt-apply").value === "true";
-  document.getElementById("opt-run-btn").disabled = true;
-  document.getElementById("opt-progress").style.display = "block";
+  setRunningUI(true);
   document.getElementById("opt-results").style.display = "none";
   document.getElementById("trial-feed").innerHTML = "";
-  document.getElementById("opt-status-text").textContent = "Starting...";
-  _startTime = Date.now(); loadLogs();
+  document.getElementById("progress-bar").style.width = "0%";
+  document.getElementById("opt-status-text").textContent = "Starting background optimization...";
+  _startTime = Date.now();
+  loadLogs();
   try {
     const res = await fetch("/api/optimize/run", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ metric, trials, timeout, symbol, timeframe, candles, pruning, auto_apply:autoApply }) });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch { throw new Error(text || `HTTP ${res.status}`); }
+    const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-    handleComplete(data);
+    document.getElementById("opt-status-text").textContent = "Optimization running in background...";
+    startPolling();
   } catch(e) {
     alert(`Optimization error: ${e.message}`);
     document.getElementById("opt-status-text").textContent = `Error: ${e.message}`;
-  } finally {
-    document.getElementById("opt-run-btn").disabled = false;
-    loadLogs();
+    setRunningUI(false);
   }
+}
+
+function startPolling() {
+  stopPolling();
+  pollStatus();
+  _pollTimer = setInterval(pollStatus, 2500);
+}
+function stopPolling() {
+  if (_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = null;
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch("/api/optimize/status");
+    const data = await res.json();
+    handleStatus(data);
+  } catch(e) {
+    console.warn("Status poll failed", e);
+  }
+}
+
+function handleStatus(data) {
+  if (!data) return;
+  setRunningUI(!!data.running);
+  if (data.error) {
+    document.getElementById("opt-status-text").textContent = `Error: ${data.error}`;
+    stopPolling();
+    return;
+  }
+  if (data.running) {
+    document.getElementById("opt-status-text").textContent = "Optimization running...";
+    if (data.progress) handleProgress(data.progress);
+    return;
+  }
+  if (data.result) {
+    stopPolling();
+    handleComplete(data.result);
+  }
+}
+
+async function cancelOptimization() {
+  await fetch("/api/optimize/cancel", { method:"POST" });
+  document.getElementById("opt-status-text").textContent = "Cancel requested...";
 }
 
 function handleProgress(data) {
@@ -162,14 +212,18 @@ function handleProgress(data) {
 }
 
 function handleComplete(data) {
-  if (!data || data.error) { alert(data?.error || "Optimization failed"); return; }
+  if (!data || data.status === "started") return;
+  if (data.error) { alert(data.error); return; }
+  setRunningUI(false);
   document.getElementById("opt-results").style.display = "block";
   document.getElementById("opt-progress").style.display = "none";
   document.getElementById("opt-apply-btn").style.display = "inline-block";
-  document.getElementById("opt-status-text").textContent = "Done";
-  _bestParams = data.best_params || {};
-  document.getElementById("best-score-display").textContent = `${safeNum(data.best_value,4)} (${data.best_metric || "metric"})`;
-  const top = data.top_10?.[0];
+  document.getElementById("opt-status-text").textContent = data.status === "cancel_requested" ? "Cancelled / partial result" : "Done";
+  const result = data.partial_result || data;
+  _bestParams = result.best_params || {};
+  document.getElementById("best-score-display").textContent = `${safeNum(result.best_value,4)} (${result.metric || "metric"})`;
+  const trials = (result.trial_results || []).slice().sort((a,b) => Number(b.score || 0) - Number(a.score || 0));
+  const top = trials[0];
   if (top) {
     document.getElementById("best-metrics-grid").innerHTML = [
       { label:"Win Rate", value:safePct(top.metrics?.win_rate), good:Number(top.metrics?.win_rate) >= 0.58 },
@@ -181,25 +235,22 @@ function handleComplete(data) {
     ].map(m => `<div class="stat-card"><div class="stat-label">${m.label}</div><div class="stat-value ${m.good ? "green" : "red"}">${m.value}</div></div>`).join("");
   }
   document.getElementById("best-params-grid").innerHTML = Object.entries(_bestParams).map(([k,v]) => `<div class="field-group"><label>${k.replace(/_/g," ")}</label><div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;color:var(--purple)">${typeof v === "number" ? v.toFixed(4) : v}</div></div>`).join("");
-  if (data.importance) {
-    const sorted = Object.entries(data.importance).sort((a,b) => b[1]-a[1]);
-    document.getElementById("importance-chart").innerHTML = sorted.map(([k,v]) => `<div class="imp-row"><div class="imp-name">${k.replace(/_/g," ")}</div><div class="imp-bar-wrap"><div class="imp-bar" style="width:${safeNum(Number(v)*100,0)}%"></div></div><div class="imp-val">${safeNum(Number(v)*100,1)}%</div></div>`).join("");
-  }
-  if (data.top_10) {
-    document.getElementById("top10-body").innerHTML = data.top_10.map((t,i) => `<tr><td>${i+1}</td><td class="green"><b>${safeNum(t.score,4)}</b></td><td>${safePct(t.metrics?.win_rate)}</td><td>${safeNum(t.metrics?.profit_factor)}</td><td>${safeNum(t.metrics?.sharpe)}</td><td>${safePct(t.metrics?.total_return)}</td><td class="${Number(t.metrics?.max_drawdown)<=0.25?"green":"red"}">${safePct(t.metrics?.max_drawdown)}</td><td>${t.metrics?.total_trades ?? "—"}</td></tr>`).join("");
-  }
+  document.getElementById("top10-body").innerHTML = trials.slice(0,10).map((t,i) => `<tr><td>#${i+1}</td><td>${safeNum(t.score,4)}</td><td>${safePct(t.metrics?.win_rate)}</td><td>${safeNum(t.metrics?.profit_factor)}</td><td>${safeNum(t.metrics?.sharpe)}</td><td>${safePct(t.metrics?.total_return)}</td><td>${safePct(t.metrics?.max_drawdown)}</td><td>${t.metrics?.total_trades ?? "—"}</td></tr>`).join("");
+  loadLogs();
 }
 
 async function applyBest() {
-  if (!Object.keys(_bestParams).length) { alert("Run optimization first"); return; }
-  try {
-    const res = await fetch("/api/optimize/apply", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(_bestParams) });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "Apply failed");
-    document.getElementById("opt-status-text").textContent = "✅ Best params applied to settings!";
-    setTimeout(() => { window.location.href = "/settings"; }, 1500);
-  } catch(e) { alert(`Apply error: ${e.message}`); }
+  if (!_bestParams || !Object.keys(_bestParams).length) return alert("No best params found yet");
+  const res = await fetch('/api/optimize/apply', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_bestParams) });
+  const data = await res.json();
+  if (!res.ok || data.error) return alert(data.error || 'Apply failed');
+  alert(`Applied ${data.count} optimized parameters to settings.`);
 }
+
+window.addEventListener("load", () => {
+  pollStatus();
+  setInterval(pollStatus, 5000);
+});
 </script>
 </body>
 </html>
