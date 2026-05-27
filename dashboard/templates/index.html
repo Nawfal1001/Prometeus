@@ -11,6 +11,7 @@
   <div class="nav-brand">⚡ PROMETHEUS</div>
   <div class="nav-links">
     <a href="/" class="active">Dashboard</a>
+    <a href="/scan">Scanner</a>
     <a href="/backtest">Backtest</a>
     <a href="/optimize">Optimize</a>
     <a href="/settings">Settings</a>
@@ -36,6 +37,21 @@
     <div class="stat-card"><div class="stat-label">Fear & Greed</div><div class="stat-value" id="stat-fg">50</div><div class="stat-sub" id="stat-funding">Funding: 0.000%</div></div>
   </div>
 
+  <div class="card mt">
+    <div class="card-header">🏆 Best Ranked Opportunity</div>
+    <div class="stats-grid" style="padding:16px">
+      <div class="stat-card"><div class="stat-label">Symbol</div><div class="stat-value" id="best-symbol">—</div><div class="stat-sub" id="best-side">Side: —</div></div>
+      <div class="stat-card"><div class="stat-label">Rank Score</div><div class="stat-value" id="best-score">—</div><div class="stat-sub" id="best-confidence">Confidence: —</div></div>
+      <div class="stat-card"><div class="stat-label">Risk / Reward</div><div class="stat-value" id="best-rr">—</div><div class="stat-sub" id="best-price">Price: —</div></div>
+      <div class="stat-card"><div class="stat-label">Actions</div><button class="btn btn-primary" onclick="quickScan()">🔎 Quick Scan</button><a class="btn btn-secondary" href="/scan" style="margin-left:8px">Open Scanner</a></div>
+    </div>
+  </div>
+
+  <div class="card mt" id="scan-summary-card" style="display:none">
+    <div class="card-header">📡 Ranked Opportunities</div>
+    <table class="trade-table"><thead><tr><th>Rank</th><th>Symbol</th><th>Side</th><th>Score</th><th>Confidence</th><th>R:R</th><th>Tradable</th></tr></thead><tbody id="scan-summary-body"></tbody></table>
+  </div>
+
   <div class="main-grid">
     <div class="card">
       <div class="card-header">🧠 Layer Scores</div>
@@ -47,120 +63,33 @@
         <div class="layer-row"><span class="layer-name">Entry</span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-entry"></div></div><span class="layer-val" id="val-entry">0.00</span></div>
         <div class="layer-row fusion-row"><span class="layer-name"><b>FUSION</b></span><div class="layer-bar-wrap"><div class="layer-bar" id="bar-fusion"></div></div><span class="layer-val" id="val-fusion">0.00</span></div>
       </div>
-      <div style="padding:0 16px 16px;text-align:center">
-        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Signal Confidence</div>
-        <div style="position:relative;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden">
-          <div id="confidence-bar" style="height:100%;width:0%;background:var(--muted);border-radius:4px;transition:width .5s,background .5s"></div>
-        </div>
-        <div style="font-size:18px;font-weight:700;margin-top:8px;color:var(--muted)" id="confidence-pct">—</div>
-      </div>
+      <div style="padding:0 16px 16px;text-align:center"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Signal Confidence</div><div style="position:relative;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden"><div id="confidence-bar" style="height:100%;width:0%;background:var(--muted);border-radius:4px;transition:width .5s,background .5s"></div></div><div style="font-size:18px;font-weight:700;margin-top:8px;color:var(--muted)" id="confidence-pct">—</div></div>
     </div>
 
     <div class="card">
       <div class="card-header">⚡ Last Signal</div>
-      <div id="signal-panel" class="signal-panel signal-none">
-        <div class="signal-direction" id="sig-direction">NO SIGNAL</div>
-        <div class="signal-details">
-          <div class="sig-row"><span>Confidence</span><b id="sig-conf">—</b></div>
-          <div class="sig-row"><span>Entry</span><b id="sig-entry">—</b></div>
-          <div class="sig-row"><span>Stop Loss</span><b id="sig-sl">—</b></div>
-          <div class="sig-row"><span>Take Profit</span><b id="sig-tp">—</b></div>
-          <div class="sig-row"><span>R:R Ratio</span><b id="sig-rr">—</b></div>
-          <div class="sig-row"><span>Size</span><b id="sig-size">—</b></div>
-          <div class="sig-row"><span>4H Bias</span><b id="sig-htf">—</b></div>
-          <div class="sig-row"><span>Session mult</span><b id="sig-session">—</b></div>
-        </div>
-      </div>
+      <div id="signal-panel" class="signal-panel signal-none"><div class="signal-direction" id="sig-direction">NO SIGNAL</div><div class="signal-details"><div class="sig-row"><span>Confidence</span><b id="sig-conf">—</b></div><div class="sig-row"><span>Entry</span><b id="sig-entry">—</b></div><div class="sig-row"><span>Stop Loss</span><b id="sig-sl">—</b></div><div class="sig-row"><span>Take Profit</span><b id="sig-tp">—</b></div><div class="sig-row"><span>R:R Ratio</span><b id="sig-rr">—</b></div><div class="sig-row"><span>Size</span><b id="sig-size">—</b></div><div class="sig-row"><span>4H Bias</span><b id="sig-htf">—</b></div><div class="sig-row"><span>Session mult</span><b id="sig-session">—</b></div></div></div>
     </div>
 
-    <div class="card">
-      <div class="card-header">📋 Open Trades</div>
-      <div id="open-trades"><div class="empty-state">No open trades</div></div>
-    </div>
+    <div class="card"><div class="card-header">📋 Open Trades</div><div id="open-trades"><div class="empty-state">No open trades</div></div></div>
   </div>
 
-  <div class="card mt">
-    <div class="card-header">📜 Trade Log</div>
-    <table class="trade-table">
-      <thead><tr><th>ID</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Type</th><th>Score</th></tr></thead>
-      <tbody id="trade-log-body"><tr><td colspan="7" class="empty-state">No trades yet</td></tr></tbody>
-    </table>
-  </div>
+  <div class="card mt"><div class="card-header">📜 Trade Log</div><table class="trade-table"><thead><tr><th>ID</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Type</th><th>Score</th></tr></thead><tbody id="trade-log-body"><tr><td colspan="7" class="empty-state">No trades yet</td></tr></tbody></table></div>
 </div>
 
 <script src="/static/js/dashboard.js"></script>
 <script>
+function _set(id,v){var e=document.getElementById(id); if(e)e.innerHTML=v}
+function _num(v,d){return Number.isFinite(Number(v))?Number(v).toFixed(d||2):'—'}
+function _pct(v){return Number.isFinite(Number(v))?(Number(v)*100).toFixed(1)+'%':'—'}
+async function quickScan(){try{_set('best-symbol','Scanning...');const r=await fetch('/api/scan/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:'BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,AVAX/USDT,DOGE/USDT',timeframe:'30m',limit:500})});const d=await r.json();if(d.error)throw new Error(d.error);renderScanSummary(d)}catch(e){_set('best-symbol','Scan error');_set('best-side',e.message)}}
+function renderScanSummary(d){var rows=d.results||d.symbols||[];rows=rows.slice().sort(function(a,b){return Number(b.rank_score||0)-Number(a.rank_score||0)});var best=rows.find(function(x){return x.tradable})||rows[0]||{};_set('best-symbol',best.symbol||'—');_set('best-side','Side: '+(best.side||best.signal?.side||'—'));_set('best-score',_num(best.rank_score,2));_set('best-confidence','Confidence: '+_num(best.fusion_score||best.confidence,2));_set('best-rr',_num(best.risk_reward,2));_set('best-price','Price: '+_num(best.price,4));var card=document.getElementById('scan-summary-card');if(card)card.style.display='block';_set('scan-summary-body',rows.slice(0,10).map(function(r,i){return `<tr><td>${i+1}</td><td>${r.symbol||'—'}</td><td>${r.side||r.signal?.side||'—'}</td><td>${_num(r.rank_score,2)}</td><td>${_num(r.fusion_score||r.confidence,2)}</td><td>${_num(r.risk_reward,2)}</td><td>${r.tradable?'✅':'—'}</td></tr>`}).join(''))}
 var _origApplyStats  = applyStats;
 var _origApplySignal = applySignal;
 var _origApplyState  = applyState;
-
-applyStats = function(s) {
-  _origApplyStats(s);
-  var rwr = s.recent_win_rate;
-  var mult = s.threshold_multiplier || s.threshold_mult;
-  if (rwr !== undefined) {
-    var el = document.getElementById('stat-recent-wr');
-    if (el) {
-      el.textContent = (rwr * 100).toFixed(1) + '%';
-      el.style.color = rwr >= 0.55 ? 'var(--green)' : rwr >= 0.40 ? 'var(--yellow)' : 'var(--red)';
-    }
-  }
-  if (mult !== undefined) {
-    var el2 = document.getElementById('stat-thr-mult');
-    if (el2) el2.textContent = 'Threshold: ' + Number(mult).toFixed(2) + '×';
-  }
-};
-
-applySignal = function(sig) {
-  _origApplySignal(sig);
-  if (!sig || !sig.trade) return;
-
-  var conf = Number(sig.confidence) || 0;
-  var bar = document.getElementById('confidence-bar');
-  var pct = document.getElementById('confidence-pct');
-  if (bar) {
-    bar.style.width = conf + '%';
-    bar.style.background = conf > 60 ? 'var(--green)' : conf > 30 ? 'var(--yellow)' : 'var(--red)';
-  }
-  if (pct) {
-    pct.textContent = conf.toFixed(1) + '%';
-    pct.style.color = conf > 60 ? 'var(--green)' : conf > 30 ? 'var(--yellow)' : 'var(--red)';
-  }
-
-  var htfEl = document.getElementById('sig-htf');
-  if (htfEl) {
-    var h = sig.htf_bias;
-    htfEl.textContent = h === 1 ? '↑ Bull' : h === -1 ? '↓ Bear' : 'Neutral';
-    htfEl.style.color = h === 1 ? 'var(--green)' : h === -1 ? 'var(--red)' : 'var(--muted)';
-  }
-
-  var sessEl = document.getElementById('sig-session');
-  if (sessEl && sig.session_mult !== undefined) {
-    sessEl.textContent = (Number(sig.session_mult) * 100).toFixed(0) + '%';
-  }
-};
-
-applyState = function(state) {
-  _origApplyState(state);
-
-  var htfBadge = document.getElementById('htf-badge');
-  if (htfBadge && state.htf_bias !== undefined) {
-    htfBadge.style.display = '';
-    if (state.htf_bias === 1) {
-      htfBadge.textContent = '4H: BULL';
-      htfBadge.style.background = '#1a3a2a';
-      htfBadge.style.color = 'var(--green)';
-    } else if (state.htf_bias === -1) {
-      htfBadge.textContent = '4H: BEAR';
-      htfBadge.style.background = '#3a1a1a';
-      htfBadge.style.color = 'var(--red)';
-    } else {
-      htfBadge.textContent = '4H: NEUTRAL';
-      htfBadge.style.background = 'var(--bg3)';
-      htfBadge.style.color = 'var(--muted)';
-    }
-  }
-};
+applyStats = function(s) { _origApplyStats(s); var rwr = s.recent_win_rate; var mult = s.threshold_multiplier || s.threshold_mult; if (rwr !== undefined) { var el = document.getElementById('stat-recent-wr'); if (el) { el.textContent = (rwr * 100).toFixed(1) + '%'; el.style.color = rwr >= 0.55 ? 'var(--green)' : rwr >= 0.40 ? 'var(--yellow)' : 'var(--red)'; } } if (mult !== undefined) { var el2 = document.getElementById('stat-thr-mult'); if (el2) el2.textContent = 'Threshold: ' + Number(mult).toFixed(2) + '×'; } };
+applySignal = function(sig) { _origApplySignal(sig); if (!sig || !sig.trade) return; var conf = Number(sig.confidence) || 0; var bar = document.getElementById('confidence-bar'); var pct = document.getElementById('confidence-pct'); if (bar) { bar.style.width = conf + '%'; bar.style.background = conf > 60 ? 'var(--green)' : conf > 30 ? 'var(--yellow)' : 'var(--red)'; } if (pct) { pct.textContent = conf.toFixed(1) + '%'; pct.style.color = conf > 60 ? 'var(--green)' : conf > 30 ? 'var(--yellow)' : 'var(--red)'; } var htfEl = document.getElementById('sig-htf'); if (htfEl) { var h = sig.htf_bias; htfEl.textContent = h === 1 ? '↑ Bull' : h === -1 ? '↓ Bear' : 'Neutral'; htfEl.style.color = h === 1 ? 'var(--green)' : h === -1 ? 'var(--red)' : 'var(--muted)'; } var sessEl = document.getElementById('sig-session'); if (sessEl && sig.session_mult !== undefined) { sessEl.textContent = (Number(sig.session_mult) * 100).toFixed(0) + '%'; } };
+applyState = function(state) { _origApplyState(state); var htfBadge = document.getElementById('htf-badge'); if (htfBadge && state.htf_bias !== undefined) { htfBadge.style.display = ''; if (state.htf_bias === 1) { htfBadge.textContent = '4H: BULL'; htfBadge.style.background = '#1a3a2a'; htfBadge.style.color = 'var(--green)'; } else if (state.htf_bias === -1) { htfBadge.textContent = '4H: BEAR'; htfBadge.style.background = '#3a1a1a'; htfBadge.style.color = 'var(--red)'; } else { htfBadge.textContent = '4H: NEUTRAL'; htfBadge.style.background = 'var(--bg3)'; htfBadge.style.color = 'var(--muted)'; } } if(state.scan)renderScanSummary(state.scan); };
 </script>
 </body>
 </html>
