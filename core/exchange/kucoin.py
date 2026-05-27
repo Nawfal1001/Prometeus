@@ -3,6 +3,7 @@
 #  Data/paper-only connector. No live order execution.
 # ============================================================
 
+import asyncio
 import ccxt.async_support as ccxt
 import pandas as pd
 from loguru import logger
@@ -36,24 +37,63 @@ class KucoinExchange(BaseExchange):
                 return f"{symbol}:USDT"
         return symbol
 
+    def _timeframe_ms(self, timeframe: str) -> int:
+        unit = timeframe[-1]
+        amount = int(timeframe[:-1])
+        mult = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}.get(unit)
+        if not mult:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        return amount * mult
+
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
         symbol = self._normalize_symbol(symbol)
         try:
-            logger.info(f"[KuCoin] Fetching OHLCV | {symbol} {timeframe} limit={limit} market={self.market_type}")
+            logger.info(f"[KuCoin] Fetching OHLCV | {symbol} {timeframe} requested={limit} market={self.market_type}")
             await self._client.load_markets()
             if symbol not in self._client.markets:
                 compact = symbol.replace("/", "").replace(":", "")
                 matches = [s for s in self._client.markets.keys() if compact[:6] in s.replace("/", "").replace(":", "")][:10]
                 raise ValueError(f"Symbol '{symbol}' not found on KuCoin {self.market_type}. Similar: {matches}")
 
-            raw = await self._client.fetch_ohlcv(symbol, timeframe, limit=limit)
-            if not raw:
+            per_call = 200
+            tf_ms = self._timeframe_ms(timeframe)
+            now_ms = self._client.milliseconds()
+            since = now_ms - (limit + 5) * tf_ms
+            all_rows = []
+            seen_ts = set()
+
+            while len(all_rows) < limit:
+                batch = await self._client.fetch_ohlcv(symbol, timeframe, since=since, limit=per_call)
+                if not batch:
+                    break
+
+                added = 0
+                for row in batch:
+                    ts = row[0]
+                    if ts not in seen_ts:
+                        seen_ts.add(ts)
+                        all_rows.append(row)
+                        added += 1
+
+                last_ts = batch[-1][0]
+                since = last_ts + tf_ms
+
+                if added == 0 or last_ts >= now_ms - tf_ms:
+                    break
+
+                await asyncio.sleep((getattr(self._client, "rateLimit", 200) or 200) / 1000)
+
+            if not all_rows:
                 raise ValueError(f"KuCoin returned empty OHLCV for {symbol} {timeframe}")
 
-            df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+            all_rows = sorted(all_rows, key=lambda r: r[0])[-limit:]
+            df = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
-            return df.astype(float)
+            df = df.astype(float)
+
+            logger.info(f"[KuCoin] OHLCV fetched | got={len(df)} requested={limit} symbol={symbol} tf={timeframe}")
+            return df
         except Exception as e:
             logger.error(f"[KuCoin] get_ohlcv failed: {type(e).__name__}: {e}")
             raise
