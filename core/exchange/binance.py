@@ -3,9 +3,9 @@
 #  Supports: futures | margin | spot
 # ============================================================
 
+import asyncio
 import ccxt.async_support as ccxt
 import pandas as pd
-from typing import Optional
 from loguru import logger
 from core.exchange.base_exchange import BaseExchange
 import config.settings as cfg
@@ -36,30 +36,80 @@ class BinanceExchange(BaseExchange):
 
         logger.info(f"[Binance] Connector ready | market={market_type} | ccxt_type={ccxt_type} | testnet={testnet} | key_loaded={bool(api_key)}")
 
+    def _normalize_symbol(self, symbol: str) -> str:
+        if self.market_type == "futures" and ":" not in symbol and symbol.endswith("/USDT"):
+            futures_symbol = f"{symbol}:USDT"
+            if hasattr(self._client, "markets") and self._client.markets and futures_symbol in self._client.markets:
+                return futures_symbol
+        return symbol
+
+    def _timeframe_ms(self, timeframe: str) -> int:
+        unit = timeframe[-1]
+        amount = int(timeframe[:-1])
+        mult = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}.get(unit)
+        if not mult:
+            raise ValueError(f"Unsupported timeframe: {timeframe}")
+        return amount * mult
+
     # ── Market Data ──────────────────────────────────────────
 
     async def get_ohlcv(self, symbol, timeframe, limit=200):
         try:
-            logger.info(f"[Binance] Fetching OHLCV | symbol={symbol} timeframe={timeframe} limit={limit} market={self.market_type}")
+            logger.info(f"[Binance] Fetching OHLCV | symbol={symbol} timeframe={timeframe} requested={limit} market={self.market_type}")
             await self._client.load_markets()
+            symbol = self._normalize_symbol(symbol)
+
             if symbol not in self._client.markets:
-                matches = [s for s in self._client.markets.keys() if symbol.replace('/', '') in s.replace('/', '').replace(':', '')][:10]
+                compact = symbol.replace('/', '').replace(':', '')
+                matches = [s for s in self._client.markets.keys() if compact[:6] in s.replace('/', '').replace(':', '')][:10]
                 raise ValueError(f"Symbol '{symbol}' not found for Binance {self.market_type}. Similar: {matches}")
 
-            raw = await self._client.fetch_ohlcv(symbol, timeframe, limit=limit)
-            if not raw:
+            per_call = 1000 if int(limit) > 1000 else int(limit)
+            tf_ms = self._timeframe_ms(timeframe)
+            now_ms = self._client.milliseconds()
+            since = now_ms - (int(limit) + 5) * tf_ms
+            all_rows = []
+            seen_ts = set()
+
+            while len(all_rows) < int(limit):
+                batch_limit = min(per_call, int(limit) - len(all_rows))
+                batch = await self._client.fetch_ohlcv(symbol, timeframe, since=since, limit=batch_limit)
+                if not batch:
+                    break
+
+                added = 0
+                for row in batch:
+                    ts = row[0]
+                    if ts not in seen_ts:
+                        seen_ts.add(ts)
+                        all_rows.append(row)
+                        added += 1
+
+                last_ts = batch[-1][0]
+                since = last_ts + tf_ms
+
+                if added == 0 or last_ts >= now_ms - tf_ms:
+                    break
+
+                await asyncio.sleep((getattr(self._client, "rateLimit", 200) or 200) / 1000)
+
+            if not all_rows:
                 raise ValueError(f"Binance returned empty OHLCV for {symbol} {timeframe} market={self.market_type}")
 
-            df  = pd.DataFrame(raw, columns=["timestamp","open","high","low","close","volume"])
+            all_rows = sorted(all_rows, key=lambda r: r[0])[-int(limit):]
+            df  = pd.DataFrame(all_rows, columns=["timestamp","open","high","low","close","volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
-            return df.astype(float)
+            df = df.astype(float)
+            logger.info(f"[Binance] OHLCV fetched | got={len(df)} requested={limit} symbol={symbol} tf={timeframe}")
+            return df
         except Exception as e:
             logger.error(f"[Binance] get_ohlcv failed | symbol={symbol} timeframe={timeframe} market={self.market_type}: {type(e).__name__}: {e}")
             raise
 
     async def get_orderbook(self, symbol, depth=20):
         try:
+            symbol = self._normalize_symbol(symbol)
             ob = await self._client.fetch_order_book(symbol, depth)
             return {"bids": ob["bids"], "asks": ob["asks"]}
         except Exception as e:
@@ -68,6 +118,7 @@ class BinanceExchange(BaseExchange):
 
     async def get_ticker(self, symbol):
         try:
+            symbol = self._normalize_symbol(symbol)
             t = await self._client.fetch_ticker(symbol)
             return {"symbol": symbol, "last": t["last"], "bid": t["bid"],
                     "ask": t["ask"], "volume": t["quoteVolume"], "change_pct": t["percentage"]}
@@ -77,8 +128,9 @@ class BinanceExchange(BaseExchange):
 
     async def get_funding_rate(self, symbol):
         if self.market_type != "futures":
-            return 0.0   # No funding rate on spot/margin
+            return 0.0
         try:
+            symbol = self._normalize_symbol(symbol)
             data = await self._client.fetch_funding_rate(symbol)
             return float(data["fundingRate"])
         except Exception as e:
@@ -89,9 +141,10 @@ class BinanceExchange(BaseExchange):
         if self.market_type != "futures":
             return 0.0
         try:
+            symbol = self._normalize_symbol(symbol)
             data = await self._client.fetch_open_interest(symbol)
             return float(data["openInterestAmount"])
-        except Exception as e:
+        except Exception:
             return 0.0
 
     # ── Account ───────────────────────────────────────────────
@@ -108,7 +161,7 @@ class BinanceExchange(BaseExchange):
     async def get_positions(self):
         try:
             if self.market_type == "spot":
-                return []   # No positions in pure spot
+                return []
             positions = await self._client.fetch_positions()
             return [
                 {"symbol": p["symbol"], "side": p["side"],
@@ -125,12 +178,12 @@ class BinanceExchange(BaseExchange):
     async def place_order(self, symbol, side, order_type, size,
                           price=None, stop_loss=None, take_profit=None, leverage=1):
         try:
+            symbol = self._normalize_symbol(symbol)
             params = {}
             if self.market_type == "futures":
                 await self.set_leverage(symbol, leverage)
 
             elif self.market_type == "margin":
-                # Margin mode: borrow if shorting
                 params = {"marginMode": cfg.MARGIN_MODE}
                 if side == "sell":
                     params["borrowQuote"] = True
@@ -141,7 +194,6 @@ class BinanceExchange(BaseExchange):
                 params["takeProfit"] = {"type": "market", "triggerPrice": take_profit}
 
             if self.market_type == "spot":
-                # Spot: only buy/sell, no shorting, no leverage
                 if side == "sell":
                     logger.warning("[Binance] Spot mode: skipping short signal (no shorting on spot)")
                     return {"order_id": None, "status": "skipped_spot_short", "filled_price": 0}
@@ -158,6 +210,7 @@ class BinanceExchange(BaseExchange):
 
     async def cancel_order(self, symbol, order_id):
         try:
+            symbol = self._normalize_symbol(symbol)
             await self._client.cancel_order(order_id, symbol)
             return True
         except Exception as e:
@@ -172,11 +225,12 @@ class BinanceExchange(BaseExchange):
                     close_side = "sell" if pos["side"] == "long" else "buy"
                     return await self.place_order(symbol, close_side, "market", pos["size"])
             return {"status": "no_position"}
-        except Exception as e:
+        except Exception:
             return {"status": "error"}
 
     async def set_leverage(self, symbol, leverage):
         try:
+            symbol = self._normalize_symbol(symbol)
             await self._client.set_leverage(leverage, symbol)
             return True
         except Exception as e:
