@@ -1,5 +1,5 @@
 # ============================================================
-#  PROMETHEUS — Paper Trading & Live Execution (IMPROVED)
+#  PROMETHEUS — Paper Trading & Live Execution (PATCHED)
 # ============================================================
 
 import time
@@ -45,7 +45,7 @@ class OrderManager:
                 self.risk.trade_history = data.get("trade_history", [])
                 logger.info(f"[Orders] Restored {len(self.open_trades)} open trades, capital=${self.risk.capital:.2f}")
         except Exception as e:
-            logger.warning(f"[Orders] Load failed: {e}")
+            logger.warning(f"[Orders] Load failed, starting fresh: {e}")
 
     async def execute_signal(self, signal: dict, current_price: float) -> dict:
         if not signal.get("trade"):
@@ -72,10 +72,11 @@ class OrderManager:
         direction = 1 if signal["side"] == "long" else -1
         sl_pct = float(getattr(cfg, "STOP_LOSS_PCT", 0.008))
         tp_pct = float(getattr(cfg, "TAKE_PROFIT_PCT", 0.028))
+        size = float(signal["position_size"])
+
         tp1 = price * (1 + direction * tp_pct * 0.60)
         tp2 = price * (1 + direction * tp_pct * 1.40)
         sl = price * (1 - direction * sl_pct)
-        size = float(signal["position_size"])
 
         trade = {
             "id": trade_id,
@@ -141,7 +142,7 @@ class OrderManager:
 
     def _update_unrealized_pnl(self, trade: dict, current_price: float):
         entry = float(trade["entry_price"])
-        size = float(trade["size_remaining"])
+        size = float(trade.get("size_remaining", trade["size"]))
         direction = trade["direction"]
         leverage = float(getattr(cfg, "LEVERAGE", 3))
         price_change_pct = (current_price - entry) / entry * direction
@@ -159,6 +160,7 @@ class OrderManager:
 
     async def check_paper_exits(self, current_price: float):
         leverage = float(getattr(cfg, "LEVERAGE", 3))
+        changed = False
         for trade_id, trade in list(self.open_trades.items()):
             if trade["status"] != "open":
                 continue
@@ -168,6 +170,7 @@ class OrderManager:
             size = float(trade["size"])
             self._update_trailing_stop(trade, current_price)
             self._update_unrealized_pnl(trade, current_price)
+            changed = True
 
             sl = trade.get("trailing_sl") or trade.get("stop_loss")
             tp1 = trade.get("tp1")
@@ -181,7 +184,8 @@ class OrderManager:
                     partial_pnl = partial_size * pct_move * leverage
                     trade["tp1_hit"] = True
                     trade["size_remaining"] = size * 0.50
-                    self.risk.capital += partial_pnl
+                    trade["realized_pnl"] = round(partial_pnl, 4)
+                    self.risk.record_trade(partial_pnl, {**trade["signal"], "trade_id": trade_id, "entry_price": entry, "exit_price": tp1, "exit_type": "TP1"})
                     logger.info(f"[Paper] TP1 partial exit | {trade_id} | partial_pnl={partial_pnl:+.4f} | SL moves to breakeven")
                     self._save_trades()
                     continue
@@ -194,28 +198,24 @@ class OrderManager:
                 exit_price = tp2 if hit_tp2 else sl
                 pct_move = (exit_price - entry) / entry * direction
                 pnl = remaining * pct_move * leverage
-                total_pnl = pnl
-                if trade["tp1_hit"]:
-                    partial_size = size * 0.50
-                    tp1_pct = (float(tp1) - entry) / entry * direction
-                    total_pnl += partial_size * tp1_pct * leverage
-
+                total_pnl = pnl + float(trade.get("realized_pnl", 0.0))
                 trade["status"] = "closed"
                 trade["exit_price"] = exit_price
                 trade["current_price"] = current_price
                 trade["pnl"] = round(total_pnl, 4)
                 trade["unrealized_pnl"] = round(total_pnl, 4)
                 trade["exit_type"] = "TP" if hit_tp2 else "SL"
-                self.risk.record_trade(total_pnl, trade["signal"])
-                self._save_trades()
-                logger.info(f"[Paper] {'TP' if hit_tp2 else 'SL'} hit | {trade_id} | PnL={total_pnl:+.4f} | trailing_sl={sl:.2f}")
+                self.risk.record_trade(pnl, {**trade["signal"], "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": trade["exit_type"]})
+                logger.info(f"[Paper] {trade['exit_type']} hit | {trade_id} | PnL={total_pnl:+.4f} | trailing_sl={sl:.2f}")
                 del self.open_trades[trade_id]
                 self._save_trades()
+                changed = False
+
+        if changed:
+            self._save_trades()
 
     def get_open_trades(self) -> list:
         return list(self.open_trades.values())
 
     def get_stats(self) -> dict:
-        stats = self.risk.get_stats()
-        stats["threshold_mult"] = self.risk.threshold_multiplier()
-        return stats
+        return self.risk.get_stats()
