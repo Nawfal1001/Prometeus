@@ -1,5 +1,5 @@
 # ============================================================
-# PROMETHEUS — Multi-symbol Backtest API Router
+# PROMETHEUS — Multi-symbol / Auto-symbol Backtest API Router
 # ============================================================
 
 from fastapi import APIRouter, Request
@@ -21,12 +21,14 @@ async def run_multi_backtest(request: Request):
         timeframe = body.get('timeframe', cfg.TIMEFRAME)
         limit = int(body.get('limit', 1500))
         mode = body.get('mode', 'walkforward')
+        run_mode = body.get('run_mode', 'compare')
 
         from core.exchange.factory import get_exchange
         from backtest.engine import BacktestEngine
 
         exchange = get_exchange()
         rows = []
+        data_by_symbol = {}
         try:
             for symbol in symbols:
                 try:
@@ -34,9 +36,11 @@ async def run_multi_backtest(request: Request):
                     if df is None or df.empty:
                         rows.append({'symbol': symbol, 'error': 'No data returned'})
                         continue
-                    result = BacktestEngine().run(df, mode=mode)
-                    result['symbol'] = symbol
-                    rows.append(result)
+                    data_by_symbol[symbol] = df
+                    if run_mode != 'auto_symbol':
+                        result = BacktestEngine().run(df, mode=mode)
+                        result['symbol'] = symbol
+                        rows.append(result)
                 except Exception as e:
                     rows.append({'symbol': symbol, 'error': str(e)})
         finally:
@@ -46,6 +50,23 @@ async def run_multi_backtest(request: Request):
                 import asyncio
                 if asyncio.iscoroutine(maybe):
                     await maybe
+
+        if run_mode == 'auto_symbol':
+            from backtest.auto_symbol_engine import AutoSymbolBacktestConfig, AutoSymbolBacktestEngine
+            cfg_obj = AutoSymbolBacktestConfig(
+                symbols=symbols,
+                timeframe=timeframe,
+                limit=limit,
+                scan_step_bars=int(body.get('scan_step_bars', 10)),
+                lookback_bars=int(body.get('lookback_bars', 300)),
+                mode=mode,
+                min_score=float(body.get('min_score', 0.0)),
+                min_rr=float(body.get('min_rr', 0.0)),
+            )
+            result = AutoSymbolBacktestEngine(data_by_symbol=data_by_symbol, config=cfg_obj).run()
+            result['timeframe'] = timeframe
+            result['limit'] = limit
+            return result
 
         def score(row):
             if row.get('error'):
