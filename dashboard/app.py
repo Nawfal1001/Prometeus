@@ -1,8 +1,9 @@
 # ============================================================
-#  PROMETHEUS v3 — FastAPI Backend
+#  PROMETHEUS v4 — FastAPI Backend (IMPROVED)
 # ============================================================
 
 import asyncio
+import time as _time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -18,16 +19,17 @@ from config.settings import save_user_settings, load_user_settings
 from optimization.optimizer import PrometheusOptimizer
 
 BASE_DIR = Path(__file__).parent
-app = FastAPI(title="PROMETHEUS v3")
+app = FastAPI(title="PROMETHEUS v4")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 executor = ThreadPoolExecutor(max_workers=2)
+_start_time = _time.time()
 
 _state = {
     "status": "stopped", "regime": "RANGE", "fear_greed": 50,
-    "funding_rate": 0.0, "last_signal": None, "last_price": 0.0,
-    "layer_scores": {}, "stats": {}, "open_trades": [],
-    "trade_log": [], "backtest": {}, "optimization": {},
+    "funding_rate": 0.0, "htf_bias": 0, "last_signal": None, "last_price": 0.0,
+    "layer_scores": {}, "stats": {}, "open_trades": [], "trade_log": [],
+    "backtest": {}, "optimization": {},
     "market_type": cfg.MARKET_TYPE, "exchange": cfg.EXCHANGE,
 }
 _ws_clients: list[WebSocket] = []
@@ -65,7 +67,7 @@ def reload_runtime_settings():
         "EXCHANGE", "MARKET_TYPE", "TRADING_MODE", "SYMBOL", "TIMEFRAME",
         "LEVERAGE", "INITIAL_CAPITAL", "MAX_RISK_PER_TRADE",
         "MAX_DAILY_DRAWDOWN", "MAX_TRADES_PER_DAY", "FUSION_THRESHOLD",
-        "STOP_LOSS_PCT", "TAKE_PROFIT_PCT"
+        "MIN_RR_RATIO", "REGIME_CHAOS_VOLATILITY", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT",
     ]
 
 
@@ -85,6 +87,15 @@ async def backtest_page(request: Request):
 async def optimize_page(request: Request):
     return templates.TemplateResponse("optimize.html", {"request": request})
 
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "uptime_s": int(_time.time() - _start_time),
+        "engine": _state.get("status", "unknown"),
+        "exchange": cfg.EXCHANGE,
+        "symbol": cfg.SYMBOL,
+    }
 
 @app.get("/api/state")
 async def get_state():
@@ -122,6 +133,8 @@ async def get_settings():
             "MAX_DAILY_DRAWDOWN": cfg.MAX_DAILY_DRAWDOWN,
             "MAX_TRADES_PER_DAY": cfg.MAX_TRADES_PER_DAY,
             "FUSION_THRESHOLD": cfg.FUSION_THRESHOLD,
+            "MIN_RR_RATIO": getattr(cfg, "MIN_RR_RATIO", 1.2),
+            "REGIME_CHAOS_VOLATILITY": getattr(cfg, "REGIME_CHAOS_VOLATILITY", 0.07),
             "STOP_LOSS_PCT": cfg.STOP_LOSS_PCT,
             "TAKE_PROFIT_PCT": cfg.TAKE_PROFIT_PCT,
             "EMA_FAST": cfg.EMA_FAST,
@@ -161,18 +174,17 @@ async def get_settings():
 async def save_settings(request: Request):
     try:
         body = await request.json()
-
         if body.get("_reset"):
             if cfg.SETTINGS_FILE.exists():
                 cfg.SETTINGS_FILE.unlink()
             reload_runtime_settings()
-            ui_log("Settings reset")
+            ui_log("Settings reset to defaults")
             return {"status": "reset", "keys": []}
 
         for k in [
             "BINANCE_API_KEY", "BINANCE_API_SECRET", "ALPACA_API_KEY", "ALPACA_API_SECRET",
             "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_API_KEY",
-            "CRYPTOCOMPARE_API_KEY", "COINGLASS_API_KEY"
+            "CRYPTOCOMPARE_API_KEY", "COINGLASS_API_KEY",
         ]:
             if body.get(k) in ["***", "", None]:
                 body.pop(k, None)
@@ -180,12 +192,13 @@ async def save_settings(request: Request):
         int_keys = [
             "LEVERAGE", "MAX_TRADES_PER_DAY", "EMA_FAST", "EMA_MID", "EMA_SLOW", "RSI_PERIOD",
             "SENTIMENT_VELOCITY_WINDOW", "FEAR_GREED_BULL_THRESHOLD", "FEAR_GREED_BEAR_THRESHOLD",
-            "WHALE_EXCHANGE_INFLOW_THRESHOLD", "OPTUNA_TRIALS", "OPTUNA_TIMEOUT_SEC"
+            "WHALE_EXCHANGE_INFLOW_THRESHOLD", "OPTUNA_TRIALS", "OPTUNA_TIMEOUT_SEC",
         ]
         float_keys = [
             "INITIAL_CAPITAL", "MAX_RISK_PER_TRADE", "MAX_DAILY_DRAWDOWN", "FUSION_THRESHOLD",
-            "STOP_LOSS_PCT", "TAKE_PROFIT_PCT", "LIQUIDATION_PROXIMITY_PCT",
-            "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE", "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY"
+            "MIN_RR_RATIO", "REGIME_CHAOS_VOLATILITY", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT",
+            "LIQUIDATION_PROXIMITY_PCT", "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
+            "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
         ]
         bool_keys = ["BINANCE_TESTNET", "ALPACA_PAPER", "OPTUNA_PRUNING", "ALERT_ON_SIGNAL", "ALERT_ON_OPTIMIZATION"]
 
@@ -200,13 +213,16 @@ async def save_settings(request: Request):
                 body[k] = str(body[k]).lower() == "true"
 
         wk = ["WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE", "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY"]
-        weights = [float(body.get(k, 0)) for k in wk if k in body]
-        if len(weights) == len(wk) and abs(sum(weights) - 1.0) > 0.01:
-            return JSONResponse({"error": f"Weights must sum to 1.0 (got {sum(weights):.2f})"}, status_code=400)
+        if all(k in body for k in wk):
+            total = sum(float(body[k]) for k in wk)
+            if total > 0 and abs(total - 1.0) > 0.001:
+                for k in wk:
+                    body[k] = round(float(body[k]) / total, 4)
+                ui_log(f"Weights auto-normalized (were summing to {total:.3f})")
 
         save_user_settings(body)
         updated = reload_runtime_settings()
-        ui_log(f"Settings saved | exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={cfg.SYMBOL} tf={cfg.TIMEFRAME}")
+        ui_log(f"Settings saved | exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={cfg.SYMBOL}")
         await broadcast({"type": "settings_updated", "data": {"updated": updated}})
         return {"status": "saved", "keys": list(body.keys()), "applied": updated}
 
@@ -216,10 +232,23 @@ async def save_settings(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/settings/normalize_weights")
+async def normalize_weights():
+    wk = ["WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE", "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY"]
+    weights = {k: getattr(cfg, k, 0.2) for k in wk}
+    total = sum(weights.values())
+    if total > 0:
+        normalized = {k: round(v / total, 4) for k, v in weights.items()}
+        save_user_settings(normalized)
+        reload_runtime_settings()
+        return {"status": "normalized", "weights": normalized, "was_total": round(total, 4)}
+    return JSONResponse({"error": "All weights are zero"}, status_code=400)
+
+
 @app.post("/api/control/{action}")
 async def control(action: str):
     if action in ("start_paper", "start_live", "stop"):
-        status = {"start_paper":"paper","start_live":"live","stop":"stopped"}[action]
+        status = {"start_paper": "paper", "start_live": "live", "stop": "stopped"}[action]
         _state["status"] = status
         await broadcast({"type": "status", "status": status})
     return {"status": _state["status"]}
@@ -232,20 +261,16 @@ async def run_backtest(request: Request):
     timeframe = body.get("timeframe", cfg.TIMEFRAME)
     limit = int(body.get("limit", 1500))
     mode = body.get("mode", "walkforward")
-
-    ui_log(f"Backtest started | exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={symbol} tf={timeframe} candles={limit} mode={mode}")
+    ui_log(f"Backtest | {symbol} {timeframe} {limit}bars {mode}")
     try:
         from core.exchange.factory import get_exchange
         from backtest.engine import BacktestEngine
-        ui_log("Creating exchange connector...")
         exchange = get_exchange()
-        ui_log("Fetching OHLCV candles...")
         df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
         await exchange.close()
         ui_log(f"Fetched {len(df)} candles")
         if df.empty:
-            ui_log("No data returned. Check symbol, timeframe, market type, Binance access, or Render networking.", "ERROR")
-            return JSONResponse({"error": "No data returned. Check symbol/timeframe."}, status_code=400)
+            return JSONResponse({"error": "No data returned"}, status_code=400)
         results = BacktestEngine().run(df, mode=mode)
         _state["backtest"] = results
         return results
@@ -265,7 +290,7 @@ async def run_optimization(request: Request):
     trials = int(body.get("trials", cfg.OPTUNA_TRIALS))
     timeout = int(body.get("timeout", cfg.OPTUNA_TIMEOUT_SEC))
     auto_apply = body.get("auto_apply", False)
-    ui_log(f"Optimization started | symbol={symbol} tf={timeframe} candles={candles} metric={metric} trials={trials}")
+    ui_log(f"Optimization | {symbol} {timeframe} {candles}bars {metric} {trials}trials")
     try:
         from core.exchange.factory import get_exchange
         exchange = get_exchange()
@@ -275,7 +300,7 @@ async def run_optimization(request: Request):
             return JSONResponse({"error": "No data returned"}, status_code=400)
 
         async def progress_cb(trial_num, total, best_value, best_params, trial_results):
-            ui_log(f"Trial {trial_num}/{total} complete | best={best_value}")
+            ui_log(f"Trial {trial_num}/{total} | best={best_value:.4f}")
             await broadcast({"type": "opt_progress", "data": {"trial_num": trial_num, "total": total, "best_value": best_value, "trial_results": trial_results}})
 
         optimizer = PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout, progress_callback=progress_cb)
@@ -308,9 +333,12 @@ async def get_last_optimization():
 @app.get("/api/symbols")
 async def get_symbols():
     return {
-        "crypto": ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT","XRP/USDT","DOGE/USDT","AVAX/USDT"],
-        "stocks": ["AAPL","TSLA","NVDA","MSFT","AMZN","META","GOOGL","SPY","QQQ"],
-        "timeframes": {"crypto": ["1m","3m","5m","15m","30m","1h","2h","4h","1d"], "stocks": ["1m","5m","15m","30m","1h","1d"]}
+        "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT"],
+        "stocks": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "SPY", "QQQ"],
+        "timeframes": {
+            "crypto": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"],
+            "stocks": ["1m", "5m", "15m", "30m", "1h", "1d"],
+        },
     }
 
 
