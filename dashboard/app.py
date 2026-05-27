@@ -1,5 +1,5 @@
 # ============================================================
-#  PROMETHEUS v4 — FastAPI Backend (IMPROVED)
+#  PROMETHEUS v4 — FastAPI Backend (BACKGROUND OPTIMIZER)
 # ============================================================
 
 import asyncio
@@ -34,6 +34,17 @@ _state = {
 }
 _ws_clients: list[WebSocket] = []
 _ui_logs = deque(maxlen=500)
+_opt_task = None
+_opt_status = {
+    "running": False,
+    "cancel_requested": False,
+    "started_at": None,
+    "finished_at": None,
+    "progress": None,
+    "result": None,
+    "error": None,
+    "params": {},
+}
 
 
 def ui_log(message: str, level: str = "INFO"):
@@ -95,6 +106,7 @@ async def health():
         "engine": _state.get("status", "unknown"),
         "exchange": cfg.EXCHANGE,
         "symbol": cfg.SYMBOL,
+        "optimization_running": _opt_status["running"],
     }
 
 @app.get("/api/state")
@@ -110,14 +122,11 @@ async def clear_logs():
     _ui_logs.clear()
     return {"status": "cleared"}
 
-
 @app.get("/api/settings")
 async def get_settings():
     try:
         return {
-            "EXCHANGE": cfg.EXCHANGE,
-            "MARKET_TYPE": cfg.MARKET_TYPE,
-            "TRADING_MODE": cfg.TRADING_MODE,
+            "EXCHANGE": cfg.EXCHANGE, "MARKET_TYPE": cfg.MARKET_TYPE, "TRADING_MODE": cfg.TRADING_MODE,
             "MARGIN_MODE": cfg.MARGIN_MODE,
             "BINANCE_API_KEY": "***" if cfg.BINANCE_API_KEY else "",
             "BINANCE_API_SECRET": "***" if cfg.BINANCE_SECRET else "",
@@ -125,26 +134,17 @@ async def get_settings():
             "ALPACA_API_KEY": "***" if cfg.ALPACA_API_KEY else "",
             "ALPACA_API_SECRET": "***" if cfg.ALPACA_SECRET else "",
             "ALPACA_PAPER": cfg.ALPACA_PAPER,
-            "SYMBOL": cfg.SYMBOL,
-            "TIMEFRAME": cfg.TIMEFRAME,
-            "LEVERAGE": cfg.LEVERAGE,
-            "INITIAL_CAPITAL": cfg.INITIAL_CAPITAL,
-            "MAX_RISK_PER_TRADE": cfg.MAX_RISK_PER_TRADE,
-            "MAX_DAILY_DRAWDOWN": cfg.MAX_DAILY_DRAWDOWN,
-            "MAX_TRADES_PER_DAY": cfg.MAX_TRADES_PER_DAY,
+            "SYMBOL": cfg.SYMBOL, "TIMEFRAME": cfg.TIMEFRAME, "LEVERAGE": cfg.LEVERAGE,
+            "INITIAL_CAPITAL": cfg.INITIAL_CAPITAL, "MAX_RISK_PER_TRADE": cfg.MAX_RISK_PER_TRADE,
+            "MAX_DAILY_DRAWDOWN": cfg.MAX_DAILY_DRAWDOWN, "MAX_TRADES_PER_DAY": cfg.MAX_TRADES_PER_DAY,
             "FUSION_THRESHOLD": cfg.FUSION_THRESHOLD,
             "MIN_RR_RATIO": getattr(cfg, "MIN_RR_RATIO", 1.2),
             "REGIME_CHAOS_VOLATILITY": getattr(cfg, "REGIME_CHAOS_VOLATILITY", 0.07),
-            "STOP_LOSS_PCT": cfg.STOP_LOSS_PCT,
-            "TAKE_PROFIT_PCT": cfg.TAKE_PROFIT_PCT,
-            "EMA_FAST": cfg.EMA_FAST,
-            "EMA_MID": cfg.EMA_MID,
-            "EMA_SLOW": cfg.EMA_SLOW,
+            "STOP_LOSS_PCT": cfg.STOP_LOSS_PCT, "TAKE_PROFIT_PCT": cfg.TAKE_PROFIT_PCT,
+            "EMA_FAST": cfg.EMA_FAST, "EMA_MID": cfg.EMA_MID, "EMA_SLOW": cfg.EMA_SLOW,
             "RSI_PERIOD": cfg.RSI_PERIOD,
-            "WEIGHT_REGIME": cfg.WEIGHT_REGIME,
-            "WEIGHT_SENTIMENT": cfg.WEIGHT_SENTIMENT,
-            "WEIGHT_WHALE": cfg.WEIGHT_WHALE,
-            "WEIGHT_LIQUIDATION": cfg.WEIGHT_LIQUIDATION,
+            "WEIGHT_REGIME": cfg.WEIGHT_REGIME, "WEIGHT_SENTIMENT": cfg.WEIGHT_SENTIMENT,
+            "WEIGHT_WHALE": cfg.WEIGHT_WHALE, "WEIGHT_LIQUIDATION": cfg.WEIGHT_LIQUIDATION,
             "WEIGHT_ENTRY": cfg.WEIGHT_ENTRY,
             "SENTIMENT_MODEL": cfg.SENTIMENT_MODEL,
             "CRYPTOCOMPARE_API_KEY": "***" if cfg.CRYPTOCOMPARE_KEY else "",
@@ -156,19 +156,15 @@ async def get_settings():
             "WHALE_EXCHANGE_INFLOW_THRESHOLD": cfg.WHALE_EXCHANGE_INFLOW_THRESHOLD,
             "COINGLASS_API_KEY": "***" if cfg.COINGLASS_KEY else "",
             "LIQUIDATION_PROXIMITY_PCT": cfg.LIQUIDATION_PROXIMITY_PCT,
-            "OPTUNA_TRIALS": cfg.OPTUNA_TRIALS,
-            "OPTUNA_TIMEOUT_SEC": cfg.OPTUNA_TIMEOUT_SEC,
-            "OPTUNA_METRIC": cfg.OPTUNA_METRIC,
-            "OPTUNA_PRUNING": cfg.OPTUNA_PRUNING,
+            "OPTUNA_TRIALS": cfg.OPTUNA_TRIALS, "OPTUNA_TIMEOUT_SEC": cfg.OPTUNA_TIMEOUT_SEC,
+            "OPTUNA_METRIC": cfg.OPTUNA_METRIC, "OPTUNA_PRUNING": cfg.OPTUNA_PRUNING,
             "TELEGRAM_BOT_TOKEN": "***" if cfg.TELEGRAM_BOT_TOKEN else "",
             "TELEGRAM_CHAT_ID": cfg.TELEGRAM_CHAT_ID,
-            "ALERT_ON_SIGNAL": cfg.ALERT_ON_SIGNAL,
-            "ALERT_ON_OPTIMIZATION": cfg.ALERT_ON_OPTIMIZATION,
+            "ALERT_ON_SIGNAL": cfg.ALERT_ON_SIGNAL, "ALERT_ON_OPTIMIZATION": cfg.ALERT_ON_OPTIMIZATION,
         }
     except Exception as e:
         logger.exception("[Settings] GET failed")
         return JSONResponse({"error": str(e)}, status_code=500)
-
 
 @app.post("/api/settings")
 async def save_settings(request: Request):
@@ -181,25 +177,12 @@ async def save_settings(request: Request):
             ui_log("Settings reset to defaults")
             return {"status": "reset", "keys": []}
 
-        for k in [
-            "BINANCE_API_KEY", "BINANCE_API_SECRET", "ALPACA_API_KEY", "ALPACA_API_SECRET",
-            "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_API_KEY",
-            "CRYPTOCOMPARE_API_KEY", "COINGLASS_API_KEY",
-        ]:
+        for k in ["BINANCE_API_KEY", "BINANCE_API_SECRET", "ALPACA_API_KEY", "ALPACA_API_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_API_KEY", "CRYPTOCOMPARE_API_KEY", "COINGLASS_API_KEY"]:
             if body.get(k) in ["***", "", None]:
                 body.pop(k, None)
 
-        int_keys = [
-            "LEVERAGE", "MAX_TRADES_PER_DAY", "EMA_FAST", "EMA_MID", "EMA_SLOW", "RSI_PERIOD",
-            "SENTIMENT_VELOCITY_WINDOW", "FEAR_GREED_BULL_THRESHOLD", "FEAR_GREED_BEAR_THRESHOLD",
-            "WHALE_EXCHANGE_INFLOW_THRESHOLD", "OPTUNA_TRIALS", "OPTUNA_TIMEOUT_SEC",
-        ]
-        float_keys = [
-            "INITIAL_CAPITAL", "MAX_RISK_PER_TRADE", "MAX_DAILY_DRAWDOWN", "FUSION_THRESHOLD",
-            "MIN_RR_RATIO", "REGIME_CHAOS_VOLATILITY", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT",
-            "LIQUIDATION_PROXIMITY_PCT", "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
-            "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
-        ]
+        int_keys = ["LEVERAGE", "MAX_TRADES_PER_DAY", "EMA_FAST", "EMA_MID", "EMA_SLOW", "RSI_PERIOD", "SENTIMENT_VELOCITY_WINDOW", "FEAR_GREED_BULL_THRESHOLD", "FEAR_GREED_BEAR_THRESHOLD", "WHALE_EXCHANGE_INFLOW_THRESHOLD", "OPTUNA_TRIALS", "OPTUNA_TIMEOUT_SEC"]
+        float_keys = ["INITIAL_CAPITAL", "MAX_RISK_PER_TRADE", "MAX_DAILY_DRAWDOWN", "FUSION_THRESHOLD", "MIN_RR_RATIO", "REGIME_CHAOS_VOLATILITY", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT", "LIQUIDATION_PROXIMITY_PCT", "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE", "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY"]
         bool_keys = ["BINANCE_TESTNET", "ALPACA_PAPER", "OPTUNA_PRUNING", "ALERT_ON_SIGNAL", "ALERT_ON_OPTIMIZATION"]
 
         for k in int_keys:
@@ -225,12 +208,10 @@ async def save_settings(request: Request):
         ui_log(f"Settings saved | exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={cfg.SYMBOL}")
         await broadcast({"type": "settings_updated", "data": {"updated": updated}})
         return {"status": "saved", "keys": list(body.keys()), "applied": updated}
-
     except Exception as e:
         logger.exception("[Settings] POST failed")
         ui_log(f"Settings save failed: {e}", "ERROR")
         return JSONResponse({"error": str(e)}, status_code=500)
-
 
 @app.post("/api/settings/normalize_weights")
 async def normalize_weights():
@@ -244,7 +225,6 @@ async def normalize_weights():
         return {"status": "normalized", "weights": normalized, "was_total": round(total, 4)}
     return JSONResponse({"error": "All weights are zero"}, status_code=400)
 
-
 @app.post("/api/control/{action}")
 async def control(action: str):
     if action in ("start_paper", "start_live", "stop"):
@@ -252,7 +232,6 @@ async def control(action: str):
         _state["status"] = status
         await broadcast({"type": "status", "status": status})
     return {"status": _state["status"]}
-
 
 @app.post("/api/backtest/run")
 async def run_backtest(request: Request):
@@ -279,45 +258,93 @@ async def run_backtest(request: Request):
         ui_log(f"Backtest crashed: {e}", "ERROR")
         return JSONResponse({"error": str(e)}, status_code=500)
 
-
-@app.post("/api/optimize/run")
-async def run_optimization(request: Request):
-    body = await request.json()
-    symbol = body.get("symbol", cfg.SYMBOL)
-    timeframe = body.get("timeframe", cfg.TIMEFRAME)
-    candles = int(body.get("candles", cfg.OPTUNA_DATA_CANDLES))
-    metric = body.get("metric", cfg.OPTUNA_METRIC)
-    trials = int(body.get("trials", cfg.OPTUNA_TRIALS))
-    timeout = int(body.get("timeout", cfg.OPTUNA_TIMEOUT_SEC))
-    auto_apply = body.get("auto_apply", False)
-    ui_log(f"Optimization | {symbol} {timeframe} {candles}bars {metric} {trials}trials")
+async def _run_optimization_job(params: dict):
+    global _opt_status
+    _opt_status.update({"running": True, "cancel_requested": False, "started_at": datetime.utcnow().isoformat(), "finished_at": None, "progress": None, "result": None, "error": None, "params": params})
+    await broadcast({"type": "opt_status", "data": _opt_status})
     try:
+        symbol = params["symbol"]
+        timeframe = params["timeframe"]
+        candles = int(params["candles"])
+        metric = params["metric"]
+        trials = int(params["trials"])
+        timeout = int(params["timeout"])
+        auto_apply = bool(params.get("auto_apply", False))
+        ui_log(f"Optimization queued | {symbol} {timeframe} {candles}bars {metric} {trials}trials timeout={timeout}s")
+
         from core.exchange.factory import get_exchange
         exchange = get_exchange()
-        df = await exchange.get_ohlcv(symbol, timeframe, limit=candles)
-        await exchange.close()
+        try:
+            df = await exchange.get_ohlcv(symbol, timeframe, limit=candles)
+        finally:
+            closer = getattr(exchange, "close", None)
+            if closer:
+                maybe = closer()
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+
         if df.empty:
-            return JSONResponse({"error": "No data returned"}, status_code=400)
+            raise RuntimeError("No data returned")
 
         async def progress_cb(trial_num, total, best_value, best_params, trial_results):
-            ui_log(f"Trial {trial_num}/{total} | best={best_value:.4f}")
-            await broadcast({"type": "opt_progress", "data": {"trial_num": trial_num, "total": total, "best_value": best_value, "trial_results": trial_results}})
+            _opt_status["progress"] = {"trial_num": trial_num, "total": total, "best_value": best_value, "trial_results": trial_results}
+            await broadcast({"type": "opt_progress", "data": _opt_status["progress"]})
 
         optimizer = PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout, progress_callback=progress_cb)
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(executor, optimizer.run)
-        if auto_apply:
+        if _opt_status.get("cancel_requested"):
+            results = {"status": "cancel_requested", "partial_result": results}
+        elif auto_apply and isinstance(results, dict) and "error" not in results:
             optimizer.apply_best()
             reload_runtime_settings()
             results["applied"] = True
+
         _state["optimization"] = results
+        _opt_status["result"] = results
+        ui_log("Optimization finished")
         await broadcast({"type": "opt_complete", "data": results})
-        return results
     except Exception as e:
         logger.exception("[Optimize] failed")
+        _opt_status["error"] = str(e)
         ui_log(f"Optimization crashed: {e}", "ERROR")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        await broadcast({"type": "opt_error", "data": {"error": str(e)}})
+    finally:
+        _opt_status["running"] = False
+        _opt_status["finished_at"] = datetime.utcnow().isoformat()
+        await broadcast({"type": "opt_status", "data": _opt_status})
 
+@app.post("/api/optimize/run")
+async def run_optimization(request: Request):
+    global _opt_task
+    if _opt_status["running"]:
+        return JSONResponse({"error": "Optimization already running", "status": _opt_status}, status_code=409)
+    body = await request.json()
+    params = {
+        "symbol": body.get("symbol", cfg.SYMBOL),
+        "timeframe": body.get("timeframe", cfg.TIMEFRAME),
+        "candles": int(body.get("candles", cfg.OPTUNA_DATA_CANDLES)),
+        "metric": body.get("metric", cfg.OPTUNA_METRIC),
+        "trials": int(body.get("trials", cfg.OPTUNA_TRIALS)),
+        "timeout": int(body.get("timeout", cfg.OPTUNA_TIMEOUT_SEC)),
+        "auto_apply": bool(body.get("auto_apply", False)),
+    }
+    _opt_task = asyncio.create_task(_run_optimization_job(params))
+    return {"status": "started", "message": "Optimization running in background", "params": params}
+
+@app.get("/api/optimize/status")
+async def optimize_status():
+    return _opt_status
+
+@app.get("/api/optimize/result")
+async def optimize_result():
+    return _opt_status.get("result") or PrometheusOptimizer.load_last_results() or {"status": "no_result"}
+
+@app.post("/api/optimize/cancel")
+async def optimize_cancel():
+    _opt_status["cancel_requested"] = True
+    ui_log("Optimization cancel requested")
+    return {"status": "cancel_requested"}
 
 @app.post("/api/optimize/apply")
 async def apply_optimization(request: Request):
@@ -335,12 +362,8 @@ async def get_symbols():
     return {
         "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT"],
         "stocks": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "SPY", "QQQ"],
-        "timeframes": {
-            "crypto": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"],
-            "stocks": ["1m", "5m", "15m", "30m", "1h", "1d"],
-        },
+        "timeframes": {"crypto": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"], "stocks": ["1m", "5m", "15m", "30m", "1h", "1d"]},
     }
-
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
