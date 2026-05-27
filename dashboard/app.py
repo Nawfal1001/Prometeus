@@ -18,12 +18,14 @@ import config.settings as cfg
 from config.settings import save_user_settings, load_user_settings
 from optimization.optimizer import PrometheusOptimizer
 from dashboard.api_scanner import router as scanner_router
+from dashboard.api_backtest_multi import router as backtest_multi_router
 
 BASE_DIR = Path(__file__).parent
 app = FastAPI(title="PROMETHEUS v4")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.include_router(scanner_router)
+app.include_router(backtest_multi_router)
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()
 
