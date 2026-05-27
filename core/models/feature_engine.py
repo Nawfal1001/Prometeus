@@ -17,8 +17,8 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     Output: df with 30+ feature columns added
     """
     if df.empty or len(df) < cfg.EMA_SLOW:
-        logger.warning("Not enough data to compute features")
-        return df
+        logger.warning(f"Not enough data to compute features: rows={len(df)} ema_slow={cfg.EMA_SLOW}")
+        return df.copy()
 
     df = df.copy()
 
@@ -28,7 +28,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ema_slow"]  = ta.trend.ema_indicator(df["close"], window=cfg.EMA_SLOW)
 
     # VWAP (rolling daily approximation)
-    df["vwap"] = (df["volume"] * (df["high"] + df["low"] + df["close"]) / 3).cumsum() / df["volume"].cumsum()
+    df["vwap"] = (df["volume"] * (df["high"] + df["low"] + df["close"]) / 3).cumsum() / (df["volume"].cumsum() + 1e-9)
 
     # EMA distances (normalized)
     df["dist_ema_fast"] = (df["close"] - df["ema_fast"]) / df["close"]
@@ -46,7 +46,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── Momentum ──────────────────────────────────────────────
     df["rsi"]         = ta.momentum.rsi(df["close"], window=cfg.RSI_PERIOD)
-    df["rsi_norm"]    = (df["rsi"] - 50) / 50  # normalize to -1/+1
+    df["rsi_norm"]    = (df["rsi"] - 50) / 50
 
     stoch             = ta.momentum.StochRSIIndicator(df["close"], window=cfg.STOCHRSI_PERIOD)
     df["stochrsi_k"]  = stoch.stochrsi_k()
@@ -71,11 +71,9 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["vol_ma"]      = df["volume"].rolling(cfg.VOLUME_MA_PERIOD).mean()
     df["vol_ratio"]   = df["volume"] / (df["vol_ma"] + 1e-9)
 
-    # Volume delta proxy (positive close = buying pressure)
     df["candle_body"] = df["close"] - df["open"]
     df["vol_delta"]   = df["candle_body"].apply(np.sign) * df["vol_ratio"]
 
-    # OBV normalized
     df["obv"]         = ta.volume.on_balance_volume(df["close"], df["volume"])
     df["obv_norm"]    = (df["obv"] - df["obv"].rolling(20).mean()) / (df["obv"].rolling(20).std() + 1e-9)
 
@@ -84,12 +82,10 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["wick_lower"]  = (df[["open", "close"]].min(axis=1) - df["low"]) / (df["high"] - df["low"] + 1e-9)
     df["body_ratio"]  = abs(df["candle_body"]) / (df["high"] - df["low"] + 1e-9)
 
-    # Higher High / Lower Low detection (5-bar lookback)
     df["hh"] = (df["high"] > df["high"].shift(1)) & (df["high"].shift(1) > df["high"].shift(2))
     df["ll"] = (df["low"]  < df["low"].shift(1))  & (df["low"].shift(1)  < df["low"].shift(2))
     df["market_structure"] = np.where(df["hh"], 1, np.where(df["ll"], -1, 0))
 
-    # Returns
     df["ret_1"]  = df["close"].pct_change(1)
     df["ret_3"]  = df["close"].pct_change(3)
     df["ret_6"]  = df["close"].pct_change(6)
@@ -99,7 +95,6 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_feature_columns() -> list:
-    """Return list of feature column names used by the ML model."""
     return [
         "dist_ema_fast", "dist_ema_mid", "dist_ema_slow", "dist_vwap",
         "ema_stack", "rsi_norm", "stochrsi_k", "stochrsi_d", "stoch_cross",
@@ -112,12 +107,23 @@ def get_feature_columns() -> list:
 
 def label_data(df: pd.DataFrame, forward_candles: int = 3, rr: float = 1.5) -> pd.DataFrame:
     """
-    Create training labels:
-      1 = Long signal (price moves up by TP before SL)
-     -1 = Short signal (price moves down by TP before SL)
+    Create training labels safely:
+      1 = Long signal
+     -1 = Short signal
       0 = No trade
     """
     df = df.copy()
+    n = len(df)
+
+    if n == 0:
+        df["label"] = []
+        return df
+
+    if n <= forward_candles:
+        logger.warning(f"Not enough rows to label data: rows={n} forward_candles={forward_candles}. Assigning neutral labels.")
+        df["label"] = [0] * n
+        return df
+
     sl_pct = cfg.STOP_LOSS_PCT
     tp_pct = sl_pct * rr
 
@@ -126,7 +132,7 @@ def label_data(df: pd.DataFrame, forward_candles: int = 3, rr: float = 1.5) -> p
     highs  = df["high"].values
     lows   = df["low"].values
 
-    for i in range(len(df) - forward_candles):
+    for i in range(n - forward_candles):
         entry  = closes[i]
         long_sl  = entry * (1 - sl_pct)
         long_tp  = entry * (1 + tp_pct)
@@ -151,7 +157,12 @@ def label_data(df: pd.DataFrame, forward_candles: int = 3, rr: float = 1.5) -> p
                     break
         labels.append(label)
 
-    # Pad last rows with 0
     labels += [0] * forward_candles
+    labels = labels[:n]
+
+    if len(labels) != n:
+        logger.warning(f"Label length mismatch fixed: labels={len(labels)} rows={n}")
+        labels = (labels + [0] * n)[:n]
+
     df["label"] = labels
     return df
