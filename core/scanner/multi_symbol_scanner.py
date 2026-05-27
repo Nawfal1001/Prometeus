@@ -9,6 +9,7 @@ from loguru import logger
 import config.settings as cfg
 from core.layers.fusion import FusionEngine
 from core.models.feature_engine import compute_features
+from core.cache.market_cache import get_cached_ohlcv, get_cached_features
 
 DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "AVAX/USDT", "DOGE/USDT"]
 
@@ -19,8 +20,11 @@ class MultiSymbolScanner:
         self.symbols = symbols or getattr(cfg, "SCAN_SYMBOLS", DEFAULT_SYMBOLS)
         if isinstance(self.symbols, str):
             self.symbols = [s.strip() for s in self.symbols.split(",") if s.strip()]
+        max_symbols = int(getattr(cfg, "MAX_UI_SYMBOLS", 10)) if hasattr(cfg, "MAX_UI_SYMBOLS") else 10
+        self.symbols = self.symbols[:max_symbols]
         self.timeframe = timeframe or cfg.TIMEFRAME
-        self.limit = int(limit)
+        max_candles = int(getattr(cfg, "MAX_UI_CANDLES", 2000)) if hasattr(cfg, "MAX_UI_CANDLES") else 2000
+        self.limit = min(int(limit), max_candles)
         self.fusion = FusionEngine()
 
     async def scan(self) -> dict[str, Any]:
@@ -51,11 +55,11 @@ class MultiSymbolScanner:
                         await maybe
 
     async def _scan_symbol(self, symbol: str) -> dict[str, Any]:
-        df = await self.exchange.get_ohlcv(symbol, self.timeframe, limit=self.limit)
+        df = await get_cached_ohlcv(self.exchange, symbol, self.timeframe, self.limit)
         if df is None or df.empty or len(df) < 100:
             return {"symbol": symbol, "tradable": False, "rank_score": -999, "error": "not_enough_data"}
 
-        df = compute_features(df)
+        df = get_cached_features(symbol, self.timeframe, df, compute_features)
         if df.empty:
             return {"symbol": symbol, "tradable": False, "rank_score": -999, "error": "feature_engine_empty"}
 
