@@ -20,348 +20,185 @@
 
 <div class="container">
   <h1>🧬 Optuna Optimizer</h1>
-  <p style="color:var(--muted);margin-bottom:20px">
-    Automatically finds the best combination of parameters to maximize your target metric.
-    Uses Bayesian optimization — smarter than random search, faster than grid search.
-  </p>
+  <p style="color:var(--muted);margin-bottom:20px">Finds better strategy parameters using current exchange/settings data.</p>
 
-  <!-- Config -->
   <div class="card">
     <div class="card-header">⚙️ Optimization Config</div>
     <div class="settings-grid" style="padding:20px">
-
-      <div class="field-group">
-        <label>Target Metric</label>
-        <select id="opt-metric">
-          <option value="composite">🏆 Composite (balanced — recommended)</option>
-          <option value="win_rate">🎯 Win Rate</option>
-          <option value="profit_factor">💰 Profit Factor</option>
-          <option value="sharpe">📊 Sharpe Ratio</option>
-          <option value="total_return">📈 Total Return</option>
-        </select>
-        <span class="hint">Composite balances win rate + profit factor + Sharpe + drawdown</span>
-      </div>
-
-      <div class="field-group">
-        <label>Number of Trials</label>
-        <input type="number" id="opt-trials" value="50" min="10" max="500" step="10">
-        <span class="hint">More trials = better results but slower. 50 is a good start.</span>
-      </div>
-
-      <div class="field-group">
-        <label>Max Time (seconds)</label>
-        <input type="number" id="opt-timeout" value="300" min="60" max="3600" step="60">
-        <span class="hint">Optimization stops at this time even if trials not done.</span>
-      </div>
-
-      <div class="field-group">
-        <label>Symbol</label>
-        <select id="opt-symbol">
-          <option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option>
-        </select>
-      </div>
-
-      <div class="field-group">
-        <label>Timeframe</label>
-        <select id="opt-timeframe">
-          <option value="15m">15 min</option>
-          <option value="30m" selected>30 min</option>
-          <option value="1h">1 hour</option>
-        </select>
-      </div>
-
-      <div class="field-group">
-        <label>History (candles)</label>
-        <input type="number" id="opt-candles" value="1500" min="500" max="3000" step="100">
-        <span class="hint">More data = more reliable results. 1500 ≈ 31 days on 30m.</span>
-      </div>
-
-      <div class="field-group">
-        <label>Pruning (early stop bad trials)</label>
-        <select id="opt-pruning">
-          <option value="true">Yes (faster)</option>
-          <option value="false">No (more thorough)</option>
-        </select>
-        <span class="hint">Stops bad trials early to save time for promising ones.</span>
-      </div>
-
-      <div class="field-group">
-        <label>Auto-Apply Best Params</label>
-        <select id="opt-apply">
-          <option value="false">No — review first</option>
-          <option value="true">Yes — apply automatically</option>
-        </select>
-        <span class="hint">If yes, best params are saved to settings when done.</span>
-      </div>
-
+      <div class="field-group"><label>Target Metric</label><select id="opt-metric"><option value="composite">🏆 Composite</option><option value="win_rate">🎯 Win Rate</option><option value="profit_factor">💰 Profit Factor</option><option value="sharpe">📊 Sharpe Ratio</option><option value="total_return">📈 Total Return</option></select></div>
+      <div class="field-group"><label>Number of Trials</label><input type="number" id="opt-trials" value="50" min="10" max="500" step="10"></div>
+      <div class="field-group"><label>Max Time seconds</label><input type="number" id="opt-timeout" value="300" min="60" max="3600" step="60"></div>
+      <div class="field-group"><label>Symbol</label><select id="opt-symbol"><option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option></select></div>
+      <div class="field-group"><label>Timeframe</label><select id="opt-timeframe"><option value="15m">15 min</option><option value="30m" selected>30 min</option><option value="1h">1 hour</option></select></div>
+      <div class="field-group"><label>History candles</label><input type="number" id="opt-candles" value="1500" min="500" max="3000" step="100"></div>
+      <div class="field-group"><label>Pruning</label><select id="opt-pruning"><option value="true">Yes faster</option><option value="false">No thorough</option></select></div>
+      <div class="field-group"><label>Auto-Apply Best Params</label><select id="opt-apply"><option value="false">No review first</option><option value="true">Yes apply automatically</option></select></div>
     </div>
-
-    <!-- What gets optimized -->
-    <div style="padding:0 20px 20px">
-      <div class="section-title" style="margin-bottom:12px">🔍 Parameters Being Optimized</div>
-      <div class="param-grid">
-        <div class="param-chip">Layer weights (5)</div>
-        <div class="param-chip">Fusion threshold</div>
-        <div class="param-chip">Stop loss %</div>
-        <div class="param-chip">Take profit %</div>
-        <div class="param-chip">EMA Fast/Mid/Slow</div>
-        <div class="param-chip">RSI period</div>
-        <div class="param-chip">Max risk per trade</div>
-        <div class="param-chip">Max trades/day</div>
-      </div>
-    </div>
-
     <div style="padding:0 20px 20px;display:flex;gap:10px;align-items:center">
-      <button class="btn btn-primary" id="opt-run-btn" onclick="runOptimization()">
-        🧬 Start Optimization
-      </button>
-      <button class="btn btn-secondary" id="opt-apply-btn" onclick="applyBest()" style="display:none">
-        ✅ Apply Best Params to Settings
-      </button>
+      <button class="btn btn-primary" id="opt-run-btn" onclick="runOptimization()">🧬 Start Optimization</button>
+      <button class="btn btn-secondary" id="opt-apply-btn" onclick="applyBest()" style="display:none">✅ Apply Best Params</button>
+      <button class="btn btn-secondary" onclick="clearLogs()">🧹 Clear Logs</button>
       <span id="opt-status-text" style="color:var(--muted);font-size:13px"></span>
     </div>
   </div>
 
-  <!-- Progress -->
+  <div class="card mt">
+    <div class="card-header">🧾 Optimizer Logs</div>
+    <pre id="ui-logs" class="ui-log-box">Waiting for logs...</pre>
+  </div>
+
   <div id="opt-progress" style="display:none" class="card mt">
     <div class="card-header">⏳ Optimization Progress</div>
     <div style="padding:20px">
-      <div class="progress-bar-wrap">
-        <div class="progress-bar" id="progress-bar"></div>
-      </div>
+      <div class="progress-bar-wrap"><div class="progress-bar" id="progress-bar"></div></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px;color:var(--muted)">
-        <span id="prog-text">Trial 0 / 0</span>
-        <span id="prog-best">Best: —</span>
-        <span id="prog-eta">ETA: —</span>
+        <span id="prog-text">Trial 0 / 0</span><span id="prog-best">Best: —</span><span id="prog-eta">ETA: —</span>
       </div>
-
-      <!-- Live trial feed -->
       <div class="trial-feed" id="trial-feed"></div>
     </div>
   </div>
 
-  <!-- Results -->
   <div id="opt-results" style="display:none">
-
-    <!-- Verdict -->
-    <div class="card mt">
-      <div class="card-header">🏆 Best Result</div>
-      <div style="padding:20px">
-        <div class="best-score" id="best-score-display">—</div>
-        <div class="stats-grid" style="margin-top:16px" id="best-metrics-grid"></div>
-      </div>
-    </div>
-
-    <!-- Best params -->
-    <div class="card mt">
-      <div class="card-header">🎛️ Best Parameters Found</div>
-      <div style="padding:20px">
-        <div class="settings-grid" id="best-params-grid"></div>
-        <button class="btn btn-primary mt" onclick="applyBest()">✅ Apply These to Settings</button>
-      </div>
-    </div>
-
-    <!-- Parameter importance -->
-    <div class="card mt">
-      <div class="card-header">📊 Parameter Importance</div>
-      <div style="padding:20px" id="importance-chart"></div>
-    </div>
-
-    <!-- Top 10 trials -->
-    <div class="card mt">
-      <div class="card-header">📋 Top 10 Trials</div>
-      <table class="trade-table">
-        <thead>
-          <tr><th>Rank</th><th>Score</th><th>Win Rate</th><th>Profit Factor</th><th>Sharpe</th><th>Return</th><th>Drawdown</th><th>Trades</th></tr>
-        </thead>
-        <tbody id="top10-body"></tbody>
-      </table>
-    </div>
-
+    <div class="card mt"><div class="card-header">🏆 Best Result</div><div style="padding:20px"><div class="best-score" id="best-score-display">—</div><div class="stats-grid" style="margin-top:16px" id="best-metrics-grid"></div></div></div>
+    <div class="card mt"><div class="card-header">🎛️ Best Parameters Found</div><div style="padding:20px"><div class="settings-grid" id="best-params-grid"></div><button class="btn btn-primary mt" onclick="applyBest()">✅ Apply These to Settings</button></div></div>
+    <div class="card mt"><div class="card-header">📊 Parameter Importance</div><div style="padding:20px" id="importance-chart"></div></div>
+    <div class="card mt"><div class="card-header">📋 Top 10 Trials</div><table class="trade-table"><thead><tr><th>Rank</th><th>Score</th><th>Win Rate</th><th>Profit Factor</th><th>Sharpe</th><th>Return</th><th>Drawdown</th><th>Trades</th></tr></thead><tbody id="top10-body"></tbody></table></div>
   </div>
 </div>
 
 <style>
-.param-grid  { display:flex;flex-wrap:wrap;gap:8px; }
-.param-chip  { background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--muted); }
-.progress-bar-wrap { height:12px;background:var(--bg3);border-radius:6px;overflow:hidden; }
-.progress-bar { height:100%;background:var(--purple);border-radius:6px;transition:width .5s;width:0% }
-.trial-feed  { margin-top:16px;max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace; }
-.trial-row   { padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted); }
-.trial-row.good { color:var(--green); }
-.best-score  { font-size:48px;font-weight:800;color:var(--purple); }
-.imp-row     { display:flex;align-items:center;gap:10px;margin-bottom:8px; }
-.imp-name    { width:200px;font-size:12px;color:var(--muted); }
-.imp-bar-wrap{ flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden; }
-.imp-bar     { height:100%;background:var(--purple);border-radius:4px; }
-.imp-val     { width:50px;text-align:right;font-size:12px; }
+.param-grid{display:flex;flex-wrap:wrap;gap:8px}.param-chip{background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--muted)}.progress-bar-wrap{height:12px;background:var(--bg3);border-radius:6px;overflow:hidden}.progress-bar{height:100%;background:var(--purple);border-radius:6px;transition:width .5s;width:0%}.trial-feed{margin-top:16px;max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace}.trial-row{padding:3px 0;border-bottom:1px solid var(--border);color:var(--muted)}.trial-row.good{color:var(--green)}.best-score{font-size:48px;font-weight:800;color:var(--purple)}.imp-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}.imp-name{width:200px;font-size:12px;color:var(--muted)}.imp-bar-wrap{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}.imp-bar{height:100%;background:var(--purple);border-radius:4px}.imp-val{width:50px;text-align:right;font-size:12px}
 </style>
 
 <script>
-let _bestParams  = {};
-let _startTime   = null;
-let _ws          = null;
+let _bestParams = {};
+let _startTime = null;
+let _ws = null;
 
-// WebSocket for live progress
+function safeNum(v, d=2) { return Number.isFinite(Number(v)) ? Number(v).toFixed(d) : "—"; }
+function safePct(v, d=1) { return Number.isFinite(Number(v)) ? `${(Number(v)*100).toFixed(d)}%` : "—"; }
+
+async function loadLogs() {
+  try {
+    const res = await fetch('/api/logs');
+    const data = await res.json();
+    const box = document.getElementById('ui-logs');
+    if (!box) return;
+    box.textContent = data.logs?.length ? data.logs.map(l => `[${l.time}] [${l.level}] ${l.message}`).join('\n') : 'No logs yet.';
+    box.scrollTop = box.scrollHeight;
+  } catch(e) {}
+}
+async function clearLogs() { await fetch('/api/logs/clear', { method: 'POST' }); loadLogs(); }
+setInterval(loadLogs, 2000); loadLogs();
+
 function connectWS() {
-  _ws = new WebSocket(`ws://${location.host}/ws`);
+  const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  _ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
   _ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "opt_progress") handleProgress(msg.data);
     if (msg.type === "opt_complete") handleComplete(msg.data);
     if (msg.type === "status") {
       const b = document.getElementById("status-badge");
-      if (b) { b.textContent = msg.status.toUpperCase(); b.className = `badge badge-${msg.status}`; }
+      if (b) { b.textContent = (msg.status || "stopped").toUpperCase(); b.className = `badge badge-${msg.status || "stopped"}`; }
     }
   };
+  _ws.onclose = () => setTimeout(connectWS, 3000);
+  _ws.onerror = () => console.warn("Optimizer WebSocket error");
 }
 connectWS();
 
 async function runOptimization() {
-  const metric   = document.getElementById("opt-metric").value;
-  const trials   = parseInt(document.getElementById("opt-trials").value);
-  const timeout  = parseInt(document.getElementById("opt-timeout").value);
-  const symbol   = document.getElementById("opt-symbol").value;
-  const timeframe= document.getElementById("opt-timeframe").value;
-  const candles  = parseInt(document.getElementById("opt-candles").value);
-  const pruning  = document.getElementById("opt-pruning").value === "true";
-  const autoApply= document.getElementById("opt-apply").value === "true";
-
-  document.getElementById("opt-run-btn").disabled  = true;
+  const metric = document.getElementById("opt-metric").value;
+  const trials = parseInt(document.getElementById("opt-trials").value);
+  const timeout = parseInt(document.getElementById("opt-timeout").value);
+  const symbol = document.getElementById("opt-symbol").value;
+  const timeframe = document.getElementById("opt-timeframe").value;
+  const candles = parseInt(document.getElementById("opt-candles").value);
+  const pruning = document.getElementById("opt-pruning").value === "true";
+  const autoApply = document.getElementById("opt-apply").value === "true";
+  document.getElementById("opt-run-btn").disabled = true;
   document.getElementById("opt-progress").style.display = "block";
-  document.getElementById("opt-results").style.display  = "none";
+  document.getElementById("opt-results").style.display = "none";
   document.getElementById("trial-feed").innerHTML = "";
-  document.getElementById("opt-status-text").textContent = "Fetching data...";
-  _startTime = Date.now();
-
+  document.getElementById("opt-status-text").textContent = "Starting...";
+  _startTime = Date.now(); loadLogs();
   try {
-    const res = await fetch("/api/optimize/run", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ metric, trials, timeout, symbol, timeframe, candles, pruning, auto_apply: autoApply }),
-    });
-    const data = await res.json();
-    if (data.error) { alert(`Error: ${data.error}`); return; }
+    const res = await fetch("/api/optimize/run", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ metric, trials, timeout, symbol, timeframe, candles, pruning, auto_apply:autoApply }) });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error(text || `HTTP ${res.status}`); }
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     handleComplete(data);
   } catch(e) {
-    alert(`Error: ${e.message}`);
+    alert(`Optimization error: ${e.message}`);
+    document.getElementById("opt-status-text").textContent = `Error: ${e.message}`;
   } finally {
     document.getElementById("opt-run-btn").disabled = false;
-    document.getElementById("opt-status-text").textContent = "Done";
+    loadLogs();
   }
 }
 
 function handleProgress(data) {
-  const { trial_num, total, best_value, trial_results } = data;
-  const pct = Math.round((trial_num / total) * 100);
-
+  const trial_num = Number(data.trial_num || 0), total = Number(data.total || 1), best_value = Number(data.best_value || 0);
+  const pct = Math.max(0, Math.min(100, Math.round((trial_num / total) * 100)));
   document.getElementById("progress-bar").style.width = `${pct}%`;
   document.getElementById("prog-text").textContent = `Trial ${trial_num} / ${total}`;
-  document.getElementById("prog-best").textContent  = `Best: ${best_value?.toFixed(4) || "—"}`;
-
-  // ETA
+  document.getElementById("prog-best").textContent = `Best: ${safeNum(best_value,4)}`;
   if (_startTime && trial_num > 0) {
     const elapsed = (Date.now() - _startTime) / 1000;
-    const rate    = trial_num / elapsed;
+    const rate = trial_num / elapsed;
     const remaining = (total - trial_num) / (rate || 1);
     document.getElementById("prog-eta").textContent = `ETA: ${Math.round(remaining)}s`;
   }
-
-  // Live trial feed
-  if (trial_results) {
+  const tr = data.trial_results;
+  if (tr) {
     const feed = document.getElementById("trial-feed");
-    const good = trial_results.score > (best_value * 0.9);
-    const row  = document.createElement("div");
-    row.className = `trial-row${good ? " good" : ""}`;
-    row.textContent = `Trial ${trial_num}: score=${trial_results.score?.toFixed(4)} | ` +
-      `WR=${(trial_results.metrics?.win_rate*100)?.toFixed(1)}% | ` +
-      `PF=${trial_results.metrics?.profit_factor?.toFixed(2)} | ` +
-      `Sharpe=${trial_results.metrics?.sharpe?.toFixed(2)}`;
-    feed.prepend(row);
-    if (feed.children.length > 50) feed.lastChild.remove();
+    const row = document.createElement("div");
+    row.className = `trial-row${Number(tr.score || 0) > best_value * 0.9 ? " good" : ""}`;
+    row.textContent = `Trial ${trial_num}: score=${safeNum(tr.score,4)} | WR=${safePct(tr.metrics?.win_rate)} | PF=${safeNum(tr.metrics?.profit_factor)} | Sharpe=${safeNum(tr.metrics?.sharpe)}`;
+    feed.prepend(row); if (feed.children.length > 50) feed.lastChild.remove();
   }
 }
 
 function handleComplete(data) {
-  document.getElementById("opt-results").style.display  = "block";
+  if (!data || data.error) { alert(data?.error || "Optimization failed"); return; }
+  document.getElementById("opt-results").style.display = "block";
   document.getElementById("opt-progress").style.display = "none";
   document.getElementById("opt-apply-btn").style.display = "inline-block";
+  document.getElementById("opt-status-text").textContent = "Done";
   _bestParams = data.best_params || {};
-
-  // Best score
-  document.getElementById("best-score-display").textContent =
-    `${data.best_value?.toFixed(4)} (${data.best_metric})`;
-
-  // Best metrics from top trial
+  document.getElementById("best-score-display").textContent = `${safeNum(data.best_value,4)} (${data.best_metric || "metric"})`;
   const top = data.top_10?.[0];
   if (top) {
     document.getElementById("best-metrics-grid").innerHTML = [
-      { label: "Win Rate",      value: `${(top.metrics?.win_rate*100)?.toFixed(1)}%`, good: top.metrics?.win_rate >= 0.58 },
-      { label: "Profit Factor", value: top.metrics?.profit_factor?.toFixed(2),         good: top.metrics?.profit_factor >= 1.4 },
-      { label: "Sharpe Ratio",  value: top.metrics?.sharpe?.toFixed(2),                good: top.metrics?.sharpe >= 1.0 },
-      { label: "Total Return",  value: `${(top.metrics?.total_return*100)?.toFixed(1)}%`, good: top.metrics?.total_return > 0 },
-      { label: "Max Drawdown",  value: `${(top.metrics?.max_drawdown*100)?.toFixed(1)}%`, good: top.metrics?.max_drawdown <= 0.25 },
-      { label: "Trades",        value: top.metrics?.total_trades, good: top.metrics?.total_trades >= 50 },
-    ].map(m => `
-      <div class="stat-card">
-        <div class="stat-label">${m.label}</div>
-        <div class="stat-value ${m.good ? "green" : "red"}">${m.value || "—"}</div>
-      </div>`).join("");
+      { label:"Win Rate", value:safePct(top.metrics?.win_rate), good:Number(top.metrics?.win_rate) >= 0.58 },
+      { label:"Profit Factor", value:safeNum(top.metrics?.profit_factor), good:Number(top.metrics?.profit_factor) >= 1.4 },
+      { label:"Sharpe Ratio", value:safeNum(top.metrics?.sharpe), good:Number(top.metrics?.sharpe) >= 1.0 },
+      { label:"Total Return", value:safePct(top.metrics?.total_return), good:Number(top.metrics?.total_return) > 0 },
+      { label:"Max Drawdown", value:safePct(top.metrics?.max_drawdown), good:Number(top.metrics?.max_drawdown) <= 0.25 },
+      { label:"Trades", value:top.metrics?.total_trades ?? "—", good:Number(top.metrics?.total_trades) >= 50 },
+    ].map(m => `<div class="stat-card"><div class="stat-label">${m.label}</div><div class="stat-value ${m.good ? "green" : "red"}">${m.value}</div></div>`).join("");
   }
-
-  // Best params grid
-  if (_bestParams) {
-    document.getElementById("best-params-grid").innerHTML = Object.entries(_bestParams)
-      .map(([k, v]) => `
-        <div class="field-group">
-          <label>${k.replace(/_/g," ")}</label>
-          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;color:var(--purple)">
-            ${typeof v === "number" ? v.toFixed(4) : v}
-          </div>
-        </div>`).join("");
-  }
-
-  // Parameter importance
+  document.getElementById("best-params-grid").innerHTML = Object.entries(_bestParams).map(([k,v]) => `<div class="field-group"><label>${k.replace(/_/g," ")}</label><div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:monospace;color:var(--purple)">${typeof v === "number" ? v.toFixed(4) : v}</div></div>`).join("");
   if (data.importance) {
     const sorted = Object.entries(data.importance).sort((a,b) => b[1]-a[1]);
-    document.getElementById("importance-chart").innerHTML = sorted.map(([k, v]) => `
-      <div class="imp-row">
-        <div class="imp-name">${k.replace(/_/g," ")}</div>
-        <div class="imp-bar-wrap"><div class="imp-bar" style="width:${(v*100).toFixed(0)}%"></div></div>
-        <div class="imp-val">${(v*100).toFixed(1)}%</div>
-      </div>`).join("");
+    document.getElementById("importance-chart").innerHTML = sorted.map(([k,v]) => `<div class="imp-row"><div class="imp-name">${k.replace(/_/g," ")}</div><div class="imp-bar-wrap"><div class="imp-bar" style="width:${safeNum(Number(v)*100,0)}%"></div></div><div class="imp-val">${safeNum(Number(v)*100,1)}%</div></div>`).join("");
   }
-
-  // Top 10 table
   if (data.top_10) {
-    document.getElementById("top10-body").innerHTML = data.top_10.map((t, i) => `
-      <tr>
-        <td>${i+1}</td>
-        <td class="green"><b>${t.score?.toFixed(4)}</b></td>
-        <td>${(t.metrics?.win_rate*100)?.toFixed(1)}%</td>
-        <td>${t.metrics?.profit_factor?.toFixed(2)}</td>
-        <td>${t.metrics?.sharpe?.toFixed(2)}</td>
-        <td>${(t.metrics?.total_return*100)?.toFixed(1)}%</td>
-        <td class="${t.metrics?.max_drawdown<=0.25?"green":"red"}">${(t.metrics?.max_drawdown*100)?.toFixed(1)}%</td>
-        <td>${t.metrics?.total_trades}</td>
-      </tr>`).join("");
+    document.getElementById("top10-body").innerHTML = data.top_10.map((t,i) => `<tr><td>${i+1}</td><td class="green"><b>${safeNum(t.score,4)}</b></td><td>${safePct(t.metrics?.win_rate)}</td><td>${safeNum(t.metrics?.profit_factor)}</td><td>${safeNum(t.metrics?.sharpe)}</td><td>${safePct(t.metrics?.total_return)}</td><td class="${Number(t.metrics?.max_drawdown)<=0.25?"green":"red"}">${safePct(t.metrics?.max_drawdown)}</td><td>${t.metrics?.total_trades ?? "—"}</td></tr>`).join("");
   }
 }
 
 async function applyBest() {
-  if (!Object.keys(_bestParams).length) {
-    alert("Run optimization first"); return;
-  }
-  const res = await fetch("/api/optimize/apply", {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify(_bestParams),
-  });
-  const data = await res.json();
-  if (data.status === "applied") {
+  if (!Object.keys(_bestParams).length) { alert("Run optimization first"); return; }
+  try {
+    const res = await fetch("/api/optimize/apply", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(_bestParams) });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Apply failed");
     document.getElementById("opt-status-text").textContent = "✅ Best params applied to settings!";
     setTimeout(() => { window.location.href = "/settings"; }, 1500);
-  }
+  } catch(e) { alert(`Apply error: ${e.message}`); }
 }
 </script>
 </body>
