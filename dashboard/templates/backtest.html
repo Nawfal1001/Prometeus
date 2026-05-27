@@ -11,7 +11,9 @@
   <div class="nav-brand">⚡ PROMETHEUS</div>
   <div class="nav-links">
     <a href="/">Dashboard</a>
+    <a href="/scan">Scanner</a>
     <a href="/backtest" class="active">Backtest</a>
+    <a href="/optimize">Optimize</a>
     <a href="/settings">Settings</a>
   </div>
 </nav>
@@ -19,286 +21,62 @@
 <div class="container">
   <h1>🔬 Backtest Engine</h1>
 
-  <!-- Config -->
   <div class="card">
     <div class="card-header">Configuration</div>
     <div class="settings-grid">
-      <div class="field-group">
-        <label>Symbol</label>
-        <select id="bt-symbol">
-          <option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option>
-        </select>
-      </div>
-      <div class="field-group">
-        <label>Timeframe</label>
-        <select id="bt-timeframe">
-          <option value="15m">15 minutes</option>
-          <option value="30m" selected>30 minutes</option>
-          <option value="1h">1 hour</option>
-        </select>
-      </div>
-      <div class="field-group">
-        <label>Candles (history)</label>
-        <input type="number" id="bt-limit" value="1500" min="500" max="3000" step="100">
-        <span class="hint">1500 × 30m ≈ 31 days of data</span>
-      </div>
-      <div class="field-group">
-        <label>Mode</label>
-        <select id="bt-mode">
-          <option value="walkforward">Walk-Forward (realistic ⭐)</option>
-          <option value="simple">Simple Split (fast)</option>
-        </select>
-        <span class="hint">Walk-forward trains on rolling windows — much more reliable</span>
-      </div>
+      <div class="field-group"><label>Run Mode</label><select id="bt-run-mode" onchange="toggleBtMode()"><option value="single" selected>Single Symbol</option><option value="multi">Multi-Symbol Ranking</option></select></div>
+      <div class="field-group" id="bt-single-symbol-box"><label>Symbol</label><select id="bt-symbol"><option>BTC/USDT</option><option>ETH/USDT</option><option>SOL/USDT</option><option>BNB/USDT</option><option>XRP/USDT</option><option>AVAX/USDT</option><option>DOGE/USDT</option></select></div>
+      <div class="field-group" id="bt-multi-symbol-box" style="display:none"><label>Symbols comma-separated</label><input id="bt-symbols" value="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,AVAX/USDT,DOGE/USDT"></div>
+      <div class="field-group"><label>Timeframe</label><select id="bt-timeframe"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option><option value="30m" selected>30 minutes</option><option value="1h">1 hour</option></select></div>
+      <div class="field-group"><label>Candles</label><input type="number" id="bt-limit" value="1500" min="500" max="10000" step="100"><span class="hint">More candles = slower but more reliable</span></div>
+      <div class="field-group"><label>Mode</label><select id="bt-mode"><option value="walkforward">Walk-Forward realistic ⭐</option><option value="simple">Simple Split fast</option></select><span class="hint">Walk-forward uses rolling windows</span></div>
     </div>
     <div class="bt-actions">
       <button class="btn btn-primary mt" id="bt-run-btn" onclick="runBacktest()">▶ Run Backtest</button>
       <button class="btn btn-secondary mt" onclick="clearLogs()">🧹 Clear Logs</button>
-      <span class="hint mt" style="margin-left:12px">First run trains the XGBoost model — may take 30–60s</span>
+      <span class="hint mt" style="margin-left:12px">Multi-symbol mode ranks all tested pairs.</span>
     </div>
   </div>
 
-  <div id="bt-loading" style="display:none" class="loading-msg">
-    ⏳ Running backtest... training model on each window...
+  <div id="bt-loading" style="display:none" class="loading-msg">⏳ Running backtest...</div>
+  <div class="card mt"><div class="card-header">🧾 Backtest Logs</div><pre id="ui-logs" class="ui-log-box">Waiting for logs...</pre></div>
+  <div id="bt-verdict" style="display:none" class="verdict-card"><div id="verdict-text" class="verdict-text"></div><div id="verdict-checks" class="verdict-checks"></div></div>
+
+  <div id="multi-results" class="card mt" style="display:none">
+    <div class="card-header">🏁 Multi-Symbol Ranking</div>
+    <table class="trade-table"><thead><tr><th>Rank</th><th>Symbol</th><th>Trades</th><th>Win Rate</th><th>Return</th><th>Profit Factor</th><th>Drawdown</th><th>Status</th></tr></thead><tbody id="multi-tbody"></tbody></table>
   </div>
 
-  <!-- Troubleshooting logs -->
-  <div class="card mt">
-    <div class="card-header">🧾 Backtest Logs</div>
-    <pre id="ui-logs" class="ui-log-box">Waiting for logs...</pre>
-  </div>
-
-  <!-- Go/No-Go verdict -->
-  <div id="bt-verdict" style="display:none" class="verdict-card">
-    <div id="verdict-text" class="verdict-text"></div>
-    <div id="verdict-checks" class="verdict-checks"></div>
-  </div>
-
-  <!-- Main stats -->
   <div id="bt-results" style="display:none">
     <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Symbol</div><div class="stat-value" id="bt-symbol-disp">—</div></div>
       <div class="stat-card"><div class="stat-label">Total Trades</div><div class="stat-value" id="bt-trades">—</div><div class="stat-sub" id="bt-windows">—</div></div>
       <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="bt-winrate">—</div><div class="stat-sub">Target: ≥ 58%</div></div>
       <div class="stat-card"><div class="stat-label">Total Return</div><div class="stat-value" id="bt-return">—</div><div class="stat-sub" id="bt-finalcap">—</div></div>
       <div class="stat-card"><div class="stat-label">Max Drawdown</div><div class="stat-value" id="bt-maxdd">—</div><div class="stat-sub">Target: ≤ 25%</div></div>
       <div class="stat-card"><div class="stat-label">Sharpe Ratio</div><div class="stat-value" id="bt-sharpe">—</div><div class="stat-sub">Target: ≥ 1.0</div></div>
       <div class="stat-card"><div class="stat-label">Profit Factor</div><div class="stat-value" id="bt-pf">—</div><div class="stat-sub">Target: ≥ 1.4</div></div>
-      <div class="stat-card"><div class="stat-label">Avg Win</div><div class="stat-value" id="bt-avgwin">—</div></div>
-      <div class="stat-card"><div class="stat-label">Avg Loss</div><div class="stat-value" id="bt-avgloss">—</div></div>
       <div class="stat-card"><div class="stat-label">R:R Ratio</div><div class="stat-value" id="bt-rr">—</div></div>
-      <div class="stat-card"><div class="stat-label">Max Consec. Losses</div><div class="stat-value" id="bt-consec">—</div></div>
-      <div class="stat-card"><div class="stat-label">Total Fees Paid</div><div class="stat-value" id="bt-fees">—</div><div class="stat-sub" id="bt-slip">—</div></div>
       <div class="stat-card"><div class="stat-label">Mode</div><div class="stat-value" id="bt-mode-disp">—</div></div>
     </div>
 
-    <!-- Equity Curve -->
-    <div class="card mt">
-      <div class="card-header">📈 Equity Curve</div>
-      <div style="padding:16px">
-        <canvas id="equity-chart" height="80"></canvas>
-      </div>
-    </div>
-
-    <!-- Walk-forward windows -->
-    <div id="wf-section" class="card mt" style="display:none">
-      <div class="card-header">🪟 Walk-Forward Windows</div>
-      <table class="trade-table">
-        <thead><tr><th>Window</th><th>Start Bar</th><th>Trades</th><th>Win Rate</th><th>Capital</th></tr></thead>
-        <tbody id="wf-tbody"></tbody>
-      </table>
-    </div>
-
-    <!-- Last trades -->
-    <div class="card mt">
-      <div class="card-header">📋 Last 30 Simulated Trades <span class="hint">(includes fees + slippage)</span></div>
-      <table class="trade-table">
-        <thead><tr><th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L (USDT)</th><th>P&L %</th><th>Type</th></tr></thead>
-        <tbody id="bt-trade-log"></tbody>
-      </table>
-    </div>
+    <div class="card mt"><div class="card-header">📈 Equity Curve</div><div style="padding:16px"><canvas id="equity-chart" height="80"></canvas></div></div>
+    <div id="wf-section" class="card mt" style="display:none"><div class="card-header">🪟 Walk-Forward Windows</div><table class="trade-table"><thead><tr><th>Window</th><th>Start Bar</th><th>Trades</th><th>Win Rate</th><th>Capital</th></tr></thead><tbody id="wf-tbody"></tbody></table></div>
+    <div class="card mt"><div class="card-header">📋 Last Simulated Trades</div><table class="trade-table"><thead><tr><th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&L</th><th>P&L %</th><th>Type</th></tr></thead><tbody id="bt-trade-log"></tbody></table></div>
   </div>
 </div>
 
 <script>
-async function loadLogs() {
-  try {
-    const res = await fetch('/api/logs');
-    const data = await res.json();
-    const box = document.getElementById('ui-logs');
-    if (!box) return;
-    if (!data.logs || !data.logs.length) {
-      box.textContent = 'No logs yet.';
-      return;
-    }
-    box.textContent = data.logs
-      .map(l => `[${l.time}] [${l.level}] ${l.message}`)
-      .join('\n');
-    box.scrollTop = box.scrollHeight;
-  } catch (e) {}
-}
-
-async function clearLogs() {
-  await fetch('/api/logs/clear', { method: 'POST' });
-  loadLogs();
-}
-
-setInterval(loadLogs, 2000);
-loadLogs();
-
-// Inline mini chart (no external lib needed)
-async function runBacktest() {
-  const symbol    = document.getElementById("bt-symbol").value;
-  const timeframe = document.getElementById("bt-timeframe").value;
-  const limit     = document.getElementById("bt-limit").value;
-  const mode      = document.getElementById("bt-mode").value;
-
-  document.getElementById("bt-loading").style.display  = "block";
-  document.getElementById("bt-results").style.display  = "none";
-  document.getElementById("bt-verdict").style.display  = "none";
-  document.getElementById("bt-run-btn").disabled       = true;
-  loadLogs();
-
-  try {
-    const res  = await fetch("/api/backtest/run", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ symbol, timeframe, limit: parseInt(limit), mode }),
-    });
-    const data = await res.json();
-    if (data.error) { alert(`Backtest error: ${data.error}`); return; }
-    displayResults(data);
-  } catch(e) {
-    alert(`Error: ${e.message}`);
-  } finally {
-    document.getElementById("bt-loading").style.display = "none";
-    document.getElementById("bt-run-btn").disabled = false;
-    loadLogs();
-  }
-}
-
-function displayResults(r) {
-  document.getElementById("bt-results").style.display = "block";
-  const pct = v => `${(v * 100).toFixed(2)}%`;
-  const usd = v => `$${parseFloat(v).toFixed(4)}`;
-  const col = (id, v, good) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.className = `stat-value ${good ? "green" : "red"}`;
-  };
-
-  set("bt-trades",   r.total_trades);
-  set("bt-windows",  r.windows ? `${r.windows} windows` : "");
-  set("bt-winrate",  pct(r.win_rate));       col("bt-winrate",  null, r.win_rate >= 0.58);
-  set("bt-return",   pct(r.total_return));   col("bt-return",   null, r.total_return > 0);
-  set("bt-finalcap", `Final: $${r.final_capital?.toFixed(2)}`);
-  set("bt-maxdd",    pct(r.max_drawdown));   col("bt-maxdd",    null, r.max_drawdown <= 0.25);
-  set("bt-sharpe",   r.sharpe_ratio?.toFixed(2)); col("bt-sharpe", null, r.sharpe_ratio >= 1.0);
-  set("bt-pf",       r.profit_factor?.toFixed(2)); col("bt-pf",    null, r.profit_factor >= 1.4);
-  set("bt-avgwin",   usd(r.avg_win_usdt));
-  set("bt-avgloss",  usd(r.avg_loss_usdt));
-  set("bt-rr",       r.rr_ratio?.toFixed(2));
-  set("bt-consec",   r.max_consec_losses);
-  set("bt-fees",     `$${r.total_fees_usdt?.toFixed(4)}`);
-  set("bt-slip",     `Slippage: ${r.slippage_pct?.toFixed(2)}%`);
-  set("bt-mode-disp", r.mode || "—");
-
-  if (r.go_live_ready) {
-    const v = r.go_live_ready;
-    const vEl = document.getElementById("bt-verdict");
-    vEl.style.display = "block";
-    vEl.className = `verdict-card ${v.verdict.includes("GO 🟢") ? "verdict-go" : v.verdict.includes("🟡") ? "verdict-caution" : "verdict-nogo"}`;
-    set("verdict-text", `${v.verdict} — ${v.passed}/${v.total} checks passed`);
-    document.getElementById("verdict-checks").innerHTML = Object.entries(v.checks)
-      .map(([k, ok]) => `<span class="check-item ${ok ? "ok" : "fail"}">${ok ? "✅" : "❌"} ${k.replace(/_/g," ")}</span>`)
-      .join("");
-  }
-
-  if (r.window_stats?.length) {
-    document.getElementById("wf-section").style.display = "block";
-    document.getElementById("wf-tbody").innerHTML = r.window_stats.map((w, i) => `
-      <tr>
-        <td>${i+1}</td>
-        <td>${w.start}</td>
-        <td>${w.trades}</td>
-        <td class="${w.win_rate >= 0.58 ? "green" : "red"}">${(w.win_rate*100).toFixed(1)}%</td>
-        <td>$${w.capital?.toFixed(2)}</td>
-      </tr>`).join("");
-  }
-
-  if (r.trades) {
-    document.getElementById("bt-trade-log").innerHTML = r.trades.map((t, i) => `
-      <tr>
-        <td>${i+1}</td>
-        <td class="${t.side==="long"?"green":"red"}">${t.side?.toUpperCase()}</td>
-        <td>$${parseFloat(t.entry).toLocaleString()}</td>
-        <td>$${parseFloat(t.exit).toLocaleString()}</td>
-        <td class="${t.pnl>=0?"pnl-pos":"pnl-neg"}">${t.pnl>=0?"+":""}$${parseFloat(t.pnl).toFixed(4)}</td>
-        <td class="${t.pnl_pct>=0?"pnl-pos":"pnl-neg"}">${t.pnl_pct>=0?"+":""}${parseFloat(t.pnl_pct).toFixed(2)}%</td>
-        <td>${t.exit_type}</td>
-      </tr>`).join("");
-  }
-
-  if (r.equity_curve) drawEquityCurve(r.equity_curve);
-}
-
-function drawEquityCurve(curve) {
-  const canvas = document.getElementById("equity-chart");
-  const ctx    = canvas.getContext("2d");
-  canvas.width  = canvas.parentElement.clientWidth - 32;
-  canvas.height = 180;
-
-  const vals  = curve.map(p => p.capital);
-  const minV  = Math.min(...vals) * 0.99;
-  const maxV  = Math.max(...vals) * 1.01;
-  const w     = canvas.width;
-  const h     = canvas.height;
-
-  ctx.clearRect(0, 0, w, h);
-  ctx.strokeStyle = "#2a2d3e";
-  ctx.lineWidth   = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = (i / 4) * h;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-  }
-
-  ctx.beginPath();
-  ctx.strokeStyle = vals[vals.length-1] >= vals[0] ? "#10b981" : "#ef4444";
-  ctx.lineWidth   = 2;
-  curve.forEach((p, i) => {
-    const x = (i / (curve.length - 1)) * w;
-    const y = h - ((p.capital - minV) / (maxV - minV)) * h;
-    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-
-  ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
-  ctx.fillStyle = vals[vals.length-1] >= vals[0] ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)";
-  ctx.fill();
-
-  ctx.fillStyle = "#6b7280"; ctx.font = "12px monospace";
-  ctx.fillText(`$${vals[0].toFixed(2)}`, 4, h - 4);
-  ctx.fillText(`$${vals[vals.length-1].toFixed(2)}`, w - 70, 16);
-}
-
-function set(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
-}
+function set(id,v){const e=document.getElementById(id); if(e)e.innerHTML=v}
+function safe(v,d=2){return Number.isFinite(Number(v))?Number(v).toFixed(d):'—'}
+function pct(v){return Number.isFinite(Number(v))?`${(Number(v)*100).toFixed(2)}%`:'—'}
+function toggleBtMode(){const multi=document.getElementById('bt-run-mode').value==='multi';document.getElementById('bt-single-symbol-box').style.display=multi?'none':'block';document.getElementById('bt-multi-symbol-box').style.display=multi?'block':'none'}
+async function loadLogs(){try{const r=await fetch('/api/logs');const d=await r.json();const b=document.getElementById('ui-logs');b.textContent=d.logs?.length?d.logs.map(l=>`[${l.time}] [${l.level}] ${l.message}`).join('\n'):'No logs yet.';b.scrollTop=b.scrollHeight}catch(e){}}
+async function clearLogs(){await fetch('/api/logs/clear',{method:'POST'});loadLogs()} setInterval(loadLogs,2000);loadLogs();toggleBtMode();
+async function runBacktest(){const multi=document.getElementById('bt-run-mode').value==='multi';const timeframe=document.getElementById('bt-timeframe').value;const limit=parseInt(document.getElementById('bt-limit').value);const mode=document.getElementById('bt-mode').value;const payload={timeframe,limit,mode};if(multi)payload.symbols=document.getElementById('bt-symbols').value;else payload.symbol=document.getElementById('bt-symbol').value;document.getElementById('bt-loading').style.display='block';document.getElementById('bt-results').style.display='none';document.getElementById('multi-results').style.display='none';document.getElementById('bt-verdict').style.display='none';document.getElementById('bt-run-btn').disabled=true;try{const res=await fetch(multi?'/api/backtest/multi':'/api/backtest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(data.error)throw new Error(data.error);if(multi)displayMulti(data);else displayResults(data)}catch(e){alert(`Backtest error: ${e.message}`)}finally{document.getElementById('bt-loading').style.display='none';document.getElementById('bt-run-btn').disabled=false;loadLogs()}}
+function displayMulti(data){document.getElementById('multi-results').style.display='block';const rows=data.symbols||[];set('multi-tbody',rows.map((r,i)=>`<tr onclick='displayResults(${JSON.stringify(r).replace(/'/g,"&#39;")})' style="cursor:pointer"><td>${i+1}</td><td>${r.symbol||'—'}</td><td>${r.total_trades??'—'}</td><td>${pct(r.win_rate)}</td><td>${pct(r.total_return)}</td><td>${safe(r.profit_factor)}</td><td>${pct(r.max_drawdown)}</td><td>${r.error?`❌ ${r.error}`:'✅ OK'}</td></tr>`).join(''));if(data.best&&!data.best.error)displayResults(data.best)}
+function displayResults(r){document.getElementById('bt-results').style.display='block';const col=(id,good)=>{const e=document.getElementById(id);if(e)e.className=`stat-value ${good?'green':'red'}`};set('bt-symbol-disp',r.symbol||document.getElementById('bt-symbol').value);set('bt-trades',r.total_trades??'—');set('bt-windows',r.windows?`${r.windows} windows`:'');set('bt-winrate',pct(r.win_rate));col('bt-winrate',Number(r.win_rate)>=0.58);set('bt-return',pct(r.total_return));col('bt-return',Number(r.total_return)>0);set('bt-finalcap',r.final_capital?`Final: $${safe(r.final_capital,2)}`:'');set('bt-maxdd',pct(r.max_drawdown));col('bt-maxdd',Number(r.max_drawdown)<=0.25);set('bt-sharpe',safe(r.sharpe_ratio));col('bt-sharpe',Number(r.sharpe_ratio)>=1);set('bt-pf',safe(r.profit_factor));col('bt-pf',Number(r.profit_factor)>=1.4);set('bt-rr',safe(r.rr_ratio));set('bt-mode-disp',r.mode||'—');if(r.go_live_ready){const v=r.go_live_ready;const el=document.getElementById('bt-verdict');el.style.display='block';el.className=`verdict-card ${v.verdict?.includes('GO 🟢')?'verdict-go':v.verdict?.includes('🟡')?'verdict-caution':'verdict-nogo'}`;set('verdict-text',`${v.verdict} — ${v.passed}/${v.total} checks passed`);set('verdict-checks',Object.entries(v.checks||{}).map(([k,ok])=>`<span class="check-item ${ok?'ok':'fail'}">${ok?'✅':'❌'} ${k.replace(/_/g,' ')}</span>`).join(''))}if(r.window_stats?.length){document.getElementById('wf-section').style.display='block';set('wf-tbody',r.window_stats.map((w,i)=>`<tr><td>${i+1}</td><td>${w.start}</td><td>${w.trades}</td><td class="${w.win_rate>=0.58?'green':'red'}">${pct(w.win_rate)}</td><td>$${safe(w.capital,2)}</td></tr>`).join(''))}else document.getElementById('wf-section').style.display='none';set('bt-trade-log',(r.trades||[]).slice(-30).map((t,i)=>`<tr><td>${i+1}</td><td class="${t.side==='long'?'green':'red'}">${(t.side||'').toUpperCase()}</td><td>$${safe(t.entry,4)}</td><td>$${safe(t.exit,4)}</td><td class="${Number(t.pnl)>=0?'pnl-pos':'pnl-neg'}">${safe(t.pnl,4)}</td><td>${safe(t.pnl_pct,2)}%</td><td>${t.exit_type||'—'}</td></tr>`).join(''));if(r.equity_curve)drawEquityCurve(r.equity_curve)}
+function drawEquityCurve(curve){const c=document.getElementById('equity-chart');const ctx=c.getContext('2d');c.width=c.parentElement.clientWidth-32;c.height=180;ctx.clearRect(0,0,c.width,c.height);const vals=curve.map(p=>p.capital||p);if(!vals.length)return;const min=Math.min(...vals)*0.99,max=Math.max(...vals)*1.01;ctx.beginPath();vals.forEach((v,i)=>{const x=(i/(vals.length-1||1))*c.width;const y=c.height-((v-min)/(max-min||1))*c.height;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke();}
 </script>
-
-<style>
-.bt-actions { padding: 0 20px 20px; }
-.loading-msg { text-align:center; padding:40px; color:var(--yellow); font-size:16px; }
-.ui-log-box { background:#050816;color:#d1d5db;padding:14px;height:260px;overflow:auto;border-radius:8px;border:1px solid var(--border);font-size:12px;line-height:1.45;white-space:pre-wrap; }
-.verdict-card { border-radius:var(--radius); padding:20px; margin:16px 0; border:2px solid; }
-.verdict-go     { background:#1a3a2a; border-color:var(--green); }
-.verdict-caution{ background:#3a3a1a; border-color:var(--yellow); }
-.verdict-nogo   { background:#3a1a1a; border-color:var(--red); }
-.verdict-text   { font-size:20px; font-weight:700; margin-bottom:12px; }
-.verdict-checks { display:flex; flex-wrap:wrap; gap:10px; }
-.check-item     { padding:4px 12px; border-radius:20px; font-size:13px; }
-.check-item.ok  { background:#1a3a2a; color:var(--green); }
-.check-item.fail{ background:#3a1a1a; color:var(--red); }
-</style>
 </body>
 </html>
