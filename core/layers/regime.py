@@ -1,9 +1,9 @@
 # ============================================================
 #  PROMETHEUS — Layer 1: Regime Detector
-#  Runs once per day to set the trading bias
 # ============================================================
 
 import requests
+import time
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -16,41 +16,48 @@ class RegimeDetector:
 
     def __init__(self):
         self.current_regime = "RANGE"
-        self.regime_score   = 0.0
-        self.fear_greed     = 50
-        self.funding_rate   = 0.0
+        self.regime_score = 0.0
+        self.fear_greed = 50
+        self.funding_rate = 0.0
+        self._chaos_until = 0.0
 
     def detect(self, df: pd.DataFrame, funding_rate: float = 0.0) -> dict:
-        """
-        Detect current market regime.
-        Returns: {"regime": str, "score": float, "bias": int}
-        bias: 1=long only, -1=short only, 0=both, None=no trade
-        """
         self.funding_rate = funding_rate
         scores = []
 
-        # ── 4H / Daily trend ──────────────────────────────────
         if len(df) >= 50:
             ema20 = df["close"].ewm(span=20).mean().iloc[-1]
             ema50 = df["close"].ewm(span=50).mean().iloc[-1]
             close = df["close"].iloc[-1]
-
-            trend = 0
             if close > ema20 > ema50:
-                trend = 1
+                scores.append(1)
             elif close < ema20 < ema50:
-                trend = -1
-            scores.append(trend)
+                scores.append(-1)
+            else:
+                scores.append(0)
 
-        # ── Volatility check (CHAOS detection) ────────────────
-        if len(df) >= 20:
-            recent_vol = df["close"].pct_change().rolling(10).std().iloc[-1]
-            if recent_vol > cfg.REGIME_CHAOS_VOLATILITY:
+        if len(df) >= 48:
+            now = time.time()
+            returns = df["close"].pct_change()
+            recent_vol = returns.rolling(10).std().iloc[-1]
+            baseline_vol = returns.rolling(48).std().iloc[-1]
+            abs_threshold = float(getattr(cfg, "REGIME_CHAOS_VOLATILITY", 0.05))
+            if (
+                recent_vol > abs_threshold
+                and recent_vol > baseline_vol * 2.5
+                and now > self._chaos_until
+            ):
                 self.current_regime = "CHAOS"
-                logger.warning(f"[Regime] CHAOS detected (vol={recent_vol:.3f})")
-                return {"regime": "CHAOS", "score": 0.0, "bias": None}
+                self._chaos_until = now + 4 * 30 * 60
+                logger.warning(f"[Regime] CHAOS | vol={recent_vol:.3f} baseline={baseline_vol:.3f} cooldown=120min")
+                return {
+                    "regime": "CHAOS",
+                    "score": 0.0,
+                    "bias": None,
+                    "fear_greed": self.fear_greed,
+                    "funding_rate": funding_rate,
+                }
 
-        # ── Fear & Greed ───────────────────────────────────────
         fg = self._get_fear_greed()
         self.fear_greed = fg
         if fg >= cfg.FEAR_GREED_BULL_THRESHOLD:
@@ -60,15 +67,13 @@ class RegimeDetector:
         else:
             scores.append(0)
 
-        # ── Funding Rate ───────────────────────────────────────
         if funding_rate > cfg.REGIME_BULL_FUNDING_THRESHOLD:
-            scores.append(0.5)   # Longs paying → slightly bearish pressure
+            scores.append(0.5)
         elif funding_rate < -cfg.REGIME_BULL_FUNDING_THRESHOLD:
-            scores.append(-0.5)  # Shorts paying → slightly bullish
+            scores.append(-0.5)
         else:
             scores.append(0)
 
-        # ── Aggregate ─────────────────────────────────────────
         avg = np.mean(scores) if scores else 0
         self.regime_score = float(np.clip(avg, -1, 1))
 
@@ -92,15 +97,13 @@ class RegimeDetector:
         }
 
     def get_layer_score(self) -> float:
-        """Return normalized score for fusion layer."""
         return self.regime_score
 
     def _get_fear_greed(self) -> int:
-        """Fetch Fear & Greed Index from alternative.me (free, no key needed)."""
         try:
             r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
             data = r.json()
             return int(data["data"][0]["value"])
         except Exception as e:
             logger.warning(f"[Regime] Fear & Greed fetch failed: {e}")
-            return 50  # Neutral fallback
+            return 50
