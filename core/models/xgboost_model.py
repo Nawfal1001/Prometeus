@@ -30,6 +30,27 @@ class XGBoostSignalModel:
         self._version = None
         self._binary_mode = False
 
+    def _prepare_training_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+        if "symbol" not in df.columns:
+            feat = compute_features(df.copy())
+            return label_data(feat) if feat is not None and not feat.empty else pd.DataFrame()
+        parts = []
+        for symbol, group in df.groupby("symbol", sort=False):
+            group = group.drop(columns=["symbol"], errors="ignore").copy()
+            group = group.sort_index()
+            feat = compute_features(group)
+            if feat is None or feat.empty:
+                logger.warning(f"[XGBoost] Skipping {symbol}: no usable features")
+                continue
+            labeled = label_data(feat)
+            labeled["symbol"] = symbol
+            parts.append(labeled)
+        if not parts:
+            return pd.DataFrame()
+        return pd.concat(parts, axis=0).sort_index()
+
     def train_if_stale(self, df: pd.DataFrame, max_age_hours: int = 24):
         needs_train = False
         if not MODEL_PATH.exists():
@@ -51,8 +72,9 @@ class XGBoostSignalModel:
 
     def train(self, df: pd.DataFrame) -> dict:
         logger.info("[XGBoost] Training BINARY model (long-vs-short TP probability)...")
-        df = compute_features(df)
-        df = label_data(df)
+        df = self._prepare_training_data(df)
+        if df.empty or "label" not in df.columns:
+            raise ValueError("No labeled training data available after feature computation.")
 
         long_df = df[df["label"] == 1].copy()
         short_df = df[df["label"] == -1].copy()
@@ -72,6 +94,8 @@ class XGBoostSignalModel:
         missing = set(self.feature_cols) - set(available_cols)
         if missing:
             logger.warning(f"[XGBoost] Missing features: {missing}")
+        if not available_cols:
+            raise ValueError("No model feature columns are available after feature computation.")
 
         X = labeled[available_cols].values
         y = (labeled["label"].values == 1).astype(int)
