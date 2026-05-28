@@ -1,10 +1,10 @@
 # ============================================================
-#  PROMETHEUS — Optimizer (v2 — aligned to fixed backtest)
+#  PROMETHEUS — Optimizer (v3 — TP1-heavy scalping search)
 #
 #  Key changes:
 #  1. Seed params use ATR multiples (not STOP_LOSS_PCT/TAKE_PROFIT_PCT)
 #  2. Search space covers ATR_SL_MULT, ATR_TP1_MULT, ATR_TP2_MULT
-#     with enforced 2:1 R:R constraint (TP2 >= SL * 2.0)
+#     with flexible scalping R:R and TP1-heavy exits
 #  3. MAX_TRADE_DURATION_BARS searched: 20-48 bars
 #  4. WEIGHT_* params now actually affect backtest -> worth optimizing
 #  5. Composite score weights win_rate heavily (primary growth driver)
@@ -21,7 +21,7 @@ import json
 
 import config.settings as cfg
 from config.settings import save_user_settings
-from backtest.engine import BacktestEngine
+from backtest.engine import BacktestEngine, MultiSymbolBacktestEngine
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -39,30 +39,33 @@ _OPT_KEYS = [
 ]
 
 SEED_PARAMS = [
-    dict(FUSION_THRESHOLD=0.17, MIN_RR_RATIO=2.0,
-         ATR_SL_MULT=1.2, ATR_TP1_MULT=1.2, ATR_TP2_MULT=2.4,
-         TP1_EXIT_PCT=0.50, TP2_EXIT_PCT=0.50, MAX_TRADE_DURATION_BARS=32,
+    # Balanced fallback
+    dict(FUSION_THRESHOLD=0.17, MIN_RR_RATIO=1.8,
+         ATR_SL_MULT=1.2, ATR_TP1_MULT=1.1, ATR_TP2_MULT=2.0,
+         TP1_EXIT_PCT=0.70, TP2_EXIT_PCT=0.30, MAX_TRADE_DURATION_BARS=28,
          EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=6,
+         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=7,
          WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.05, WEIGHT_WHALE=0.10,
          WEIGHT_LIQUIDATION=0.30, WEIGHT_ENTRY=0.35,
          REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.30),
-    dict(FUSION_THRESHOLD=0.15, MIN_RR_RATIO=2.5,
-         ATR_SL_MULT=1.0, ATR_TP1_MULT=1.0, ATR_TP2_MULT=2.5,
-         TP1_EXIT_PCT=0.50, TP2_EXIT_PCT=0.50, MAX_TRADE_DURATION_BARS=40,
+    # TP1-heavy scalping
+    dict(FUSION_THRESHOLD=0.14, MIN_RR_RATIO=1.4,
+         ATR_SL_MULT=1.0, ATR_TP1_MULT=0.9, ATR_TP2_MULT=1.6,
+         TP1_EXIT_PCT=0.85, TP2_EXIT_PCT=0.15, MAX_TRADE_DURATION_BARS=18,
          EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=7,
-         MAX_RISK_PER_TRADE=0.06, MAX_TRADES_PER_DAY=7,
+         MAX_RISK_PER_TRADE=0.055, MAX_TRADES_PER_DAY=9,
          WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.05, WEIGHT_WHALE=0.10,
          WEIGHT_LIQUIDATION=0.35, WEIGHT_ENTRY=0.35,
          REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
-    dict(FUSION_THRESHOLD=0.20, MIN_RR_RATIO=2.0,
-         ATR_SL_MULT=1.5, ATR_TP1_MULT=1.5, ATR_TP2_MULT=3.0,
-         TP1_EXIT_PCT=0.45, TP2_EXIT_PCT=0.55, MAX_TRADE_DURATION_BARS=28,
+    # Very fast scalp
+    dict(FUSION_THRESHOLD=0.13, MIN_RR_RATIO=1.3,
+         ATR_SL_MULT=0.9, ATR_TP1_MULT=0.8, ATR_TP2_MULT=1.4,
+         TP1_EXIT_PCT=1.00, TP2_EXIT_PCT=0.00, MAX_TRADE_DURATION_BARS=14,
          EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=6,
-         MAX_RISK_PER_TRADE=0.045, MAX_TRADES_PER_DAY=5,
-         WEIGHT_REGIME=0.25, WEIGHT_SENTIMENT=0.05, WEIGHT_WHALE=0.10,
-         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35,
-         REGIME_BLOCK_THRESHOLD=0.30, HTF_BLOCK_THRESHOLD=0.35),
+         MAX_RISK_PER_TRADE=0.045, MAX_TRADES_PER_DAY=10,
+         WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.04, WEIGHT_WHALE=0.08,
+         WEIGHT_LIQUIDATION=0.35, WEIGHT_ENTRY=0.35,
+         REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
 ]
 
 
@@ -183,8 +186,11 @@ class PrometheusOptimizer:
 
         sl_mult = trial.suggest_float("ATR_SL_MULT", 0.8, 1.8, step=0.1)
         tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.8, 1.8, step=0.1)
-        min_tp2 = round(sl_mult * 2.0, 1)
-        tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, min_tp2 + 1.5, step=0.1)
+        # Flexible TP2 for high-frequency scalping.
+        # We still keep TP2 above TP1 / SL, but do not force a rigid 2R target.
+        min_tp2 = round(max(sl_mult * 1.3, tp1_mult + 0.2), 1)
+        max_tp2 = max(min_tp2 + 0.3, 3.2)
+        tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.1)
 
         return {
             "WEIGHT_REGIME": w1,
@@ -193,13 +199,13 @@ class PrometheusOptimizer:
             "WEIGHT_LIQUIDATION": w4,
             "WEIGHT_ENTRY": w5,
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.13, 0.30, step=0.01),
-            "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.8, 3.0, step=0.1),
+            "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.3, 2.4, step=0.1),
             "ATR_SL_MULT": sl_mult,
             "ATR_TP1_MULT": tp1_mult,
             "ATR_TP2_MULT": tp2_mult,
-            "TP1_EXIT_PCT": trial.suggest_float("TP1_EXIT_PCT", 0.40, 0.60, step=0.05),
-            "TP2_EXIT_PCT": trial.suggest_float("TP2_EXIT_PCT", 0.40, 0.60, step=0.05),
-            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 20, 48),
+            "TP1_EXIT_PCT": trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05),
+            "TP2_EXIT_PCT": trial.suggest_float("TP2_EXIT_PCT", 0.00, 0.45, step=0.05),
+            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 12, 48),
             "EMA_FAST": ema_fast,
             "EMA_MID": ema_mid,
             "EMA_SLOW": ema_slow,
@@ -224,14 +230,14 @@ class PrometheusOptimizer:
         n = int(results.get("total_trades", 0))
         ter = float(results.get("time_exit_rate", 0))
 
-        trade_penalty = min(1.0, max(0.3, n / 40))
+        trade_penalty = min(1.15, max(0.45, n / 35))
 
         if dd >= 0.50:
             return -1.0
         if ret <= -0.20:
             return -0.5
 
-        time_penalty = max(0.5, 1.0 - ter * 0.8)
+        time_penalty = max(0.30, 1.0 - ter * 1.8)
 
         if self.metric == "target_150":
             initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
@@ -260,9 +266,10 @@ class PrometheusOptimizer:
         ret_score = max(min(ret, 1.5), -0.5) / 1.5
         dd_score = max(0.0, 1.0 - dd / 0.25)
 
-        score = (wr_score * 0.35
+        # Profit-first composite while keeping trade frequency rewarded.
+        score = (wr_score * 0.25
                  + pf_score * 0.25
-                 + ret_score * 0.20
+                 + ret_score * 0.30
                  + sh_score * 0.10
                  + dd_score * 0.10)
         return score * trade_penalty * time_penalty
