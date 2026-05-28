@@ -67,6 +67,38 @@ class EntrySignal:
         signals["volume"] = vol_sig
         scores.append(vol_sig * 0.5)
 
+        cvd_sig = float(row.get("cvd_signal", 0))
+        cvd_div = float(row.get("cvd_divergence", 0))
+        signals["cvd"] = round(cvd_sig, 3)
+        scores.append(cvd_sig * 0.7)
+        signals["cvd_divergence"] = round(cvd_div, 3)
+        scores.append(cvd_div * 0.8)
+
+        atr_exp_sig = float(row.get("atr_expansion_signal", 0))
+        squeeze_imm = float(row.get("squeeze_imminent", 0))
+        signals["atr_expansion"] = round(atr_exp_sig, 3)
+        scores.append(atr_exp_sig * 0.5)
+        scores.append(squeeze_imm * 0.4)
+
+        zscore_sig = float(row.get("zscore_signal", 0))
+        zscore_rev = float(row.get("zscore_reversion", 0))
+        signals["zscore"] = round(zscore_sig, 3)
+        scores.append(zscore_sig * 0.5)
+        scores.append(zscore_rev * 0.6)
+
+        squeeze_hist = float(row.get("squeeze_hist_norm", 0))
+        squeeze_fire = float(row.get("squeeze_fire", 0))
+        signals["squeeze_hist"] = round(squeeze_hist, 3)
+        signals["squeeze_fire"] = round(squeeze_fire, 3)
+        scores.append(squeeze_hist * 0.4)
+        scores.append(squeeze_fire * 1.0)
+
+        pressure_sig = float(row.get("pressure_signal", 0))
+        pressure_acc = float(row.get("pressure_accel", 0))
+        signals["buy_pressure"] = round(pressure_sig, 3)
+        scores.append(pressure_sig * 0.6)
+        scores.append(pressure_acc * 0.3)
+
         ms = float(row.get("market_structure", 0))
         signals["structure"] = ms
         scores.append(ms * 0.7)
@@ -107,7 +139,7 @@ class EntrySignal:
         except Exception:
             signals["ml_model"] = 0
 
-        weight_sum = 1.2 + 0.9 + 0.8 + 0.6 + 0.5 + 0.7 + 0.7 + 0.5 + 0.6 + 0.4 + 0.5 + 0.3 + 1.0
+        weight_sum = 14.5
         theoretical_max = weight_sum
         avg = float(np.clip(np.sum(scores) / max(1e-9, theoretical_max), -1.0, 1.0))
 
