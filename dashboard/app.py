@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
+import pandas as pd
 
 import config.settings as cfg
 from config.settings import save_user_settings, load_user_settings
@@ -35,7 +36,7 @@ _state = {
     "status": "stopped", "regime": "RANGE", "fear_greed": 50,
     "funding_rate": 0.0, "htf_bias": 0, "last_signal": None, "last_price": 0.0,
     "layer_scores": {}, "stats": {}, "open_trades": [], "trade_log": [],
-    "backtest": {}, "optimization": {},
+    "backtest": {}, "optimization": {}, "model_training": {},
     "market_type": cfg.MARKET_TYPE, "exchange": cfg.EXCHANGE,
 }
 _ws_clients: list[WebSocket] = []
@@ -51,6 +52,16 @@ _opt_status = {
     "error": None,
     "params": {},
 }
+_model_status = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "result": None,
+    "error": None,
+    "params": {},
+}
+
+DEFAULT_CRYPTO_TRAIN_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "ADA/USDT"]
 
 
 def ui_log(message: str, level: str = "INFO"):
@@ -88,6 +99,87 @@ def reload_runtime_settings():
     ]
 
 
+def _normalize_symbol_list(raw, fallback_symbol=None, all_default=False):
+    if all_default:
+        return list(DEFAULT_CRYPTO_TRAIN_SYMBOLS)
+    if raw is None:
+        return [fallback_symbol or cfg.SYMBOL]
+    if isinstance(raw, str):
+        items = [s.strip() for s in raw.replace(";", ",").split(",") if s.strip()]
+    elif isinstance(raw, list):
+        items = [str(s).strip() for s in raw if str(s).strip()]
+    else:
+        items = []
+    return items or [fallback_symbol or cfg.SYMBOL]
+
+
+async def _fetch_training_frame(symbols: list[str], timeframe: str, candles: int) -> pd.DataFrame:
+    from core.exchange.factory import get_exchange
+    exchange = get_exchange()
+    frames = []
+    try:
+        for symbol in symbols:
+            try:
+                ui_log(f"ML train fetch | {symbol} {timeframe} {candles} candles")
+                df = await exchange.get_ohlcv(symbol, timeframe, limit=candles)
+                if df is None or df.empty:
+                    ui_log(f"ML train skipped {symbol}: no data", "WARNING")
+                    continue
+                df = df.copy()
+                df["symbol"] = symbol
+                frames.append(df)
+                ui_log(f"ML train loaded {symbol}: {len(df)} candles")
+            except Exception as e:
+                ui_log(f"ML train failed fetching {symbol}: {e}", "WARNING")
+    finally:
+        closer = getattr(exchange, "close", None)
+        if closer:
+            maybe = closer()
+            if asyncio.iscoroutine(maybe):
+                await maybe
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, axis=0).sort_index()
+
+
+def _train_model_sync(df: pd.DataFrame) -> dict:
+    from core.models.xgboost_model import XGBoostSignalModel
+    model = XGBoostSignalModel()
+    return model.train(df)
+
+
+async def _train_model_job(params: dict) -> dict:
+    global _model_status
+    _model_status.update({"running": True, "started_at": datetime.utcnow().isoformat(), "finished_at": None, "result": None, "error": None, "params": params})
+    await broadcast({"type": "model_status", "data": _model_status})
+    try:
+        timeframe = params.get("timeframe", cfg.TIMEFRAME)
+        candles = int(params.get("candles", 2000))
+        symbols = _normalize_symbol_list(params.get("symbols"), fallback_symbol=params.get("symbol", cfg.SYMBOL), all_default=bool(params.get("all_default", False)))
+        ui_log(f"ML training started | symbols={len(symbols)} timeframe={timeframe} candles={candles}")
+        df = await _fetch_training_frame(symbols, timeframe, candles)
+        if df.empty:
+            raise RuntimeError("No training data returned")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, _train_model_sync, df)
+        result = {**result, "symbols": symbols, "timeframe": timeframe, "candles_per_symbol": candles, "rows_loaded": len(df)}
+        _state["model_training"] = result
+        _model_status["result"] = result
+        ui_log(f"ML training finished | mode={result.get('mode')} samples={result.get('n_samples')} f1={result.get('f1')}")
+        await broadcast({"type": "model_complete", "data": result})
+        return result
+    except Exception as e:
+        logger.exception("[ML] training failed")
+        _model_status["error"] = str(e)
+        ui_log(f"ML training crashed: {e}", "ERROR")
+        await broadcast({"type": "model_error", "data": {"error": str(e)}})
+        raise
+    finally:
+        _model_status["running"] = False
+        _model_status["finished_at"] = datetime.utcnow().isoformat()
+        await broadcast({"type": "model_status", "data": _model_status})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
@@ -117,6 +209,7 @@ async def health():
         "exchange": cfg.EXCHANGE,
         "symbol": cfg.SYMBOL,
         "optimization_running": _opt_status["running"],
+        "model_training_running": _model_status["running"],
     }
 
 @app.get("/api/state")
@@ -243,6 +336,32 @@ async def control(action: str):
         await broadcast({"type": "status", "status": status})
     return {"status": _state["status"]}
 
+@app.post("/api/model/train")
+async def train_model(request: Request):
+    if _model_status["running"]:
+        return JSONResponse({"error": "Model training already running", "status": _model_status}, status_code=409)
+    body = await request.json()
+    params = {
+        "symbol": body.get("symbol", cfg.SYMBOL),
+        "symbols": body.get("symbols"),
+        "all_default": bool(body.get("all_default", False)),
+        "timeframe": body.get("timeframe", cfg.TIMEFRAME),
+        "candles": int(body.get("candles", 2000)),
+    }
+    try:
+        result = await _train_model_job(params)
+        return result
+    except Exception as e:
+        return JSONResponse({"error": str(e), "status": _model_status}, status_code=500)
+
+@app.get("/api/model/status")
+async def model_status():
+    return _model_status
+
+@app.get("/api/model/last")
+async def model_last():
+    return _state.get("model_training", {}) or _model_status.get("result") or {"status": "no_result"}
+
 @app.post("/api/backtest/run")
 async def run_backtest(request: Request):
     body = await request.json()
@@ -250,10 +369,21 @@ async def run_backtest(request: Request):
     timeframe = body.get("timeframe", cfg.TIMEFRAME)
     limit = int(body.get("limit", 1500))
     mode = body.get("mode", "walkforward")
-    ui_log(f"Backtest | {symbol} {timeframe} {limit}bars {mode}")
+    train_ml = bool(body.get("train_ml", False))
+    train_symbols = body.get("train_symbols")
+    train_all_default = bool(body.get("train_all_default", False))
+    ui_log(f"Backtest | {symbol} {timeframe} {limit}bars {mode} train_ml={train_ml}")
     try:
         from core.exchange.factory import get_exchange
         from backtest.engine import BacktestEngine
+        if train_ml:
+            await _train_model_job({
+                "symbol": symbol,
+                "symbols": train_symbols,
+                "all_default": train_all_default,
+                "timeframe": timeframe,
+                "candles": int(body.get("train_candles", max(limit, 2000))),
+            })
         exchange = get_exchange()
         df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
         await exchange.close()
@@ -280,7 +410,17 @@ async def _run_optimization_job(params: dict):
         trials = int(params["trials"])
         timeout = int(params["timeout"])
         auto_apply = bool(params.get("auto_apply", False))
-        ui_log(f"Optimization queued | {symbol} {timeframe} {candles}bars {metric} {trials}trials timeout={timeout}s")
+        train_ml = bool(params.get("train_ml", False))
+        ui_log(f"Optimization queued | {symbol} {timeframe} {candles}bars {metric} {trials}trials timeout={timeout}s train_ml={train_ml}")
+
+        if train_ml:
+            await _train_model_job({
+                "symbol": symbol,
+                "symbols": params.get("train_symbols"),
+                "all_default": bool(params.get("train_all_default", False)),
+                "timeframe": timeframe,
+                "candles": int(params.get("train_candles", max(candles, 2000))),
+            })
 
         from core.exchange.factory import get_exchange
         exchange = get_exchange()
@@ -338,6 +478,10 @@ async def run_optimization(request: Request):
         "trials": int(body.get("trials", cfg.OPTUNA_TRIALS)),
         "timeout": int(body.get("timeout", cfg.OPTUNA_TIMEOUT_SEC)),
         "auto_apply": bool(body.get("auto_apply", False)),
+        "train_ml": bool(body.get("train_ml", False)),
+        "train_symbols": body.get("train_symbols"),
+        "train_all_default": bool(body.get("train_all_default", False)),
+        "train_candles": int(body.get("train_candles", max(int(body.get("candles", cfg.OPTUNA_DATA_CANDLES)), 2000))),
     }
     _opt_task = asyncio.create_task(_run_optimization_job(params))
     return {"status": "started", "message": "Optimization running in background", "params": params}
@@ -371,6 +515,7 @@ async def get_last_optimization():
 async def get_symbols():
     return {
         "crypto": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT"],
+        "train_default_crypto": DEFAULT_CRYPTO_TRAIN_SYMBOLS,
         "stocks": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "GOOGL", "SPY", "QQQ"],
         "timeframes": {"crypto": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"], "stocks": ["1m", "5m", "15m", "30m", "1h", "1d"]},
     }
