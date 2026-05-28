@@ -65,6 +65,23 @@ class PrometheusEngine:
 
                 self._last_candle_time = latest_time
                 current_price = float(df["close"].iloc[-1])
+                lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
+                recent = df.tail(max(lookback, 2))
+                recent_high = float(recent["high"].max())
+                recent_low = float(recent["low"].min())
+                atr_norm = 0.002
+                vol_zscore = 0.0
+                try:
+                    tr = max(
+                        float(df["high"].iloc[-1] - df["low"].iloc[-1]),
+                        abs(float(df["high"].iloc[-1] - df["close"].iloc[-2])),
+                        abs(float(df["low"].iloc[-1] - df["close"].iloc[-2])),
+                    )
+                    atr_norm = max(0.002, min(float(df["high"].sub(df["low"]).rolling(14).mean().iloc[-1] / current_price), 0.05))
+                    ret_abs = df["close"].pct_change().abs()
+                    vol_zscore = float(((ret_abs.iloc[-1] - ret_abs.rolling(48).mean().iloc[-1]) / (ret_abs.rolling(48).std().iloc[-1] + 1e-9)))
+                except Exception:
+                    pass
                 self._consec_errors = 0
                 self._backoff_seconds = 30
 
@@ -90,15 +107,20 @@ class PrometheusEngine:
                     htf_bias=self._4h_bias,
                     session_mult=session_mult,
                     threshold_mult=threshold_mult,
+                    current_capital=self.orders.risk.capital,
                 )
                 signal["entry_price"] = current_price
+                signal["atr_norm"] = atr_norm
+                signal["vol_zscore"] = vol_zscore
+                signal["recent_high"] = recent_high
+                signal["recent_low"] = recent_low
 
                 if signal["trade"]:
                     result = await self.orders.execute_signal(signal, current_price)
                     if result.get("status") == "filled":
                         self.telegram.signal_alert(signal, current_price)
 
-                await self.orders.check_paper_exits(current_price)
+                await self.orders.check_paper_exits(current_price, high=recent_high, low=recent_low)
 
                 layer_scores = {
                     "regime": regime_result["score"],
@@ -136,16 +158,13 @@ class PrometheusEngine:
                 if now - self._last_sentiment_update > 3600:
                     self.sentiment.update()
                     self._last_sentiment_update = now
-
                 if now - self._last_whale_update > 1800:
                     coin = cfg.SYMBOL.replace("/USDT", "")
                     self.whale.update(coin)
                     self._last_whale_update = now
-
                 if now - self._last_4h_update > 7200:
                     await self._update_4h_bias()
                     self._last_4h_update = now
-
                 if now - self._last_xgb_retrain > 21600:
                     try:
                         df = await self.exchange.get_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, limit=1000)
@@ -153,11 +172,9 @@ class PrometheusEngine:
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")
                     self._last_xgb_retrain = now
-
                 now_t = datetime.now().time()
                 if dtime(0, 0) <= now_t <= dtime(0, 5):
                     self.telegram.daily_summary(self.orders.get_stats())
-
             except Exception as e:
                 logger.warning(f"[Engine] Slow loop error: {e}")
             await asyncio.sleep(300)
@@ -203,21 +220,7 @@ class PrometheusEngine:
             return 0.0
 
     async def _broadcast_state(self, price, signal, layer_scores, regime):
-        state_update = {
-            "type": "state",
-            "data": {
-                "last_price": price,
-                "regime": regime.get("regime"),
-                "fear_greed": regime.get("fear_greed"),
-                "funding_rate": regime.get("funding_rate"),
-                "htf_bias": self._4h_bias,
-                "last_signal": signal if signal.get("trade") else None,
-                "layer_scores": layer_scores,
-                "stats": self.orders.get_stats(),
-                "open_trades": self.orders.get_open_trades(),
-                "trade_log": self.orders.risk.trade_history[-50:],
-            },
-        }
+        state_update = {"type": "state", "data": {"last_price": price, "regime": regime.get("regime"), "fear_greed": regime.get("fear_greed"), "funding_rate": regime.get("funding_rate"), "htf_bias": self._4h_bias, "last_signal": signal if signal.get("trade") else None, "layer_scores": layer_scores, "stats": self.orders.get_stats(), "open_trades": self.orders.get_open_trades(), "trade_log": self.orders.risk.trade_history[-50:]}}
         try:
             await self.broadcast(state_update)
         except Exception:
