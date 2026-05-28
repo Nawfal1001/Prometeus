@@ -16,6 +16,8 @@ class RiskManager:
         self.capital = cfg.INITIAL_CAPITAL
         self.peak_capital = cfg.INITIAL_CAPITAL
         self.trade_history = []
+        self._consec_losses = 0
+        self._today_peak_capital = cfg.INITIAL_CAPITAL
 
     def _reset_if_new_day(self):
         today = date.today()
@@ -23,15 +25,27 @@ class RiskManager:
             self.daily_trades = 0
             self.daily_pnl = 0.0
             self.daily_date = today
+            self._today_peak_capital = self.capital
+            self._consec_losses = 0
             logger.info("[Risk] New trading day - counters reset")
 
     def can_trade(self) -> tuple:
         self._reset_if_new_day()
+
         if self.daily_trades >= cfg.MAX_TRADES_PER_DAY:
             return False, f"Max trades/day reached ({cfg.MAX_TRADES_PER_DAY})"
-        drawdown = self.daily_pnl / (self.capital + 1e-9)
-        if drawdown <= -cfg.MAX_DAILY_DRAWDOWN:
-            return False, f"Daily drawdown limit hit ({drawdown:.1%})"
+
+        today_peak = max(self._today_peak_capital, self.capital)
+        self._today_peak_capital = today_peak
+        daily_dd = (today_peak - self.capital) / (today_peak + 1e-9)
+
+        if daily_dd >= float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.12)):
+            return False, f"Daily drawdown from peak: {daily_dd:.1%}"
+
+        max_consec = int(getattr(cfg, "MAX_CONSEC_LOSSES", 7))
+        if self._consec_losses >= max_consec:
+            return False, f"Consecutive losses: {self._consec_losses}"
+
         return True, "ok"
 
     def record_trade(self, pnl: float, signal: dict):
@@ -40,6 +54,12 @@ class RiskManager:
         self.daily_pnl += pnl
         self.capital += pnl
         self.peak_capital = max(self.peak_capital, self.capital)
+
+        if pnl > 0:
+            self._consec_losses = 0
+            self._today_peak_capital = max(self._today_peak_capital, self.capital)
+        else:
+            self._consec_losses += 1
 
         trade_no = len(self.trade_history) + 1
         self.trade_history.append({
@@ -58,7 +78,7 @@ class RiskManager:
         if len(self.trade_history) > 500:
             self.trade_history = self.trade_history[-500:]
 
-        logger.info(f"[Risk] Trade recorded | PnL={pnl:+.2f} | Capital={self.capital:.2f} | Daily={self.daily_trades}")
+        logger.info(f"[Risk] Trade recorded | PnL={pnl:+.2f} | Capital={self.capital:.2f} | Daily={self.daily_trades} | ConsecLoss={self._consec_losses}")
 
     def max_drawdown(self) -> float:
         if not self.trade_history:
@@ -109,4 +129,5 @@ class RiskManager:
             "max_drawdown": self.max_drawdown(),
             "peak_capital": round(self.peak_capital, 2),
             "threshold_multiplier": self.threshold_multiplier(),
+            "consecutive_losses": self._consec_losses,
         }
