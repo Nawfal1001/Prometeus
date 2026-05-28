@@ -9,12 +9,13 @@
 <div class="card"><div class="card-header">Scanner Config</div><div class="settings-grid" style="padding:20px">
 <div class="field-group"><label>Symbols comma-separated</label><input id="scan-symbols" value="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,AVAX/USDT,DOGE/USDT"></div>
 <div class="field-group"><label>Timeframe</label><select id="scan-timeframe"><option>1m</option><option>5m</option><option selected>15m</option><option>30m</option><option>1h</option></select></div>
-<div class="field-group"><label>Candles per symbol</label><input id="scan-limit" type="number" value="500" min="100" max="3000" step="100"></div>
+<div class="field-group"><label>Candles per symbol</label><input id="scan-limit" type="number" value="800" min="100" max="3000" step="100"><span class="hint">Use 800+ if EMA/indicators were optimized higher.</span></div>
 </div><div style="padding:0 20px 20px"><button class="btn btn-primary" onclick="runScan()">📡 Run Scan</button><span id="scan-status" style="margin-left:12px;color:var(--muted)"></span></div></div>
-<div class="card mt"><div class="card-header">🏆 Ranked Opportunities</div><table class="trade-table"><thead><tr><th>Rank</th><th>Symbol</th><th>Side</th><th>Tradable</th><th>Rank Score</th><th>Fusion</th><th>RR</th><th>ATR</th><th>Volume</th><th>Price</th></tr></thead><tbody id="scan-body"></tbody></table></div>
+<div class="card mt"><div class="card-header">🏆 Ranked Opportunities</div><table class="trade-table"><thead><tr><th>Rank</th><th>Symbol</th><th>Side</th><th>Tradable</th><th>Rank Score</th><th>Fusion</th><th>RR</th><th>ATR</th><th>Volume</th><th>Price</th><th>Status / Error</th></tr></thead><tbody id="scan-body"></tbody></table></div>
 </div>
 <script>
 function fmt(v,d=4){return Number.isFinite(Number(v))?Number(v).toFixed(d):'—'}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function runScan(){
  const symbols=document.getElementById('scan-symbols').value.split(',').map(s=>s.trim()).filter(Boolean);
  const timeframe=document.getElementById('scan-timeframe').value;
@@ -23,8 +24,12 @@ async function runScan(){
  const res=await fetch('/api/scan/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols,timeframe,limit})});
  const data=await res.json();
  if(!res.ok||data.error){document.getElementById('scan-status').textContent='Error: '+(data.error||res.status);return;}
- document.getElementById('scan-status').textContent=`Done — best: ${data.best?.symbol||'none'}`;
- document.getElementById('scan-body').innerHTML=(data.symbols||[]).map((r,i)=>`<tr><td>#${i+1}</td><td>${r.symbol}</td><td>${r.side||'—'}</td><td>${r.tradable?'✅':'—'}</td><td>${fmt(r.rank_score)}</td><td>${fmt(r.fusion_score)}</td><td>${fmt(r.risk_reward,2)}</td><td>${fmt(r.atr_norm,5)}</td><td>${fmt(r.vol_ratio,2)}</td><td>${fmt(r.price,2)}</td></tr>`).join('');
+ const rows=data.symbols||[];
+ const ok=rows.filter(r=>!r.error).length;
+ const failed=rows.length-ok;
+ const best=(data.best&&!data.best.error)?data.best:null;
+ document.getElementById('scan-status').textContent=`Done — ok: ${ok}, failed: ${failed}, best: ${best?.symbol||'none'}`;
+ document.getElementById('scan-body').innerHTML=rows.map((r,i)=>`<tr><td>#${i+1}</td><td>${esc(r.symbol)}</td><td>${esc(r.side||'—')}</td><td>${r.tradable?'✅':'—'}</td><td>${fmt(r.rank_score)}</td><td>${fmt(r.fusion_score)}</td><td>${fmt(r.risk_reward,2)}</td><td>${fmt(r.atr_norm,5)}</td><td>${fmt(r.vol_ratio,2)}</td><td>${fmt(r.price,2)}</td><td style="max-width:320px;white-space:normal;color:${r.error?'var(--red)':'var(--muted)'}">${esc(r.error||r.reason||r.signal?.reason||'ok')}</td></tr>`).join('');
 }
 </script>
 </body></html>
