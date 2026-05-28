@@ -94,16 +94,19 @@ class BacktestEngine:
         ema_stack = float(row.get("ema_stack", 0)); signals["ema_stack"] = ema_stack; scores.append(ema_stack * 1.2)
         vwap_dist = float(row.get("dist_vwap", 0)); vwap_sig = 1 if vwap_dist > 0.0004 else (-1 if vwap_dist < -0.0004 else 0); signals["vwap"] = vwap_sig; scores.append(vwap_sig * 0.9)
         rsi = float(row.get("rsi", 50))
-        rsi_sig = 1.0 if rsi < 35 else (-1.0 if rsi > 65 else (0.5 if rsi < 45 else (-0.5 if rsi > 55 else 0.0)))
+        rsi_sig = float(row.get("rsi_signal", 0))
+        if rsi_sig == 0:
+            rsi_sig = (1.0 if rsi < 30 else -1.0 if rsi > 70 else 0.6 if rsi < 40 else -0.6 if rsi > 60 else 0.2 if rsi < 48 else -0.2 if rsi > 52 else 0.0)
         signals["rsi"] = rsi_sig; scores.append(rsi_sig * 0.8)
         stoch_cross = float(row.get("stoch_cross", 0)); signals["stochrsi"] = stoch_cross; scores.append(stoch_cross * 0.6)
-        vol_ratio = float(row.get("vol_ratio", 1.0)); vol_delta = float(row.get("vol_delta", 0)); vol_sig = float(np.sign(vol_delta)) if vol_ratio > 1.05 else 0
+        vol_ratio = float(row.get("vol_ratio", 1.0)); vol_delta = float(row.get("vol_delta", 0))
+        vol_sig = (float(np.sign(vol_delta)) * 1.0 if vol_ratio > 2.0 else float(np.sign(vol_delta)) * 0.6 if vol_ratio > 1.5 else 0.0)
         signals["volume"] = vol_sig; scores.append(vol_sig * 0.5)
         market_structure = float(row.get("market_structure", 0)); signals["structure"] = market_structure; scores.append(market_structure * 0.7)
         macd_signal = float(row.get("macd_signal", 0)); signals["macd"] = macd_signal; scores.append(macd_signal * 0.5)
         bb_pos = float(row.get("bb_position", 0.5)); bb_sig = 1 if bb_pos < 0.25 else (-1 if bb_pos > 0.75 else 0)
         signals["bb_position"] = bb_sig; scores.append(bb_sig * 0.5)
-        return float(np.clip(np.sum(scores) / 5.7, -1, 1)), signals
+        return float(np.clip(np.sum(scores) / 5.7, -1.0, 1.0)), signals
 
     def _regime_score(self, row: pd.Series) -> tuple[int, float]:
         ema_stack = float(row.get("ema_stack", 0)); close = float(row.get("close", 0)); ema_slow = float(row.get("ema_slow", close)); ret_6 = float(row.get("ret_6", 0)); rsi = float(row.get("rsi", 50))
@@ -114,11 +117,11 @@ class BacktestEngine:
         return bias, score
 
     def _fusion_signal(self, row: pd.Series) -> dict:
-        atr_norm = max(0.002, min(float(row.get("atr_norm", 0) or 0), 0.05))
+        atr_norm = max(float(getattr(cfg, "MIN_ATR_NORM", 0.001)), min(float(row.get("atr_norm", 0) or 0), 0.05))
         vol_z = float(row.get("vol_zscore", 0) or 0)
-        if vol_z > float(getattr(cfg, "MAX_VOL_ZSCORE", 3.0)):
+        if vol_z > float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5)):
             return {"trade": False, "reason": "vol_spike_filter", "fusion_score": 0, "abs_score": 0}
-        if atr_norm < float(getattr(cfg, "MIN_ATR_NORM", 0.002)):
+        if atr_norm < float(getattr(cfg, "MIN_ATR_NORM", 0.001)):
             return {"trade": False, "reason": "dead_vol_filter", "fusion_score": 0, "abs_score": 0}
         entry_score, signals = self._entry_score(row)
         regime_bias, regime_score = self._regime_score(row)
@@ -131,34 +134,37 @@ class BacktestEngine:
         market = str(getattr(cfg, "MARKET_TYPE", "futures")).lower()
         if market == "spot" and direction == -1:
             return {"trade": False, "reason": "spot_blocks_short", "fusion_score": fusion_score, "abs_score": abs_score}
-        if regime_bias == 1 and direction == -1 and abs(entry_score) < 0.25:
+        regime_block_thr = float(getattr(cfg, "REGIME_BLOCK_THRESHOLD", 0.25))
+        if regime_bias == 1 and direction == -1 and abs(entry_score) < regime_block_thr:
             return {"trade": False, "reason": "regime_blocks_short", "fusion_score": fusion_score, "abs_score": abs_score}
-        if regime_bias == -1 and direction == 1 and abs(entry_score) < 0.25:
+        if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_block_thr:
             return {"trade": False, "reason": "regime_blocks_long", "fusion_score": fusion_score, "abs_score": abs_score}
         adx = float(row.get("adx_trend_strength", row.get("adx", 99)) or 99)
-        if adx < float(getattr(cfg, "MIN_ADX", 20)):
+        min_adx = float(getattr(cfg, "MIN_ADX", 18))
+        if adx < min_adx:
             return {"trade": False, "reason": "adx_filter", "fusion_score": fusion_score, "abs_score": abs_score}
         session_mult = float(row.get("session_mult", 1.0) or 1.0)
-        if session_mult < float(getattr(cfg, "MIN_SESSION_MULT", 0.70)):
+        if session_mult < float(getattr(cfg, "MIN_SESSION_MULT", 0.75)):
             return {"trade": False, "reason": "session_filter", "fusion_score": fusion_score, "abs_score": abs_score}
         htf_bias = int(row.get("htf_bias", 0) or 0)
-        if htf_bias and htf_bias != direction:
+        htf_thr = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
+        if htf_bias and htf_bias != direction and abs(entry_score) < htf_thr:
             return {"trade": False, "reason": "htf_bias_filter", "fusion_score": fusion_score, "abs_score": abs_score}
-        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.25))
+        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.18))
         if abs_score < threshold:
             return {"trade": False, "reason": "below_threshold", "fusion_score": fusion_score, "abs_score": abs_score}
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.5))
-        tp_mult = float(getattr(cfg, "ATR_TP_MULT", max(sl_mult * 1.8, 3.0)))
-        tp_mult = max(tp_mult, sl_mult * 1.8)
-        return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "atr_norm": atr_norm, "sl_mult": sl_mult, "tp_mult": tp_mult, "signals": signals}
+        tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.5))
+        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 3.5))
+        return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "atr_norm": atr_norm, "sl_mult": sl_mult, "tp1_mult": tp1_mult, "tp2_mult": tp2_mult, "signals": signals}
 
     def _simulate_strategy(self, df: pd.DataFrame, start_bar: int = 0) -> tuple[list, float]:
         capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
         base_leverage = float(getattr(cfg, "LEVERAGE", 5))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
-        max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.10))
-        max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 5))
-        max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 12))
+        max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.12))
+        max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 8))
+        max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16))
         chandelier_lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
         in_trade = False
         entry_px = sl = tp1 = tp2 = atr_abs = 0.0
@@ -171,7 +177,7 @@ class BacktestEngine:
         tp1_done = tp2_done = False
         trades, trades_today, day_start_cap, last_day = [], 0, capital, -1
         consec_losses, win_streak = 0, 0
-        MAX_CONSEC = 5
+        MAX_CONSEC = int(getattr(cfg, "MAX_CONSEC_LOSSES", 7))
 
         def realize(exit_px, portion, exit_type, bar_i):
             nonlocal capital, remaining, consec_losses, win_streak
@@ -203,13 +209,15 @@ class BacktestEngine:
                 if not tp1_done:
                     hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
                     if hit_tp1:
-                        realize(tp1, 0.40, "TP1", i)
+                        tp1_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.35))
+                        realize(tp1, min(tp1_pct, remaining), "TP1", i)
                         sl = max(sl, entry_px) if trade_side == 1 else min(sl, entry_px)
                         tp1_done = True
                 if remaining > 0 and not tp2_done:
                     hit_tp2 = (trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)
                     if hit_tp2:
-                        portion = min(0.35, remaining)
+                        tp2_pct = float(getattr(cfg, "TP2_EXIT_PCT", 0.40))
+                        portion = min(tp2_pct, remaining)
                         realize(tp2, portion, "TP2", i)
                         tp2_done = True
                 hit_sl = remaining > 0 and ((trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl))
@@ -227,7 +235,7 @@ class BacktestEngine:
             if (day_start_cap - capital) / (day_start_cap + 1e-9) >= max_daily_dd:
                 continue
             if consec_losses >= MAX_CONSEC:
-                consec_losses = 0
+                consec_losses = max(0, consec_losses - 1)
                 continue
             signal = self._fusion_signal(row)
             if not signal.get("trade"):
@@ -237,7 +245,7 @@ class BacktestEngine:
             leverage = min(base_leverage + 0.5, 4.0) if win_streak >= 3 else base_leverage
             entry_capital = capital
             entry_px = close * (1 + trade_side * SLIPPAGE)
-            atr_abs = max(entry_px * float(signal.get("atr_norm", 0.002)), entry_px * 0.002)
+            atr_abs = max(entry_px * float(signal.get("atr_norm", 0.002)), entry_px * float(getattr(cfg, "MIN_ATR_NORM", 0.001)))
             start_idx = max(0, i - chandelier_lookback + 1)
             hh = float(df["high"].iloc[start_idx:i + 1].max())
             ll = float(df["low"].iloc[start_idx:i + 1].min())
@@ -247,8 +255,10 @@ class BacktestEngine:
                 sl = min(sl, entry_px - atr_abs * 0.5)
             else:
                 sl = max(sl, entry_px + atr_abs * 0.5)
-            tp1 = entry_px + trade_side * atr_abs
-            tp2 = entry_px + trade_side * atr_abs * 2.0
+            tp1_mult = float(signal.get("tp1_mult", getattr(cfg, "ATR_TP1_MULT", 1.5)))
+            tp2_mult = float(signal.get("tp2_mult", getattr(cfg, "ATR_TP2_MULT", 3.5)))
+            tp1 = entry_px + trade_side * atr_abs * tp1_mult
+            tp2 = entry_px + trade_side * atr_abs * tp2_mult
             entry_bar = i
             peak, trough = high, low
             remaining = 1.0
@@ -264,7 +274,7 @@ class BacktestEngine:
         reasons = {}
         for s in sigs:
             reasons[s.get("reason", "unknown")] = reasons.get(s.get("reason", "unknown"), 0) + 1
-        return {"error": f"No trades generated. usable_candles={len(df)}, threshold={float(getattr(cfg, 'FUSION_THRESHOLD', 0.25)):.3f}, max_abs_score={max(abs_s) if abs_s else 0:.3f}, avg_abs_score={float(np.mean(abs_s)) if abs_s else 0:.3f}, reasons={reasons}."}
+        return {"error": f"No trades generated. usable_candles={len(df)}, threshold={float(getattr(cfg, 'FUSION_THRESHOLD', 0.18)):.3f}, max_abs_score={max(abs_s) if abs_s else 0:.3f}, avg_abs_score={float(np.mean(abs_s)) if abs_s else 0:.3f}, reasons={reasons}."}
 
     def _compute_metrics(self, trades: list) -> dict:
         if not trades:
