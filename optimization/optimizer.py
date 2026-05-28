@@ -135,6 +135,7 @@ class PrometheusOptimizer:
                     "max_drawdown": results.get("max_drawdown"),
                     "total_trades": results.get("total_trades"),
                     "final_capital": results.get("final_capital"),
+                    "target_capital": float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150.0)),
                 },
                 "trades": results.get("trades", [])[-20:],
                 "symbols_traded": results.get("symbols_traded", {}),
@@ -198,8 +199,44 @@ class PrometheusOptimizer:
         for k, v in params.items():
             setattr(cfg, k, v)
 
+    def _target_capital_score(self, results: dict) -> float:
+        initial = float(getattr(cfg, "INITIAL_CAPITAL", 50.0))
+        target = float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150.0))
+        final_cap = float(results.get("final_capital", initial) or initial)
+        ret = float(results.get("total_return", 0) or 0)
+        dd = float(results.get("max_drawdown", 1) or 1)
+        pf = float(results.get("profit_factor", 0) or 0)
+        wr = float(results.get("win_rate", 0) or 0)
+        sh = float(results.get("sharpe_ratio", 0) or 0)
+        n = int(results.get("total_trades", 0) or 0)
+        target_return = max((target - initial) / max(initial, 1e-9), 0.01)
+        capital_progress = final_cap / max(target, 1e-9)
+        return_progress = ret / target_return
+        trade_quality = min(1.0, max(0.15, n / 35.0))
+        pf_score = min(max(pf, 0.0), 5.0) / 3.0
+        wr_score = min(max(wr, 0.0), 1.0)
+        sh_score = max(min(sh, 4.0), -2.0) / 4.0
+        dd_penalty = max(0.0, 1.0 - min(dd / 0.35, 1.5))
+        if final_cap < initial:
+            return -1.0 + ret - dd
+        score = (
+            min(capital_progress, 1.75) * 0.38
+            + min(return_progress, 1.75) * 0.27
+            + pf_score * 0.18
+            + dd_penalty * 0.10
+            + wr_score * 0.04
+            + sh_score * 0.03
+        ) * trade_quality
+        if final_cap >= target:
+            score += 0.35 + min((final_cap - target) / target, 1.0) * 0.25
+        if dd > 0.35:
+            score -= dd * 1.25
+        return score
+
     def _compute_score(self, results: dict) -> float:
         wr = float(results.get("win_rate", 0)); pf = float(results.get("profit_factor", 0)); sh = float(results.get("sharpe_ratio", 0)); ret = float(results.get("total_return", 0)); dd = float(results.get("max_drawdown", 1)); n = int(results.get("total_trades", 0))
+        if self.metric in {"target_150", "capital_growth", "profit_target"}:
+            return self._target_capital_score(results)
         trade_penalty = min(1.0, max(0.2, n / 30))
         if dd >= 0.25:
             return -1.0 - dd
@@ -212,7 +249,7 @@ class PrometheusOptimizer:
         if self.metric == "sharpe": return max(sh, -3.0) / 3.0 * trade_penalty * (1.0 - dd)
         if self.metric == "total_return": return max(ret, -1.0) * trade_penalty * (1.0 - dd)
         wr_score = wr; pf_score = min(pf, 6.0) / 6.0; sh_score = max(min(sh, 4.0), -1.0) / 4.0; ret_score = max(min(ret, 2.0), -0.5) / 2.0; dd_score = max(0.0, 1.0 - (dd / 0.25))
-        return (dd_score * 0.25 + wr_score * 0.15 + pf_score * 0.25 + ret_score * 0.25 + sh_score * 0.10) * trade_penalty
+        return (dd_score * 0.20 + wr_score * 0.10 + pf_score * 0.20 + ret_score * 0.40 + sh_score * 0.10) * trade_penalty
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
