@@ -170,6 +170,28 @@ class BacktestEngine:
         # Squeeze fire — momentum breakout
         add(row.get("squeeze_fire", 0), 1.0)
 
+        # Breakout expansion boost: adds opportunities during confirmed momentum,
+        # without lowering the global threshold or adding hard filters.
+        close = float(row.get("close", 0))
+        prev_high = float(row.get("prev_high", row.get("high", close)))
+        prev_low = float(row.get("prev_low", row.get("low", close)))
+        atr_norm = float(row.get("atr_norm", 0.003) or 0.003)
+        macd_accel = float(row.get("macd_accel", 0))
+        vol_ratio = float(row.get("vol_ratio", 1.0))
+        ema_stack = float(row.get("ema_stack", 0))
+        if close > prev_high and vol_ratio > 1.25:
+            add(0.65 + min(max(macd_accel, 0), 0.35), 0.8)
+        elif close < prev_low and vol_ratio > 1.25:
+            add(-0.65 + max(min(macd_accel, 0), -0.35), 0.8)
+
+        # Pullback continuation boost: adds trend-following entries on VWAP/RSI pullbacks,
+        # helping trade count without blindly accepting weak signals.
+        vwap_dist = float(row.get("dist_vwap", 0))
+        if ema_stack > 0 and 38 <= rsi <= 53 and abs(vwap_dist) < max(0.004, atr_norm * 1.2):
+            add(0.55, 0.7)
+        elif ema_stack < 0 and 47 <= rsi <= 62 and abs(vwap_dist) < max(0.004, atr_norm * 1.2):
+            add(-0.55, 0.7)
+
         # CVD signals
         add(row.get("cvd_divergence", 0), 0.8)
         add(row.get("cvd_signal", 0), 0.6)
