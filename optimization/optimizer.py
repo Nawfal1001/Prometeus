@@ -1,5 +1,5 @@
 # ============================================================
-#  PROMETHEUS — Optimizer (RISK-AWARE)
+#  PROMETHEUS — Optimizer (RISK-AWARE + MULTI-SYMBOL)
 # ============================================================
 
 import optuna
@@ -12,6 +12,7 @@ import json
 import config.settings as cfg
 from config.settings import save_user_settings
 from backtest.engine import BacktestEngine
+from backtest.multi_symbol_engine import MultiSymbolBacktestEngine
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -30,33 +31,9 @@ _OPT_KEYS = [
 ]
 
 SEED_PARAMS = [
-    dict(FUSION_THRESHOLD=0.18, STOP_LOSS_PCT=0.008, TAKE_PROFIT_PCT=0.028,
-         ATR_SL_MULT=1.5, ATR_TP1_MULT=1.5, ATR_TP2_MULT=3.5,
-         TP1_EXIT_PCT=0.35, TP2_EXIT_PCT=0.40, MAX_TRADE_DURATION_BARS=16,
-         HTF_BLOCK_THRESHOLD=0.30, REGIME_BLOCK_THRESHOLD=0.25,
-         MIN_ADX=18, MIN_SESSION_MULT=0.75,
-         EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=8,
-         WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15,
-         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.30),
-    dict(FUSION_THRESHOLD=0.16, STOP_LOSS_PCT=0.007, TAKE_PROFIT_PCT=0.032,
-         ATR_SL_MULT=1.2, ATR_TP1_MULT=2.0, ATR_TP2_MULT=4.0,
-         TP1_EXIT_PCT=0.30, TP2_EXIT_PCT=0.45, MAX_TRADE_DURATION_BARS=20,
-         HTF_BLOCK_THRESHOLD=0.25, REGIME_BLOCK_THRESHOLD=0.20,
-         MIN_ADX=16, MIN_SESSION_MULT=0.75,
-         EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.045, MAX_TRADES_PER_DAY=8,
-         WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15,
-         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35),
-    dict(FUSION_THRESHOLD=0.20, STOP_LOSS_PCT=0.009, TAKE_PROFIT_PCT=0.024,
-         ATR_SL_MULT=1.8, ATR_TP1_MULT=1.2, ATR_TP2_MULT=3.0,
-         TP1_EXIT_PCT=0.40, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=12,
-         HTF_BLOCK_THRESHOLD=0.35, REGIME_BLOCK_THRESHOLD=0.30,
-         MIN_ADX=20, MIN_SESSION_MULT=0.80,
-         EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=7,
-         MAX_RISK_PER_TRADE=0.055, MAX_TRADES_PER_DAY=6,
-         WEIGHT_REGIME=0.25, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15,
-         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.25),
+    dict(FUSION_THRESHOLD=0.18, STOP_LOSS_PCT=0.008, TAKE_PROFIT_PCT=0.028, ATR_SL_MULT=1.5, ATR_TP1_MULT=1.5, ATR_TP2_MULT=3.5, TP1_EXIT_PCT=0.35, TP2_EXIT_PCT=0.40, MAX_TRADE_DURATION_BARS=16, HTF_BLOCK_THRESHOLD=0.30, REGIME_BLOCK_THRESHOLD=0.25, MIN_ADX=18, MIN_SESSION_MULT=0.75, EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=9, MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=8, WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15, WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.30),
+    dict(FUSION_THRESHOLD=0.16, STOP_LOSS_PCT=0.007, TAKE_PROFIT_PCT=0.032, ATR_SL_MULT=1.2, ATR_TP1_MULT=2.0, ATR_TP2_MULT=4.0, TP1_EXIT_PCT=0.30, TP2_EXIT_PCT=0.45, MAX_TRADE_DURATION_BARS=20, HTF_BLOCK_THRESHOLD=0.25, REGIME_BLOCK_THRESHOLD=0.20, MIN_ADX=16, MIN_SESSION_MULT=0.75, EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=9, MAX_RISK_PER_TRADE=0.045, MAX_TRADES_PER_DAY=8, WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15, WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35),
+    dict(FUSION_THRESHOLD=0.20, STOP_LOSS_PCT=0.009, TAKE_PROFIT_PCT=0.024, ATR_SL_MULT=1.8, ATR_TP1_MULT=1.2, ATR_TP2_MULT=3.0, TP1_EXIT_PCT=0.40, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=12, HTF_BLOCK_THRESHOLD=0.35, REGIME_BLOCK_THRESHOLD=0.30, MIN_ADX=20, MIN_SESSION_MULT=0.80, EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=7, MAX_RISK_PER_TRADE=0.055, MAX_TRADES_PER_DAY=6, WEIGHT_REGIME=0.25, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15, WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.25),
 ]
 
 
@@ -73,11 +50,27 @@ class PrometheusOptimizer:
         self.trial_results = []
         self._trial_num = 0
         self._raw_df = df
+        self._multi_data = None
+        self._best_metrics = {}
+        self._best_trades = []
+        self._best_symbols_traded = {}
 
-    def run(self) -> dict:
-        logger.info(f"[Optimizer] Starting | metric={self.metric} trials={self.n_trials} timeout={self.timeout}s")
-        if len(self.df) < 400:
-            return {"error": f"Need at least 400 candles for optimization, got {len(self.df)}"}
+    def run(self, data=None) -> dict:
+        self._multi_data = data if isinstance(data, dict) else None
+        if self._multi_data:
+            valid = {s: d for s, d in self._multi_data.items() if d is not None and not d.empty}
+            if not valid:
+                return {"error": "No valid symbol data for competing-symbol optimization"}
+            min_len = min(len(d) for d in valid.values())
+            if min_len < 200:
+                return {"error": f"Need at least 200 candles per symbol, got {min_len}"}
+            self._multi_data = valid
+            logger.info(f"[Optimizer] Starting COMPETING symbols={list(valid.keys())} metric={self.metric} trials={self.n_trials}")
+        else:
+            logger.info(f"[Optimizer] Starting | metric={self.metric} trials={self.n_trials} timeout={self.timeout}s")
+            if len(self.df) < 400:
+                return {"error": f"Need at least 400 candles for optimization, got {len(self.df)}"}
+
         sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=10)
         pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=20) if getattr(cfg, "OPTUNA_PRUNING", False) else optuna.pruners.NopPruner()
         self.study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner, study_name=f"prometheus_{self.metric}")
@@ -107,20 +100,30 @@ class PrometheusOptimizer:
         cfg_snapshot = {k: getattr(cfg, k, None) for k in _OPT_KEYS}
         try:
             self._inject_params(params)
-            try:
-                from core.models.feature_engine import compute_features
-            except Exception:
-                from core.feature_engine import compute_features
-            prepared = compute_features(self._raw_df.copy())
-            if prepared is None or prepared.empty or len(prepared) < 100:
+            if self._multi_data:
+                results = MultiSymbolBacktestEngine().run(self._multi_data, mode="simple")
+            else:
+                try:
+                    from core.models.feature_engine import compute_features
+                except Exception:
+                    from core.feature_engine import compute_features
+                prepared = compute_features(self._raw_df.copy())
+                if prepared is None or prepared.empty or len(prepared) < 100:
+                    return -1.0
+                results = BacktestEngine()._simple_split(prepared)
+
+            if "error" in results:
+                self.trial_results.append({"trial": trial.number, "score": -1.0, "params": params, "error": results.get("error"), "metrics": {"total_trades": 0}, "trades": [], "symbols_traded": results.get("symbols_traded", {})})
                 return -1.0
-            engine = BacktestEngine()
-            results = engine._simple_split(prepared)
-            if "error" in results or results.get("total_trades", 0) < 15:
+
+            min_trades = 8 if self._multi_data else 15
+            if results.get("total_trades", 0) < min_trades:
                 n = results.get("total_trades", 0)
-                return -0.5 - (15 - n) * 0.01
-            score = self._compute_score(results)
-            self.trial_results.append({
+                score = -0.5 - (min_trades - n) * 0.01
+            else:
+                score = self._compute_score(results)
+
+            record = {
                 "trial": trial.number,
                 "score": round(score, 4),
                 "params": params,
@@ -131,14 +134,22 @@ class PrometheusOptimizer:
                     "total_return": results.get("total_return"),
                     "max_drawdown": results.get("max_drawdown"),
                     "total_trades": results.get("total_trades"),
+                    "final_capital": results.get("final_capital"),
                 },
-            })
+                "trades": results.get("trades", [])[-20:],
+                "symbols_traded": results.get("symbols_traded", {}),
+                "mode": results.get("mode", "competing_symbols" if self._multi_data else "single"),
+            }
+            self.trial_results.append(record)
             if score > self.best_value:
                 self.best_value = score
                 self.best_params = params
+                self._best_metrics = record["metrics"]
+                self._best_trades = record["trades"]
+                self._best_symbols_traded = record["symbols_traded"]
             return score
         except Exception as e:
-            logger.debug(f"[Optimizer] Trial {trial.number} failed: {e}")
+            logger.exception(f"[Optimizer] Trial {trial.number} failed")
             return -1.0
         finally:
             for k, v in cfg_snapshot.items():
@@ -154,41 +165,28 @@ class PrometheusOptimizer:
         w5 = max(0.10, round(1.0 - total, 3))
         total2 = w1 + w2 + w3 + w4 + w5
         w1, w2, w3, w4, w5 = [round(w / total2, 3) for w in [w1, w2, w3, w4, w5]]
-
         ema_fast = trial.suggest_int("EMA_FAST", 8, 25)
         ema_mid = trial.suggest_int("EMA_MID", ema_fast + 10, 80)
         ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 50, 250, step=10)
-
         atr_sl = trial.suggest_float("ATR_SL_MULT", 0.8, 2.5, step=0.1)
         atr_tp1 = trial.suggest_float("ATR_TP1_MULT", 1.0, 3.0, step=0.25)
         atr_tp2 = trial.suggest_float("ATR_TP2_MULT", max(atr_tp1 * 1.8, 2.5), 6.0, step=0.25)
         tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.25, 0.50, step=0.05)
         tp2_exit = trial.suggest_float("TP2_EXIT_PCT", 0.30, 0.55, step=0.05)
         max_duration = trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 24)
-
         return {
-            "WEIGHT_REGIME": w1,
-            "WEIGHT_SENTIMENT": w2,
-            "WEIGHT_WHALE": w3,
-            "WEIGHT_LIQUIDATION": w4,
-            "WEIGHT_ENTRY": w5,
+            "WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5,
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.13, 0.42, step=0.01),
             "STOP_LOSS_PCT": trial.suggest_float("STOP_LOSS_PCT", 0.004, 0.018, step=0.001),
             "TAKE_PROFIT_PCT": trial.suggest_float("TAKE_PROFIT_PCT", 0.010, 0.055, step=0.001),
             "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.2, 2.5, step=0.1),
-            "ATR_SL_MULT": atr_sl,
-            "ATR_TP1_MULT": atr_tp1,
-            "ATR_TP2_MULT": atr_tp2,
-            "TP1_EXIT_PCT": tp1_exit,
-            "TP2_EXIT_PCT": tp2_exit,
-            "MAX_TRADE_DURATION_BARS": max_duration,
+            "ATR_SL_MULT": atr_sl, "ATR_TP1_MULT": atr_tp1, "ATR_TP2_MULT": atr_tp2,
+            "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit, "MAX_TRADE_DURATION_BARS": max_duration,
             "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.20, 0.45, step=0.05),
             "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
             "MIN_ADX": trial.suggest_int("MIN_ADX", 14, 28),
             "MIN_SESSION_MULT": trial.suggest_float("MIN_SESSION_MULT", 0.70, 1.00, step=0.05),
-            "EMA_FAST": ema_fast,
-            "EMA_MID": ema_mid,
-            "EMA_SLOW": ema_slow,
+            "EMA_FAST": ema_fast, "EMA_MID": ema_mid, "EMA_SLOW": ema_slow,
             "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 4, 18),
             "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.02, 0.08, step=0.005),
             "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 2, 10),
@@ -199,41 +197,16 @@ class PrometheusOptimizer:
             setattr(cfg, k, v)
 
     def _compute_score(self, results: dict) -> float:
-        wr = float(results.get("win_rate", 0))
-        pf = float(results.get("profit_factor", 0))
-        sh = float(results.get("sharpe_ratio", 0))
-        ret = float(results.get("total_return", 0))
-        dd = float(results.get("max_drawdown", 1))
-        n = int(results.get("total_trades", 0))
-
+        wr = float(results.get("win_rate", 0)); pf = float(results.get("profit_factor", 0)); sh = float(results.get("sharpe_ratio", 0)); ret = float(results.get("total_return", 0)); dd = float(results.get("max_drawdown", 1)); n = int(results.get("total_trades", 0))
         trade_penalty = min(1.0, max(0.2, n / 30))
-
         if dd >= 0.25:
             return -1.0 - dd
-
-        if self.metric == "win_rate":
-            return wr * trade_penalty * (1.0 - dd)
-        if self.metric == "profit_factor":
-            return min(pf, 8.0) / 8.0 * trade_penalty * (1.0 - dd)
-        if self.metric == "sharpe":
-            return max(sh, -3.0) / 3.0 * trade_penalty * (1.0 - dd)
-        if self.metric == "total_return":
-            return max(ret, -1.0) * trade_penalty * (1.0 - dd)
-
-        wr_score = wr
-        pf_score = min(pf, 6.0) / 6.0
-        sh_score = max(min(sh, 4.0), -1.0) / 4.0
-        ret_score = max(min(ret, 2.0), -0.5) / 2.0
-        dd_score = max(0.0, 1.0 - (dd / 0.25))
-
-        composite = (
-            dd_score * 0.25
-            + wr_score * 0.15
-            + pf_score * 0.25
-            + ret_score * 0.25
-            + sh_score * 0.10
-        )
-        return composite * trade_penalty
+        if self.metric == "win_rate": return wr * trade_penalty * (1.0 - dd)
+        if self.metric == "profit_factor": return min(pf, 8.0) / 8.0 * trade_penalty * (1.0 - dd)
+        if self.metric == "sharpe": return max(sh, -3.0) / 3.0 * trade_penalty * (1.0 - dd)
+        if self.metric == "total_return": return max(ret, -1.0) * trade_penalty * (1.0 - dd)
+        wr_score = wr; pf_score = min(pf, 6.0) / 6.0; sh_score = max(min(sh, 4.0), -1.0) / 4.0; ret_score = max(min(ret, 2.0), -0.5) / 2.0; dd_score = max(0.0, 1.0 - (dd / 0.25))
+        return (dd_score * 0.25 + wr_score * 0.15 + pf_score * 0.25 + ret_score * 0.25 + sh_score * 0.10) * trade_penalty
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
@@ -241,18 +214,12 @@ class PrometheusOptimizer:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    asyncio.ensure_future(self.progress_callback(
-                        trial_num=self._trial_num,
-                        total=self.n_trials,
-                        best_value=study.best_value if study.best_trial else 0,
-                        best_params=study.best_trial.params if study.best_trial else {},
-                        trial_results=self.trial_results[-1] if self.trial_results else {},
-                    ))
+                    asyncio.ensure_future(self.progress_callback(trial_num=self._trial_num, total=self.n_trials, best_value=study.best_value if study.best_trial else 0, best_params=study.best_trial.params if study.best_trial else {}, trial_results=self.trial_results[-1] if self.trial_results else {}))
             except RuntimeError:
                 pass
 
     def _build_result(self) -> dict:
-        return {"best_value": round(self.best_value, 4), "best_params": self.best_params, "metric": self.metric, "n_trials": len(self.study.trials) if self.study else 0, "trial_results": self.trial_results}
+        return {"best_value": round(self.best_value, 4), "best_params": self.best_params, "metric": self.metric, "n_trials": len(self.study.trials) if self.study else 0, "trial_results": self.trial_results, "best_metrics": self._best_metrics, "best_trades": self._best_trades, "symbols_traded": self._best_symbols_traded, "mode": "competing_symbols_optimization" if self._multi_data else "single_symbol_optimization"}
 
     def _save_results(self, result: dict):
         try:
