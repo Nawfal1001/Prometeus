@@ -35,6 +35,7 @@ async def run_multi_optimization(request: Request):
         trials = min(int(body.get('trials', 10)), max_trials)
         timeout = min(int(body.get('timeout', 300)), max_timeout)
         wf_opt = bool(body.get('wf_opt', False))
+        run_mode = body.get('run_mode', body.get('mode', 'compare'))
         train_bars = min(int(body.get('train_bars', 800)), candles)
         test_bars = min(int(body.get('test_bars', 200)), candles)
         step_bars = min(int(body.get('step_bars', 200)), candles)
@@ -42,6 +43,7 @@ async def run_multi_optimization(request: Request):
         from core.exchange.factory import get_exchange
         exchange = get_exchange()
         rows = []
+        data_by_symbol = {}
         loop = asyncio.get_event_loop()
 
         try:
@@ -50,6 +52,9 @@ async def run_multi_optimization(request: Request):
                     df = await get_cached_ohlcv(exchange, symbol, timeframe, candles)
                     if df is None or df.empty:
                         rows.append({'symbol': symbol, 'error': 'No data returned', 'rank_score': -999})
+                        continue
+                    data_by_symbol[symbol] = df
+                    if run_mode in ('compete', 'competition'):
                         continue
                     if wf_opt:
                         runner = WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
@@ -72,16 +77,23 @@ async def run_multi_optimization(request: Request):
                 if asyncio.iscoroutine(maybe):
                     await maybe
 
+        if run_mode in ('compete', 'competition'):
+            valid = {sym: df for sym, df in data_by_symbol.items() if df is not None and not df.empty}
+            if not valid:
+                return JSONResponse({'error': 'No symbol data available for competing-symbol optimization', 'symbols': rows}, status_code=400)
+            optimizer = PrometheusOptimizer(df=next(iter(valid.values())), metric=metric, n_trials=trials, timeout=timeout)
+            result = await loop.run_in_executor(None, lambda: optimizer.run(valid))
+            result['mode'] = 'competing_symbols_optimization'
+            result['timeframe'] = timeframe
+            result['candles'] = candles
+            result['trials'] = trials
+            result['timeout'] = timeout
+            result['symbols_requested'] = symbols
+            result['symbols_loaded'] = list(valid.keys())
+            return result
+
         ranked = sorted(rows, key=lambda r: float(r.get('rank_score', -999)), reverse=True)
-        return {
-            'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization',
-            'timeframe': timeframe,
-            'candles': candles,
-            'trials': trials,
-            'timeout': timeout,
-            'symbols': ranked,
-            'best': ranked[0] if ranked else None,
-        }
+        return {'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization', 'timeframe': timeframe, 'candles': candles, 'trials': trials, 'timeout': timeout, 'symbols': ranked, 'best': ranked[0] if ranked else None}
     except Exception as e:
         logger.exception('[MultiOptimizeAPI] failed')
         return JSONResponse({'error': str(e)}, status_code=500)
