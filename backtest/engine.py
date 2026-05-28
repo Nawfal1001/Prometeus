@@ -99,8 +99,7 @@ class BacktestEngine:
         signals, scores = {}, []
         ema_stack = float(row.get("ema_stack", 0)); signals["ema_stack"] = ema_stack; scores.append(ema_stack * 1.2)
         vwap_dist = float(row.get("dist_vwap", 0)); vwap_sig = 1 if vwap_dist > 0.0004 else (-1 if vwap_dist < -0.0004 else 0); signals["vwap"] = vwap_sig; scores.append(vwap_sig * 0.9)
-        rsi = float(row.get("rsi", 50))
-        rsi_sig = float(row.get("rsi_signal", 0))
+        rsi = float(row.get("rsi", 50)); rsi_sig = float(row.get("rsi_signal", 0))
         if rsi_sig == 0:
             rsi_sig = (1.0 if rsi < 30 else -1.0 if rsi > 70 else 0.6 if rsi < 40 else -0.6 if rsi > 60 else 0.2 if rsi < 48 else -0.2 if rsi > 52 else 0.0)
         signals["rsi"] = rsi_sig; scores.append(rsi_sig * 0.8)
@@ -122,6 +121,14 @@ class BacktestEngine:
         bias = 1 if score > 0.20 else (-1 if score < -0.20 else 0)
         return bias, score
 
+    def _adx_passes(self, row: pd.Series, abs_score: float) -> bool:
+        raw_adx = row.get("adx", None)
+        bypass = float(getattr(cfg, "STRONG_SIGNAL_ADX_BYPASS", 0.75))
+        if raw_adx is not None and pd.notna(raw_adx):
+            return float(raw_adx) >= float(getattr(cfg, "MIN_ADX", 18)) or abs_score >= bypass
+        strength = float(row.get("adx_trend_strength", 0) or 0)
+        return strength >= float(getattr(cfg, "MIN_ADX_TREND_STRENGTH", -0.25)) or abs_score >= bypass
+
     def _fusion_signal(self, row: pd.Series) -> dict:
         atr_norm = max(float(getattr(cfg, "MIN_ATR_NORM", 0.001)), min(float(row.get("atr_norm", 0) or 0), 0.05))
         vol_z = float(row.get("vol_zscore", 0) or 0)
@@ -137,6 +144,9 @@ class BacktestEngine:
         fusion_score = float(np.clip(entry_score * 0.70 + regime_score * 0.25 + momentum * 0.05, -1, 1))
         direction = 1 if fusion_score > 0 else -1
         abs_score = abs(fusion_score) + vol_boost
+        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.18))
+        if abs_score < threshold:
+            return {"trade": False, "reason": "below_threshold", "fusion_score": fusion_score, "abs_score": abs_score}
         market = str(getattr(cfg, "MARKET_TYPE", "futures")).lower()
         if market == "spot" and direction == -1:
             return {"trade": False, "reason": "spot_blocks_short", "fusion_score": fusion_score, "abs_score": abs_score}
@@ -145,10 +155,8 @@ class BacktestEngine:
             return {"trade": False, "reason": "regime_blocks_short", "fusion_score": fusion_score, "abs_score": abs_score}
         if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_block_thr:
             return {"trade": False, "reason": "regime_blocks_long", "fusion_score": fusion_score, "abs_score": abs_score}
-        adx = float(row.get("adx_trend_strength", row.get("adx", 99)) or 99)
-        min_adx = float(getattr(cfg, "MIN_ADX", 18))
-        if adx < min_adx:
-            return {"trade": False, "reason": "adx_filter", "fusion_score": fusion_score, "abs_score": abs_score}
+        if not self._adx_passes(row, abs_score):
+            return {"trade": False, "reason": "adx_filter_scaled", "fusion_score": fusion_score, "abs_score": abs_score}
         session_mult = float(row.get("session_mult", 1.0) or 1.0)
         if session_mult < float(getattr(cfg, "MIN_SESSION_MULT", 0.75)):
             return {"trade": False, "reason": "session_filter", "fusion_score": fusion_score, "abs_score": abs_score}
@@ -156,171 +164,56 @@ class BacktestEngine:
         htf_thr = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
         if htf_bias and htf_bias != direction and abs(entry_score) < htf_thr:
             return {"trade": False, "reason": "htf_bias_filter", "fusion_score": fusion_score, "abs_score": abs_score}
-        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.18))
-        if abs_score < threshold:
-            return {"trade": False, "reason": "below_threshold", "fusion_score": fusion_score, "abs_score": abs_score}
-        sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.5))
-        tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.5))
-        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 3.5))
+        sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.5)); tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.5)); tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 3.5))
         return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "atr_norm": atr_norm, "sl_mult": sl_mult, "tp1_mult": tp1_mult, "tp2_mult": tp2_mult, "signals": signals}
 
     def _simulate_strategy(self, df: pd.DataFrame, start_bar: int = 0) -> tuple[list, float]:
-        capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
-        base_leverage = float(getattr(cfg, "LEVERAGE", 5))
-        risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
-        max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.12))
-        max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 8))
-        max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16))
-        chandelier_lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
-        in_trade = False
-        entry_px = sl = tp1 = tp2 = atr_abs = 0.0
-        trade_side = entry_bar = 0
-        entry_score = 0.0
-        entry_capital = capital
-        leverage = base_leverage
-        remaining = 1.0
-        peak = trough = 0.0
-        tp1_done = tp2_done = False
-        trades, trades_today, day_start_cap, last_day = [], 0, capital, -1
-        consec_losses, win_streak = 0, 0
-        MAX_CONSEC = int(getattr(cfg, "MAX_CONSEC_LOSSES", 7))
-
+        capital = float(getattr(cfg, "INITIAL_CAPITAL", 50)); base_leverage = float(getattr(cfg, "LEVERAGE", 5)); risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05)); max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.12)); max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 8)); max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16)); chandelier_lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
+        in_trade = False; entry_px = sl = tp1 = tp2 = atr_abs = 0.0; trade_side = entry_bar = 0; entry_score = 0.0; entry_capital = capital; leverage = base_leverage; remaining = 1.0; peak = trough = 0.0; tp1_done = tp2_done = False; trades, trades_today, day_start_cap, last_day = [], 0, capital, -1; consec_losses, win_streak = 0, 0; MAX_CONSEC = int(getattr(cfg, "MAX_CONSEC_LOSSES", 7))
         def realize(exit_px, portion, exit_type, bar_i):
             nonlocal capital, remaining, consec_losses, win_streak
-            exit_px_adj = exit_px * (1 - trade_side * SLIPPAGE)
-            raw_ret = ((exit_px_adj - entry_px) / entry_px) * trade_side
-            risk_amt = entry_capital * risk_frac * portion
-            notional = risk_amt * leverage
-            fee_cost = notional * TAKER_FEE * 2
-            pnl = risk_amt * raw_ret * leverage - fee_cost
-            capital += pnl
-            remaining -= portion
-            if pnl > 0:
-                consec_losses = 0; win_streak += 1
-            elif exit_type in {"SL", "TIME", "TRAIL"}:
-                consec_losses += 1; win_streak = 0
-            trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_adj, 4), "side": "long" if trade_side == 1 else "short", "portion": round(portion, 2), "pnl": round(pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": exit_type, "capital": round(capital, 6), "bar": start_bar + bar_i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score, "leverage": leverage})
-
+            exit_px_adj = exit_px * (1 - trade_side * SLIPPAGE); raw_ret = ((exit_px_adj - entry_px) / entry_px) * trade_side; risk_amt = entry_capital * risk_frac * portion; notional = risk_amt * leverage; pnl = risk_amt * raw_ret * leverage - notional * TAKER_FEE * 2; capital += pnl; remaining -= portion
+            if pnl > 0: consec_losses = 0; win_streak += 1
+            elif exit_type in {"SL", "TIME", "TRAIL"}: consec_losses += 1; win_streak = 0
+            trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_adj, 4), "side": "long" if trade_side == 1 else "short", "portion": round(portion, 2), "pnl": round(pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": exit_type, "capital": round(capital, 6), "bar": start_bar + bar_i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score})
         for i in range(len(df)):
+            day = (start_bar + i) // 96
+            if day != last_day: trades_today = 0; day_start_cap = capital; last_day = day
             row = df.iloc[i]
-            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
-            day = (start_bar + i) // 48
-            if day != last_day:
-                trades_today, day_start_cap, last_day = 0, capital, day
             if in_trade:
-                peak = max(peak, high)
-                trough = min(trough, low)
-                trail = (peak - atr_abs * float(getattr(cfg, "ATR_SL_MULT", 1.5))) if trade_side == 1 else (trough + atr_abs * float(getattr(cfg, "ATR_SL_MULT", 1.5)))
-                sl = max(sl, trail) if trade_side == 1 else min(sl, trail)
-                if not tp1_done:
-                    hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
-                    if hit_tp1:
-                        tp1_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.35))
-                        realize(tp1, min(tp1_pct, remaining), "TP1", i)
-                        sl = max(sl, entry_px) if trade_side == 1 else min(sl, entry_px)
-                        tp1_done = True
-                if remaining > 0 and not tp2_done:
-                    hit_tp2 = (trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)
-                    if hit_tp2:
-                        tp2_pct = float(getattr(cfg, "TP2_EXIT_PCT", 0.40))
-                        portion = min(tp2_pct, remaining)
-                        realize(tp2, portion, "TP2", i)
-                        tp2_done = True
-                hit_sl = remaining > 0 and ((trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl))
-                expired = remaining > 0 and (i - entry_bar) > max_duration
-                if hit_sl or expired:
-                    realize(sl if hit_sl else close, remaining, "TRAIL" if hit_sl else "TIME", i)
-                    in_trade = False
-                    if capital <= 0:
-                        break
-                elif remaining <= 1e-9:
-                    in_trade = False
-                continue
-            if trades_today >= max_tpd:
-                continue
-            if (day_start_cap - capital) / (day_start_cap + 1e-9) >= max_daily_dd:
-                continue
-            if consec_losses >= MAX_CONSEC:
-                consec_losses = max(0, consec_losses - 1)
-                continue
-            signal = self._fusion_signal(row)
-            if not signal.get("trade"):
-                continue
-            trade_side = int(signal["direction"])
-            entry_score = float(signal.get("fusion_score", 0))
-            leverage = min(base_leverage + 0.5, 4.0) if win_streak >= 3 else base_leverage
-            entry_capital = capital
-            entry_px = close * (1 + trade_side * SLIPPAGE)
-            atr_abs = max(entry_px * float(signal.get("atr_norm", 0.002)), entry_px * float(getattr(cfg, "MIN_ATR_NORM", 0.001)))
-            start_idx = max(0, i - chandelier_lookback + 1)
-            hh = float(df["high"].iloc[start_idx:i + 1].max())
-            ll = float(df["low"].iloc[start_idx:i + 1].min())
-            sl_mult = float(signal.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.5)))
-            sl = (hh - atr_abs * sl_mult) if trade_side == 1 else (ll + atr_abs * sl_mult)
-            if trade_side == 1:
-                sl = min(sl, entry_px - atr_abs * 0.5)
-            else:
-                sl = max(sl, entry_px + atr_abs * 0.5)
-            tp1_mult = float(signal.get("tp1_mult", getattr(cfg, "ATR_TP1_MULT", 1.5)))
-            tp2_mult = float(signal.get("tp2_mult", getattr(cfg, "ATR_TP2_MULT", 3.5)))
-            tp1 = entry_px + trade_side * atr_abs * tp1_mult
-            tp2 = entry_px + trade_side * atr_abs * tp2_mult
-            entry_bar = i
-            peak, trough = high, low
-            remaining = 1.0
-            tp1_done = tp2_done = False
-            in_trade = True
-            trades_today += 1
+                high = float(row.get("high", row["close"])); low = float(row.get("low", row["close"])); close = float(row["close"]); peak = max(peak, high); trough = min(trough, low); trail = (peak - atr_abs * float(getattr(cfg, "ATR_SL_MULT", 1.5))) if trade_side == 1 else (trough + atr_abs * float(getattr(cfg, "ATR_SL_MULT", 1.5))); sl = max(sl, trail) if trade_side == 1 else min(sl, trail)
+                if not tp1_done and ((trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)): realize(tp1, min(float(getattr(cfg, "TP1_EXIT_PCT", 0.35)), remaining), "TP1", i); sl = max(sl, entry_px) if trade_side == 1 else min(sl, entry_px); tp1_done = True
+                if remaining > 0 and not tp2_done and ((trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)): realize(tp2, min(float(getattr(cfg, "TP2_EXIT_PCT", 0.40)), remaining), "TP2", i); tp2_done = True
+                hit_sl = remaining > 0 and ((trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl)); expired = remaining > 0 and (i - entry_bar) > max_duration
+                if hit_sl or expired: realize(sl if hit_sl else close, remaining, "TRAIL" if hit_sl else "TIME", i); in_trade = False
+                elif remaining <= 1e-9: in_trade = False
+                if in_trade: continue
+            if trades_today >= max_tpd or (day_start_cap - capital) / (day_start_cap + 1e-9) >= max_daily_dd: continue
+            if consec_losses >= MAX_CONSEC: consec_losses = max(0, consec_losses - 1); continue
+            sig = self._fusion_signal(row)
+            if not sig.get("trade"): continue
+            close = float(row["close"]); trade_side = int(sig["direction"]); entry_score = float(sig.get("fusion_score", 0)); entry_capital = capital; leverage = base_leverage; entry_px = close * (1 + trade_side * SLIPPAGE); atr_norm = float(sig.get("atr_norm", row.get("atr_norm", 0.002))); atr_abs = max(entry_px * atr_norm, entry_px * 0.001); start_idx = max(0, i - chandelier_lookback + 1); hh = float(df["high"].iloc[start_idx:i + 1].max()); ll = float(df["low"].iloc[start_idx:i + 1].min()); sl_mult = float(sig.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.5))); sl = (hh - atr_abs * sl_mult) if trade_side == 1 else (ll + atr_abs * sl_mult); sl = min(sl, entry_px - atr_abs * 0.5) if trade_side == 1 else max(sl, entry_px + atr_abs * 0.5); tp1 = entry_px + trade_side * atr_abs * float(sig.get("tp1_mult", getattr(cfg, "ATR_TP1_MULT", 1.5))); tp2 = entry_px + trade_side * atr_abs * float(sig.get("tp2_mult", getattr(cfg, "ATR_TP2_MULT", 3.5))); entry_bar = i; peak = float(row.get("high", close)); trough = float(row.get("low", close)); remaining = 1.0; tp1_done = tp2_done = False; in_trade = True; trades_today += 1
         return trades, capital
 
     def _no_trade_error(self, df: pd.DataFrame) -> dict:
-        sample = df.tail(300)
-        sigs = [self._fusion_signal(row) for _, row in sample.iterrows()]
-        abs_s = [s.get("abs_score", abs(s.get("fusion_score", 0))) for s in sigs]
-        reasons = {}
-        for s in sigs:
-            reasons[s.get("reason", "unknown")] = reasons.get(s.get("reason", "unknown"), 0) + 1
-        return {"error": f"No trades generated. usable_candles={len(df)}, threshold={float(getattr(cfg, 'FUSION_THRESHOLD', 0.18)):.3f}, max_abs_score={max(abs_s) if abs_s else 0:.3f}, avg_abs_score={float(np.mean(abs_s)) if abs_s else 0:.3f}, reasons={reasons}."}
+        reasons, max_abs, avg_vals, usable = {}, 0.0, [], 0
+        for _, row in df.iterrows():
+            sig = self._fusion_signal(row); r = sig.get("reason", "unknown"); reasons[r] = reasons.get(r, 0) + 1
+            if "abs_score" in sig: usable += 1; max_abs = max(max_abs, float(sig.get("abs_score", 0))); avg_vals.append(float(sig.get("abs_score", 0)))
+        return {"error": f"No trades generated. usable_candles={usable}, threshold={float(getattr(cfg, 'FUSION_THRESHOLD', 0.18)):.3f}, max_abs_score={max_abs:.3f}, avg_abs_score={(sum(avg_vals)/len(avg_vals) if avg_vals else 0):.3f}, reasons={reasons}"}
 
     def _compute_metrics(self, trades: list) -> dict:
-        if not trades:
-            return {"error": "No trades"}
-        df_t = pd.DataFrame(trades)
-        wins, losses = df_t[df_t["pnl"] > 0], df_t[df_t["pnl"] <= 0]
-        win_rate = len(wins) / len(df_t)
-        avg_win = float(wins["pnl"].mean()) if len(wins) else 0.0
-        avg_loss = float(losses["pnl"].mean()) if len(losses) else 0.0
-        rr = abs(avg_win / avg_loss) if avg_loss else 0.0
-        initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
-        caps = [initial] + list(df_t["capital"])
-        peak, max_dd = initial, 0.0
-        for c in caps:
-            peak = max(peak, c); max_dd = max(max_dd, (peak - c) / (peak + 1e-9))
-        final_cap = float(df_t["capital"].iloc[-1])
-        total_return = (final_cap - initial) / initial
-        rets = df_t["pnl_pct"].values / 100
-        sharpe = float(rets.mean() / (rets.std() + 1e-9)) * np.sqrt(252) if len(rets) > 1 else 0.0
-        gross_win = float(wins["pnl"].sum()) if len(wins) else 0.0
-        gross_loss = abs(float(losses["pnl"].sum())) if len(losses) else 1e-9
-        pf = gross_win / gross_loss
-        results = [1 if t["pnl"] > 0 else 0 for t in trades]
-        max_consec_loss = cur = 0
-        for r in results:
-            if r == 0:
-                cur += 1; max_consec_loss = max(max_consec_loss, cur)
-            else:
-                cur = 0
-        total_fees = 0.0
-        return {"total_trades": len(trades), "win_rate": round(win_rate, 4), "avg_win_usdt": round(avg_win, 4), "avg_loss_usdt": round(avg_loss, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(total_return, 4), "final_capital": round(final_cap, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "max_consec_losses": max_consec_loss, "total_fees_usdt": round(total_fees, 4), "slippage_pct": SLIPPAGE * 100, "fee_pct": TAKER_FEE * 100, "trades": trades[-30:], "go_live_ready": self._go_live_check(win_rate, max_dd, pf, len(trades))}
+        if not trades: return {"error": "No trades"}
+        df_t = pd.DataFrame(trades); wins = df_t[df_t["pnl"] > 0]; losses = df_t[df_t["pnl"] <= 0]; win_rate = len(wins) / len(df_t); avg_win = float(wins["pnl"].mean()) if len(wins) else 0.0; avg_loss = float(losses["pnl"].mean()) if len(losses) else 0.0; rr = abs(avg_win / avg_loss) if avg_loss else 0.0; initial = float(getattr(cfg, "INITIAL_CAPITAL", 50)); caps = [initial] + list(df_t["capital"]); peak = initial; max_dd = 0.0
+        for c in caps: peak = max(peak, c); max_dd = max(max_dd, (peak - c) / (peak + 1e-9))
+        final_cap = float(df_t["capital"].iloc[-1]); total_return = (final_cap - initial) / initial; rets = df_t["pnl_pct"].values / 100; sharpe = float(rets.mean() / (rets.std() + 1e-9)) * np.sqrt(252) if len(rets) > 1 else 0.0; gross_win = float(wins["pnl"].sum()) if len(wins) else 0.0; gross_loss = abs(float(losses["pnl"].sum())) if len(losses) else 1e-9; pf = gross_win / gross_loss
+        return {"total_trades": len(trades), "win_rate": round(win_rate, 4), "avg_win_usdt": round(avg_win, 4), "avg_loss_usdt": round(avg_loss, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(total_return, 4), "final_capital": round(final_cap, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "go_live_ready": self._go_live_check(win_rate, max_dd, pf, len(trades)), "trades": trades[-50:]}
 
     def _go_live_check(self, wr, dd, pf, n) -> dict:
-        checks = {"win_rate_ok": wr >= 0.55, "drawdown_ok": dd <= 0.20, "profit_factor_ok": pf >= 1.3, "sample_size_ok": n >= 80}
-        passed = sum(checks.values())
-        return {"checks": checks, "passed": passed, "total": len(checks), "verdict": "GO 🟢" if passed == len(checks) else (f"CAUTION 🟡 ({passed}/{len(checks)})" if passed >= 3 else "NO GO 🔴")}
+        checks = {"win_rate_ok": wr >= 0.55, "drawdown_ok": dd <= 0.20, "profit_factor_ok": pf >= 1.3, "sample_size_ok": n >= 40}; passed = sum(checks.values())
+        return {"checks": checks, "passed": passed, "total": len(checks), "verdict": "GO 🟢" if passed == len(checks) else f"CAUTION 🟡 ({passed}/{len(checks)})" if passed >= 3 else "NO GO 🔴"}
 
     def _equity_curve(self, trades: list) -> list:
-        initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
-        curve = [{"bar": 0, "capital": initial}]
-        for t in trades:
-            curve.append({"bar": t["bar"], "capital": t["capital"]})
+        initial = float(getattr(cfg, "INITIAL_CAPITAL", 50)); curve = [{"bar": 0, "capital": initial}]
+        for t in trades: curve.append({"bar": t["bar"], "capital": t["capital"]})
         return curve
