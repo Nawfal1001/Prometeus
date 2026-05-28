@@ -1,5 +1,5 @@
 # ============================================================
-#  PROMETHEUS — Optimizer (PATCHED)
+#  PROMETHEUS — Optimizer (RISK-AWARE)
 # ============================================================
 
 import optuna
@@ -23,20 +23,28 @@ _OPT_KEYS = [
     "MAX_RISK_PER_TRADE", "MAX_TRADES_PER_DAY",
     "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
     "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
+    "ATR_SL_MULT", "ATR_TP_MULT", "MAX_TRADE_DURATION_BARS",
+    "MIN_ADX", "MIN_SESSION_MULT",
 ]
 
 SEED_PARAMS = [
     dict(FUSION_THRESHOLD=0.20, STOP_LOSS_PCT=0.008, TAKE_PROFIT_PCT=0.028,
+         ATR_SL_MULT=1.5, ATR_TP_MULT=3.5, MAX_TRADE_DURATION_BARS=12,
+         MIN_ADX=20, MIN_SESSION_MULT=0.70,
          EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=7,
          MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=5,
          WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.20,
          WEIGHT_LIQUIDATION=0.20, WEIGHT_ENTRY=0.30),
     dict(FUSION_THRESHOLD=0.25, STOP_LOSS_PCT=0.010, TAKE_PROFIT_PCT=0.032,
+         ATR_SL_MULT=1.2, ATR_TP_MULT=2.8, MAX_TRADE_DURATION_BARS=16,
+         MIN_ADX=18, MIN_SESSION_MULT=0.80,
          EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=9,
          MAX_RISK_PER_TRADE=0.04, MAX_TRADES_PER_DAY=4,
          WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.25,
          WEIGHT_LIQUIDATION=0.15, WEIGHT_ENTRY=0.35),
     dict(FUSION_THRESHOLD=0.18, STOP_LOSS_PCT=0.007, TAKE_PROFIT_PCT=0.024,
+         ATR_SL_MULT=1.8, ATR_TP_MULT=4.0, MAX_TRADE_DURATION_BARS=10,
+         MIN_ADX=22, MIN_SESSION_MULT=0.70,
          EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=6,
          MAX_RISK_PER_TRADE=0.06, MAX_TRADES_PER_DAY=6,
          WEIGHT_REGIME=0.25, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.20,
@@ -45,7 +53,6 @@ SEED_PARAMS = [
 
 
 class PrometheusOptimizer:
-
     def __init__(self, df: pd.DataFrame, metric: str = None, n_trials: int = None, timeout: int = None, progress_callback=None):
         self.df = df
         self.metric = metric or cfg.OPTUNA_METRIC
@@ -63,17 +70,14 @@ class PrometheusOptimizer:
         logger.info(f"[Optimizer] Starting | metric={self.metric} trials={self.n_trials} timeout={self.timeout}s")
         if len(self.df) < 400:
             return {"error": f"Need at least 400 candles for optimization, got {len(self.df)}"}
-
         sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=10)
         pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=20) if getattr(cfg, "OPTUNA_PRUNING", False) else optuna.pruners.NopPruner()
         self.study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner, study_name=f"prometheus_{self.metric}")
-
         for seed in SEED_PARAMS:
             try:
                 self.study.enqueue_trial(seed)
             except Exception:
                 pass
-
         self.study.optimize(self._objective, n_trials=self.n_trials, timeout=self.timeout, callbacks=[self._trial_callback], show_progress_bar=False)
         best = self.study.best_trial
         self.best_params = best.params
@@ -95,17 +99,18 @@ class PrometheusOptimizer:
         cfg_snapshot = {k: getattr(cfg, k, None) for k in _OPT_KEYS}
         try:
             self._inject_params(params)
-            from core.models.feature_engine import compute_features
+            try:
+                from core.models.feature_engine import compute_features
+            except Exception:
+                from core.feature_engine import compute_features
             prepared = compute_features(self._raw_df.copy())
-            if prepared.empty or len(prepared) < 100:
+            if prepared is None or prepared.empty or len(prepared) < 100:
                 return -1.0
-
             engine = BacktestEngine()
             results = engine._simple_split(prepared)
             if "error" in results or results.get("total_trades", 0) < 15:
                 n = results.get("total_trades", 0)
                 return -0.5 - (15 - n) * 0.01
-
             score = self._compute_score(results)
             self.trial_results.append({
                 "trial": trial.number,
@@ -129,7 +134,7 @@ class PrometheusOptimizer:
             return -1.0
         finally:
             for k, v in cfg_snapshot.items():
-                if v is not None and hasattr(cfg, k):
+                if hasattr(cfg, k):
                     setattr(cfg, k, v)
 
     def _suggest_params(self, trial: optuna.Trial) -> dict:
@@ -141,10 +146,11 @@ class PrometheusOptimizer:
         w5 = max(0.10, round(1.0 - total, 3))
         total2 = w1 + w2 + w3 + w4 + w5
         w1, w2, w3, w4, w5 = [round(w / total2, 3) for w in [w1, w2, w3, w4, w5]]
-
         ema_fast = trial.suggest_int("EMA_FAST", 8, 25)
         ema_mid = trial.suggest_int("EMA_MID", ema_fast + 10, 80)
         ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 50, 250, step=10)
+        atr_sl = trial.suggest_float("ATR_SL_MULT", 0.8, 2.5, step=0.1)
+        atr_tp = trial.suggest_float("ATR_TP_MULT", max(1.8, atr_sl * 1.8), 5.5, step=0.1)
         return {
             "WEIGHT_REGIME": w1,
             "WEIGHT_SENTIMENT": w2,
@@ -154,6 +160,11 @@ class PrometheusOptimizer:
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.13, 0.42, step=0.01),
             "STOP_LOSS_PCT": trial.suggest_float("STOP_LOSS_PCT", 0.004, 0.018, step=0.001),
             "TAKE_PROFIT_PCT": trial.suggest_float("TAKE_PROFIT_PCT", 0.010, 0.055, step=0.001),
+            "ATR_SL_MULT": atr_sl,
+            "ATR_TP_MULT": atr_tp,
+            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 6, 24),
+            "MIN_ADX": trial.suggest_int("MIN_ADX", 15, 28),
+            "MIN_SESSION_MULT": trial.suggest_float("MIN_SESSION_MULT", 0.70, 1.00, step=0.05),
             "EMA_FAST": ema_fast,
             "EMA_MID": ema_mid,
             "EMA_SLOW": ema_slow,
@@ -164,8 +175,7 @@ class PrometheusOptimizer:
 
     def _inject_params(self, params: dict):
         for k, v in params.items():
-            if hasattr(cfg, k):
-                setattr(cfg, k, v)
+            setattr(cfg, k, v)
 
     def _compute_score(self, results: dict) -> float:
         wr = float(results.get("win_rate", 0))
@@ -175,26 +185,23 @@ class PrometheusOptimizer:
         dd = float(results.get("max_drawdown", 1))
         n = int(results.get("total_trades", 0))
         trade_penalty = min(1.0, max(0.3, n / 40))
-
+        if dd >= 0.20:
+            return -1.0 - dd
         if self.metric == "win_rate":
-            return wr * trade_penalty
+            return wr * trade_penalty * (1.0 - dd)
         if self.metric == "profit_factor":
-            return min(pf, 6.0) / 6.0 * trade_penalty
+            return min(pf, 6.0) / 6.0 * trade_penalty * (1.0 - dd)
         if self.metric == "sharpe":
-            return max(sh, -3.0) / 3.0 * trade_penalty
+            return max(sh, -3.0) / 3.0 * trade_penalty * (1.0 - dd)
         if self.metric == "total_return":
-            return max(ret, -1.0) * trade_penalty
-        if self.metric == "composite":
-            if dd >= 0.60:
-                return -1.0
-            wr_score = wr
-            pf_score = min(pf, 4.0) / 4.0
-            sh_score = max(min(sh, 3.0), -1.0) / 3.0
-            ret_score = max(min(ret, 1.0), -0.5)
-            dd_score = 1.0 - dd
-            score = wr_score * 0.30 + pf_score * 0.25 + sh_score * 0.20 + ret_score * 0.15 + dd_score * 0.10
-            return score * trade_penalty
-        return wr * trade_penalty
+            return max(ret, -1.0) * trade_penalty * (1.0 - dd)
+        wr_score = wr
+        pf_score = min(pf, 4.0) / 4.0
+        sh_score = max(min(sh, 3.0), -1.0) / 3.0
+        ret_score = max(min(ret, 1.0), -0.5)
+        dd_score = max(0.0, 1.0 - (dd / 0.20))
+        score = dd_score * 0.35 + wr_score * 0.20 + pf_score * 0.20 + ret_score * 0.15 + sh_score * 0.10
+        return score * trade_penalty
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
@@ -213,13 +220,7 @@ class PrometheusOptimizer:
                 pass
 
     def _build_result(self) -> dict:
-        return {
-            "best_value": round(self.best_value, 4),
-            "best_params": self.best_params,
-            "metric": self.metric,
-            "n_trials": len(self.study.trials) if self.study else 0,
-            "trial_results": self.trial_results,
-        }
+        return {"best_value": round(self.best_value, 4), "best_params": self.best_params, "metric": self.metric, "n_trials": len(self.study.trials) if self.study else 0, "trial_results": self.trial_results}
 
     def _save_results(self, result: dict):
         try:
