@@ -15,19 +15,28 @@ from core.cache.market_cache import get_cached_ohlcv
 router = APIRouter()
 
 
+def _clean_symbols(symbols):
+    if isinstance(symbols, str):
+        return [s.strip() for s in symbols.split(',') if s.strip()]
+    if isinstance(symbols, list):
+        return [str(s).strip() for s in symbols if str(s).strip()]
+    return []
+
+
 @router.post('/api/optimize/multi')
 async def run_multi_optimization(request: Request):
     try:
         body = await request.json()
-        symbols = body.get('symbols') or ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'AVAX/USDT', 'DOGE/USDT']
-        if isinstance(symbols, str):
-            symbols = [s.strip() for s in symbols.split(',') if s.strip()]
+    except Exception as e:
+        logger.warning(f'[MultiOptimizeAPI] invalid JSON request: {e}')
+        return JSONResponse({'error': 'Invalid JSON request body. Reload the page and retry.'}, status_code=400)
 
+    try:
+        symbols = _clean_symbols(body.get('symbols') or ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'AVAX/USDT', 'DOGE/USDT'])
         max_symbols = int(getattr(cfg, 'MAX_UI_SYMBOLS', 7))
         max_candles = int(getattr(cfg, 'MAX_UI_CANDLES', 2000))
         max_trials = int(getattr(cfg, 'MAX_OPTUNA_TRIALS_UI', 30))
         max_timeout = int(getattr(cfg, 'MAX_OPTUNA_TIMEOUT_UI', 600))
-
         symbols = symbols[:max_symbols]
         timeframe = body.get('timeframe', cfg.TIMEFRAME)
         candles = min(int(body.get('candles', 1500)), max_candles)
@@ -45,7 +54,6 @@ async def run_multi_optimization(request: Request):
         rows = []
         data_by_symbol = {}
         loop = asyncio.get_event_loop()
-
         try:
             for symbol in symbols:
                 try:
@@ -83,17 +91,11 @@ async def run_multi_optimization(request: Request):
                 return JSONResponse({'error': 'No symbol data available for competing-symbol optimization', 'symbols': rows}, status_code=400)
             optimizer = PrometheusOptimizer(df=next(iter(valid.values())), metric=metric, n_trials=trials, timeout=timeout)
             result = await loop.run_in_executor(None, lambda: optimizer.run(valid))
-            result['mode'] = 'competing_symbols_optimization'
-            result['timeframe'] = timeframe
-            result['candles'] = candles
-            result['trials'] = trials
-            result['timeout'] = timeout
-            result['symbols_requested'] = symbols
-            result['symbols_loaded'] = list(valid.keys())
-            return result
+            result.update({'mode': 'competing_symbols_optimization', 'timeframe': timeframe, 'candles': candles, 'trials': trials, 'timeout': timeout, 'symbols_requested': symbols, 'symbols_loaded': list(valid.keys())})
+            return JSONResponse(result)
 
         ranked = sorted(rows, key=lambda r: float(r.get('rank_score', -999)), reverse=True)
-        return {'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization', 'timeframe': timeframe, 'candles': candles, 'trials': trials, 'timeout': timeout, 'symbols': ranked, 'best': ranked[0] if ranked else None}
+        return JSONResponse({'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization', 'timeframe': timeframe, 'candles': candles, 'trials': trials, 'timeout': timeout, 'symbols': ranked, 'best': ranked[0] if ranked else None})
     except Exception as e:
         logger.exception('[MultiOptimizeAPI] failed')
         return JSONResponse({'error': str(e)}, status_code=500)
