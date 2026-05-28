@@ -81,6 +81,12 @@ class BacktestEngine:
             fast = df["close"].ewm(span=160, adjust=False).mean()
             slow = df["close"].ewm(span=400, adjust=False).mean()
             df["htf_bias"] = np.where(fast > slow, 1, np.where(fast < slow, -1, 0))
+        if "atr_norm" not in df.columns:
+            tr = pd.concat([(df["high"] - df["low"]).abs(), (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()], axis=1).max(axis=1)
+            df["atr_norm"] = tr.rolling(14).mean() / df["close"]
+        if "vol_zscore" not in df.columns:
+            ret = df["close"].pct_change().abs()
+            df["vol_zscore"] = (ret - ret.rolling(48).mean()) / (ret.rolling(48).std() + 1e-9)
         return df
 
     def _entry_score(self, row: pd.Series) -> tuple[float, dict]:
@@ -108,12 +114,16 @@ class BacktestEngine:
         return bias, score
 
     def _fusion_signal(self, row: pd.Series) -> dict:
+        atr_norm = max(0.002, min(float(row.get("atr_norm", 0) or 0), 0.05))
+        vol_z = float(row.get("vol_zscore", 0) or 0)
+        if vol_z > float(getattr(cfg, "MAX_VOL_ZSCORE", 3.0)):
+            return {"trade": False, "reason": "vol_spike_filter", "fusion_score": 0, "abs_score": 0}
+        if atr_norm < float(getattr(cfg, "MIN_ATR_NORM", 0.002)):
+            return {"trade": False, "reason": "dead_vol_filter", "fusion_score": 0, "abs_score": 0}
         entry_score, signals = self._entry_score(row)
         regime_bias, regime_score = self._regime_score(row)
         ret_3 = float(row.get("ret_3", 0))
         momentum = float(np.clip(np.sign(ret_3) * min(abs(ret_3) * 150, 1), -1, 1))
-        atr_norm = float(row.get("atr_norm", 0) or 0)
-        atr_norm = max(0.002, min(atr_norm, 0.05))
         vol_boost = min(atr_norm * 80, 0.20)
         fusion_score = float(np.clip(entry_score * 0.70 + regime_score * 0.25 + momentum * 0.05, -1, 1))
         direction = 1 if fusion_score > 0 else -1
@@ -140,13 +150,7 @@ class BacktestEngine:
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.5))
         tp_mult = float(getattr(cfg, "ATR_TP_MULT", max(sl_mult * 1.8, 3.0)))
         tp_mult = max(tp_mult, sl_mult * 1.8)
-        sl_pct = max(0.002, min(atr_norm * sl_mult, 0.05))
-        tp_pct = max(sl_pct * 1.8, min(atr_norm * tp_mult, 0.15))
-        risk_fraction = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
-        leverage = float(getattr(cfg, "LEVERAGE", 5))
-        capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
-        pos_size = capital * risk_fraction * leverage * min(abs_score * 1.2, 1.5)
-        return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "position_size": round(pos_size, 4), "sl_pct": sl_pct, "tp_pct": tp_pct, "signals": signals}
+        return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "atr_norm": atr_norm, "sl_mult": sl_mult, "tp_mult": tp_mult, "signals": signals}
 
     def _simulate_strategy(self, df: pd.DataFrame, start_bar: int = 0) -> tuple[list, float]:
         capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
@@ -155,16 +159,36 @@ class BacktestEngine:
         max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.10))
         max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 5))
         max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 12))
+        chandelier_lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
         in_trade = False
-        entry_px = sl = tp = sl_pct = tp_pct = 0.0
+        entry_px = sl = tp1 = tp2 = atr_abs = 0.0
         trade_side = entry_bar = 0
         entry_score = 0.0
         entry_capital = capital
         leverage = base_leverage
+        remaining = 1.0
+        peak = trough = 0.0
+        tp1_done = tp2_done = False
         trades, trades_today, day_start_cap, last_day = [], 0, capital, -1
         consec_losses, win_streak = 0, 0
-        breakeven_armed = False
         MAX_CONSEC = 5
+
+        def realize(exit_px, portion, exit_type, bar_i):
+            nonlocal capital, remaining, consec_losses, win_streak
+            exit_px_adj = exit_px * (1 - trade_side * SLIPPAGE)
+            raw_ret = ((exit_px_adj - entry_px) / entry_px) * trade_side
+            risk_amt = entry_capital * risk_frac * portion
+            notional = risk_amt * leverage
+            fee_cost = notional * TAKER_FEE * 2
+            pnl = risk_amt * raw_ret * leverage - fee_cost
+            capital += pnl
+            remaining -= portion
+            if pnl > 0:
+                consec_losses = 0; win_streak += 1
+            elif exit_type in {"SL", "TIME", "TRAIL"}:
+                consec_losses += 1; win_streak = 0
+            trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_adj, 4), "side": "long" if trade_side == 1 else "short", "portion": round(portion, 2), "pnl": round(pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": exit_type, "capital": round(capital, 6), "bar": start_bar + bar_i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score, "leverage": leverage})
+
         for i in range(len(df)):
             row = df.iloc[i]
             high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
@@ -172,31 +196,31 @@ class BacktestEngine:
             if day != last_day:
                 trades_today, day_start_cap, last_day = 0, capital, day
             if in_trade:
-                tp1 = entry_px * (1 + trade_side * (tp_pct * 0.5))
-                hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
-                if hit_tp1 and not breakeven_armed:
-                    sl = entry_px * (1 + trade_side * 0.0005)
-                    breakeven_armed = True
-                hit_tp = (trade_side == 1 and high >= tp) or (trade_side == -1 and low <= tp)
-                hit_sl = (trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl)
-                expired = (i - entry_bar) > max_duration
-                if hit_tp or hit_sl or expired:
-                    exit_px = tp if hit_tp else (sl if hit_sl else close)
-                    exit_px *= (1 - trade_side * SLIPPAGE)
-                    raw_ret = ((exit_px - entry_px) / entry_px) * trade_side
-                    risk_amt = entry_capital * risk_frac
-                    notional = risk_amt * leverage
-                    fee_cost = notional * TAKER_FEE * 2
-                    pnl = risk_amt * raw_ret * leverage - fee_cost
-                    capital += pnl
-                    if pnl > 0:
-                        consec_losses = 0; win_streak += 1
-                    else:
-                        consec_losses += 1; win_streak = 0
-                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": "TP" if hit_tp else ("SL" if hit_sl else "TIME"), "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score, "leverage": leverage})
+                peak = max(peak, high)
+                trough = min(trough, low)
+                trail = (peak - atr_abs * float(getattr(cfg, "ATR_SL_MULT", 1.5))) if trade_side == 1 else (trough + atr_abs * float(getattr(cfg, "ATR_SL_MULT", 1.5)))
+                sl = max(sl, trail) if trade_side == 1 else min(sl, trail)
+                if not tp1_done:
+                    hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
+                    if hit_tp1:
+                        realize(tp1, 0.40, "TP1", i)
+                        sl = max(sl, entry_px) if trade_side == 1 else min(sl, entry_px)
+                        tp1_done = True
+                if remaining > 0 and not tp2_done:
+                    hit_tp2 = (trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)
+                    if hit_tp2:
+                        portion = min(0.35, remaining)
+                        realize(tp2, portion, "TP2", i)
+                        tp2_done = True
+                hit_sl = remaining > 0 and ((trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl))
+                expired = remaining > 0 and (i - entry_bar) > max_duration
+                if hit_sl or expired:
+                    realize(sl if hit_sl else close, remaining, "TRAIL" if hit_sl else "TIME", i)
                     in_trade = False
                     if capital <= 0:
                         break
+                elif remaining <= 1e-9:
+                    in_trade = False
                 continue
             if trades_today >= max_tpd:
                 continue
@@ -213,10 +237,24 @@ class BacktestEngine:
             leverage = min(base_leverage + 0.5, 4.0) if win_streak >= 3 else base_leverage
             entry_capital = capital
             entry_px = close * (1 + trade_side * SLIPPAGE)
-            sl_pct = float(signal.get("sl_pct", 0.008)); tp_pct = float(signal.get("tp_pct", 0.036))
-            sl = entry_px * (1 - trade_side * sl_pct)
-            tp = entry_px * (1 + trade_side * tp_pct)
-            entry_bar = i; in_trade = True; breakeven_armed = False; trades_today += 1
+            atr_abs = max(entry_px * float(signal.get("atr_norm", 0.002)), entry_px * 0.002)
+            start_idx = max(0, i - chandelier_lookback + 1)
+            hh = float(df["high"].iloc[start_idx:i + 1].max())
+            ll = float(df["low"].iloc[start_idx:i + 1].min())
+            sl_mult = float(signal.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.5)))
+            sl = (hh - atr_abs * sl_mult) if trade_side == 1 else (ll + atr_abs * sl_mult)
+            if trade_side == 1:
+                sl = min(sl, entry_px - atr_abs * 0.5)
+            else:
+                sl = max(sl, entry_px + atr_abs * 0.5)
+            tp1 = entry_px + trade_side * atr_abs
+            tp2 = entry_px + trade_side * atr_abs * 2.0
+            entry_bar = i
+            peak, trough = high, low
+            remaining = 1.0
+            tp1_done = tp2_done = False
+            in_trade = True
+            trades_today += 1
         return trades, capital
 
     def _no_trade_error(self, df: pd.DataFrame) -> dict:
@@ -256,7 +294,7 @@ class BacktestEngine:
                 cur += 1; max_consec_loss = max(max_consec_loss, cur)
             else:
                 cur = 0
-        total_fees = sum(abs(float(t.get("pnl", 0))) * 0 for t in trades)
+        total_fees = 0.0
         return {"total_trades": len(trades), "win_rate": round(win_rate, 4), "avg_win_usdt": round(avg_win, 4), "avg_loss_usdt": round(avg_loss, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(total_return, 4), "final_capital": round(final_cap, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "max_consec_losses": max_consec_loss, "total_fees_usdt": round(total_fees, 4), "slippage_pct": SLIPPAGE * 100, "fee_pct": TAKER_FEE * 100, "trades": trades[-30:], "go_live_ready": self._go_live_check(win_rate, max_dd, pf, len(trades))}
 
     def _go_live_check(self, wr, dd, pf, n) -> dict:
