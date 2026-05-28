@@ -1,24 +1,24 @@
 # ============================================================
-#  PROMETHEUS — XGBoost Signal Model (IMPROVED)
+#  PROMETHEUS — XGBoost Signal Model (BINARY + SPOT-AWARE)
 # ============================================================
 
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import classification_report, f1_score
+from sklearn.metrics import f1_score
 from sklearn.preprocessing import LabelEncoder
-from sklearn.utils.class_weight import compute_sample_weight
 import joblib
 from pathlib import Path
 from datetime import datetime
 from loguru import logger
 
+import config.settings as cfg
 from core.models.feature_engine import get_feature_columns, compute_features, label_data
 
 MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "xgb_model.pkl"
 MODEL_PATH.parent.mkdir(exist_ok=True)
-MODEL_VERSION = "v4"
+MODEL_VERSION = "v5_binary_spot_aware"
 
 
 class XGBoostSignalModel:
@@ -28,6 +28,7 @@ class XGBoostSignalModel:
         self.feature_cols = get_feature_columns()
         self.le = LabelEncoder()
         self._version = None
+        self._binary_mode = False
 
     def train_if_stale(self, df: pd.DataFrame, max_age_hours: int = 24):
         needs_train = False
@@ -49,13 +50,23 @@ class XGBoostSignalModel:
                 logger.warning(f"[XGBoost] Auto-retrain failed: {e}")
 
     def train(self, df: pd.DataFrame) -> dict:
-        logger.info("[XGBoost] Training model...")
+        logger.info("[XGBoost] Training BINARY model (long-vs-short TP probability)...")
         df = compute_features(df)
         df = label_data(df)
-        labeled = df[df["label"] != 0].copy()
 
-        if len(labeled) < 60:
-            raise ValueError(f"Not enough labeled samples: {len(labeled)}. Need 60+.")
+        long_df = df[df["label"] == 1].copy()
+        short_df = df[df["label"] == -1].copy()
+
+        if len(long_df) < 20 or len(short_df) < 20:
+            raise ValueError(
+                f"Not enough labeled samples: {len(long_df)} long, {len(short_df)} short. "
+                f"Need 20+ each. Try more candles or lower rr in label_data()."
+            )
+
+        min_class = min(len(long_df), len(short_df))
+        long_df = long_df.sample(min_class, random_state=42)
+        short_df = short_df.sample(min_class, random_state=42)
+        labeled = pd.concat([long_df, short_df]).sort_index()
 
         available_cols = [c for c in self.feature_cols if c in labeled.columns]
         missing = set(self.feature_cols) - set(available_cols)
@@ -63,10 +74,9 @@ class XGBoostSignalModel:
             logger.warning(f"[XGBoost] Missing features: {missing}")
 
         X = labeled[available_cols].values
-        y = self.le.fit_transform(labeled["label"].values)
-        sample_weights = compute_sample_weight("balanced", y)
+        y = (labeled["label"].values == 1).astype(int)
 
-        n_splits = min(3, max(2, len(labeled) // 80))
+        n_splits = min(3, max(2, len(labeled) // 40))
         tscv = TimeSeriesSplit(n_splits=n_splits)
         best_score = -1.0
         best_model = None
@@ -74,37 +84,34 @@ class XGBoostSignalModel:
         for fold, (train_idx, val_idx) in enumerate(tscv.split(X)):
             X_tr, X_val = X[train_idx], X[val_idx]
             y_tr, y_val = y[train_idx], y[val_idx]
-            w_tr = sample_weights[train_idx]
 
             model = xgb.XGBClassifier(
-                n_estimators=400,
-                max_depth=5,
-                learning_rate=0.03,
+                n_estimators=300,
+                max_depth=4,
+                learning_rate=0.05,
                 subsample=0.8,
-                colsample_bytree=0.75,
-                min_child_weight=3,
-                gamma=0.1,
+                colsample_bytree=0.7,
+                min_child_weight=5,
+                gamma=0.2,
                 reg_alpha=0.1,
-                reg_lambda=1.0,
-                eval_metric="mlogloss",
+                reg_lambda=1.5,
+                eval_metric="logloss",
                 random_state=42,
                 n_jobs=-1,
             )
-            model.fit(X_tr, y_tr, sample_weight=w_tr, eval_set=[(X_val, y_val)], verbose=False)
-            y_pred = model.predict(X_val)
-            score = f1_score(y_val, y_pred, average="macro", zero_division=0)
-            logger.info(f"[XGBoost] Fold {fold + 1} macro-F1={score:.3f}")
+            model.fit(X_tr, y_tr, eval_set=[(X_val, y_val)], verbose=False)
+            score = f1_score(y_val, model.predict(X_val), average="binary", zero_division=0)
+            logger.info(f"[XGBoost] Fold {fold + 1} binary-F1={score:.3f} n={len(y_tr)}")
             if score > best_score:
                 best_score = score
                 best_model = model
 
         self.model = best_model
         self._version = MODEL_VERSION
-        y_pred_all = self.model.predict(X)
-        report = classification_report(y, y_pred_all, output_dict=True, zero_division=0)
-        logger.info(f"[XGBoost] Trained | best fold F1={best_score:.3f} | accuracy={report['accuracy']:.2%} | version={MODEL_VERSION}")
+        self._binary_mode = True
         self.save()
-        return report
+        logger.info(f"[XGBoost] Binary model trained | F1={best_score:.3f} | n={len(labeled)}")
+        return {"f1": best_score, "n_samples": len(labeled), "mode": "binary_spot_aware"}
 
     def predict(self, df: pd.DataFrame) -> dict:
         if self.model is None:
@@ -112,33 +119,46 @@ class XGBoostSignalModel:
         if self.model is None:
             return {"direction": 0, "confidence": 0.0, "probabilities": {}}
 
-        df = compute_features(df)
-        if df.empty:
+        df_feat = compute_features(df) if "ema_stack" not in df.columns else df
+        if df_feat.empty:
             return {"direction": 0, "confidence": 0.0, "probabilities": {}}
 
-        available_cols = [c for c in self.feature_cols if c in df.columns]
-        X = df[available_cols].iloc[-1:].values
+        available_cols = [c for c in self.feature_cols if c in df_feat.columns]
+        X = df_feat[available_cols].iloc[-1:].values
         try:
             probs = self.model.predict_proba(X)[0]
-            classes = self.le.classes_
-            prob_dict = {int(c): float(p) for c, p in zip(classes, probs)}
-            best_class = classes[np.argmax(probs)]
-            confidence = float(np.max(probs))
-            return {"direction": int(best_class), "confidence": confidence, "probabilities": prob_dict}
+            short_prob = float(probs[0])
+            long_prob = float(probs[1])
+            direction = 1 if long_prob >= short_prob else -1
+            confidence = max(long_prob, short_prob)
+            return {
+                "direction": direction,
+                "confidence": confidence,
+                "probabilities": {"short": short_prob, "long": long_prob},
+            }
         except Exception as e:
             logger.warning(f"[XGBoost] Predict failed: {e}")
             return {"direction": 0, "confidence": 0.0, "probabilities": {}}
 
     def get_entry_score(self, df: pd.DataFrame) -> float:
         result = self.predict(df)
-        direction = result["direction"]
-        confidence = result["confidence"]
-        if direction == 0 or confidence < 0.50:
-            return 0.0
-        return float(direction) * confidence
+        probs = result.get("probabilities", {}) or {}
+        long_prob = float(probs.get("long", 0.0))
+        short_prob = float(probs.get("short", 0.0))
+        market = str(getattr(cfg, "MARKET_TYPE", "futures")).lower()
+
+        if long_prob > 0.60:
+            return long_prob
+
+        if short_prob > 0.60:
+            if market == "spot":
+                return -0.35
+            return -short_prob
+
+        return 0.0
 
     def save(self):
-        joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION}, MODEL_PATH)
+        joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION, "binary_mode": self._binary_mode}, MODEL_PATH)
         logger.info(f"[XGBoost] Model saved ({MODEL_VERSION})")
 
     def load(self):
@@ -146,15 +166,18 @@ class XGBoostSignalModel:
             try:
                 data = joblib.load(MODEL_PATH)
                 self.model = data["model"]
-                self.le = data["le"]
+                self.le = data.get("le", self.le)
                 self._version = data.get("version", "unknown")
+                self._binary_mode = bool(data.get("binary_mode", False))
                 if self._version != MODEL_VERSION:
                     logger.warning(f"[XGBoost] Version mismatch: {self._version} != {MODEL_VERSION}")
                     self.model = None
+                    self._binary_mode = False
                 else:
-                    logger.info(f"[XGBoost] Model loaded (version={self._version})")
+                    logger.info(f"[XGBoost] Model loaded (version={self._version}, binary={self._binary_mode})")
             except Exception as e:
                 logger.warning(f"[XGBoost] Load failed: {e}")
                 self.model = None
+                self._binary_mode = False
         else:
             logger.warning("[XGBoost] No saved model found. Train first.")
