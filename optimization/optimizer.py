@@ -23,32 +23,40 @@ _OPT_KEYS = [
     "MAX_RISK_PER_TRADE", "MAX_TRADES_PER_DAY",
     "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
     "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
-    "ATR_SL_MULT", "ATR_TP_MULT", "MAX_TRADE_DURATION_BARS",
+    "ATR_SL_MULT", "ATR_TP1_MULT", "ATR_TP2_MULT",
+    "TP1_EXIT_PCT", "TP2_EXIT_PCT", "MAX_TRADE_DURATION_BARS",
     "MIN_ADX", "MIN_SESSION_MULT",
+    "HTF_BLOCK_THRESHOLD", "REGIME_BLOCK_THRESHOLD",
 ]
 
 SEED_PARAMS = [
-    dict(FUSION_THRESHOLD=0.20, STOP_LOSS_PCT=0.008, TAKE_PROFIT_PCT=0.028,
-         ATR_SL_MULT=1.5, ATR_TP_MULT=3.5, MAX_TRADE_DURATION_BARS=12,
-         MIN_ADX=20, MIN_SESSION_MULT=0.70,
-         EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=7,
-         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=5,
-         WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.20,
-         WEIGHT_LIQUIDATION=0.20, WEIGHT_ENTRY=0.30),
-    dict(FUSION_THRESHOLD=0.25, STOP_LOSS_PCT=0.010, TAKE_PROFIT_PCT=0.032,
-         ATR_SL_MULT=1.2, ATR_TP_MULT=2.8, MAX_TRADE_DURATION_BARS=16,
-         MIN_ADX=18, MIN_SESSION_MULT=0.80,
+    dict(FUSION_THRESHOLD=0.18, STOP_LOSS_PCT=0.008, TAKE_PROFIT_PCT=0.028,
+         ATR_SL_MULT=1.5, ATR_TP1_MULT=1.5, ATR_TP2_MULT=3.5,
+         TP1_EXIT_PCT=0.35, TP2_EXIT_PCT=0.40, MAX_TRADE_DURATION_BARS=16,
+         HTF_BLOCK_THRESHOLD=0.30, REGIME_BLOCK_THRESHOLD=0.25,
+         MIN_ADX=18, MIN_SESSION_MULT=0.75,
+         EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=9,
+         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=8,
+         WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.30),
+    dict(FUSION_THRESHOLD=0.16, STOP_LOSS_PCT=0.007, TAKE_PROFIT_PCT=0.032,
+         ATR_SL_MULT=1.2, ATR_TP1_MULT=2.0, ATR_TP2_MULT=4.0,
+         TP1_EXIT_PCT=0.30, TP2_EXIT_PCT=0.45, MAX_TRADE_DURATION_BARS=20,
+         HTF_BLOCK_THRESHOLD=0.25, REGIME_BLOCK_THRESHOLD=0.20,
+         MIN_ADX=16, MIN_SESSION_MULT=0.75,
          EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.04, MAX_TRADES_PER_DAY=4,
-         WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.25,
-         WEIGHT_LIQUIDATION=0.15, WEIGHT_ENTRY=0.35),
-    dict(FUSION_THRESHOLD=0.18, STOP_LOSS_PCT=0.007, TAKE_PROFIT_PCT=0.024,
-         ATR_SL_MULT=1.8, ATR_TP_MULT=4.0, MAX_TRADE_DURATION_BARS=10,
-         MIN_ADX=22, MIN_SESSION_MULT=0.70,
-         EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=6,
-         MAX_RISK_PER_TRADE=0.06, MAX_TRADES_PER_DAY=6,
-         WEIGHT_REGIME=0.25, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.20,
-         WEIGHT_LIQUIDATION=0.20, WEIGHT_ENTRY=0.25),
+         MAX_RISK_PER_TRADE=0.045, MAX_TRADES_PER_DAY=8,
+         WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35),
+    dict(FUSION_THRESHOLD=0.20, STOP_LOSS_PCT=0.009, TAKE_PROFIT_PCT=0.024,
+         ATR_SL_MULT=1.8, ATR_TP1_MULT=1.2, ATR_TP2_MULT=3.0,
+         TP1_EXIT_PCT=0.40, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=12,
+         HTF_BLOCK_THRESHOLD=0.35, REGIME_BLOCK_THRESHOLD=0.30,
+         MIN_ADX=20, MIN_SESSION_MULT=0.80,
+         EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=7,
+         MAX_RISK_PER_TRADE=0.055, MAX_TRADES_PER_DAY=6,
+         WEIGHT_REGIME=0.25, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.15,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.25),
 ]
 
 
@@ -140,17 +148,24 @@ class PrometheusOptimizer:
     def _suggest_params(self, trial: optuna.Trial) -> dict:
         w1 = trial.suggest_float("WEIGHT_REGIME", 0.05, 0.35)
         w2 = trial.suggest_float("WEIGHT_SENTIMENT", 0.05, 0.25)
-        w3 = trial.suggest_float("WEIGHT_WHALE", 0.05, 0.35)
+        w3 = trial.suggest_float("WEIGHT_WHALE", 0.05, 0.30)
         w4 = trial.suggest_float("WEIGHT_LIQUIDATION", 0.05, 0.35)
         total = w1 + w2 + w3 + w4
         w5 = max(0.10, round(1.0 - total, 3))
         total2 = w1 + w2 + w3 + w4 + w5
         w1, w2, w3, w4, w5 = [round(w / total2, 3) for w in [w1, w2, w3, w4, w5]]
+
         ema_fast = trial.suggest_int("EMA_FAST", 8, 25)
         ema_mid = trial.suggest_int("EMA_MID", ema_fast + 10, 80)
         ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 50, 250, step=10)
+
         atr_sl = trial.suggest_float("ATR_SL_MULT", 0.8, 2.5, step=0.1)
-        atr_tp = trial.suggest_float("ATR_TP_MULT", max(1.8, atr_sl * 1.8), 5.5, step=0.1)
+        atr_tp1 = trial.suggest_float("ATR_TP1_MULT", 1.0, 3.0, step=0.25)
+        atr_tp2 = trial.suggest_float("ATR_TP2_MULT", max(atr_tp1 * 1.8, 2.5), 6.0, step=0.25)
+        tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.25, 0.50, step=0.05)
+        tp2_exit = trial.suggest_float("TP2_EXIT_PCT", 0.30, 0.55, step=0.05)
+        max_duration = trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 24)
+
         return {
             "WEIGHT_REGIME": w1,
             "WEIGHT_SENTIMENT": w2,
@@ -160,17 +175,23 @@ class PrometheusOptimizer:
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.13, 0.42, step=0.01),
             "STOP_LOSS_PCT": trial.suggest_float("STOP_LOSS_PCT", 0.004, 0.018, step=0.001),
             "TAKE_PROFIT_PCT": trial.suggest_float("TAKE_PROFIT_PCT", 0.010, 0.055, step=0.001),
+            "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.2, 2.5, step=0.1),
             "ATR_SL_MULT": atr_sl,
-            "ATR_TP_MULT": atr_tp,
-            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 6, 24),
-            "MIN_ADX": trial.suggest_int("MIN_ADX", 15, 28),
+            "ATR_TP1_MULT": atr_tp1,
+            "ATR_TP2_MULT": atr_tp2,
+            "TP1_EXIT_PCT": tp1_exit,
+            "TP2_EXIT_PCT": tp2_exit,
+            "MAX_TRADE_DURATION_BARS": max_duration,
+            "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.20, 0.45, step=0.05),
+            "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
+            "MIN_ADX": trial.suggest_int("MIN_ADX", 14, 28),
             "MIN_SESSION_MULT": trial.suggest_float("MIN_SESSION_MULT", 0.70, 1.00, step=0.05),
             "EMA_FAST": ema_fast,
             "EMA_MID": ema_mid,
             "EMA_SLOW": ema_slow,
             "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 4, 18),
             "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.02, 0.08, step=0.005),
-            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 2, 8),
+            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 2, 10),
         }
 
     def _inject_params(self, params: dict):
@@ -184,24 +205,35 @@ class PrometheusOptimizer:
         ret = float(results.get("total_return", 0))
         dd = float(results.get("max_drawdown", 1))
         n = int(results.get("total_trades", 0))
-        trade_penalty = min(1.0, max(0.3, n / 40))
-        if dd >= 0.20:
+
+        trade_penalty = min(1.0, max(0.2, n / 30))
+
+        if dd >= 0.25:
             return -1.0 - dd
+
         if self.metric == "win_rate":
             return wr * trade_penalty * (1.0 - dd)
         if self.metric == "profit_factor":
-            return min(pf, 6.0) / 6.0 * trade_penalty * (1.0 - dd)
+            return min(pf, 8.0) / 8.0 * trade_penalty * (1.0 - dd)
         if self.metric == "sharpe":
             return max(sh, -3.0) / 3.0 * trade_penalty * (1.0 - dd)
         if self.metric == "total_return":
             return max(ret, -1.0) * trade_penalty * (1.0 - dd)
+
         wr_score = wr
-        pf_score = min(pf, 4.0) / 4.0
-        sh_score = max(min(sh, 3.0), -1.0) / 3.0
-        ret_score = max(min(ret, 1.0), -0.5)
-        dd_score = max(0.0, 1.0 - (dd / 0.20))
-        score = dd_score * 0.35 + wr_score * 0.20 + pf_score * 0.20 + ret_score * 0.15 + sh_score * 0.10
-        return score * trade_penalty
+        pf_score = min(pf, 6.0) / 6.0
+        sh_score = max(min(sh, 4.0), -1.0) / 4.0
+        ret_score = max(min(ret, 2.0), -0.5) / 2.0
+        dd_score = max(0.0, 1.0 - (dd / 0.25))
+
+        composite = (
+            dd_score * 0.25
+            + wr_score * 0.15
+            + pf_score * 0.25
+            + ret_score * 0.25
+            + sh_score * 0.10
+        )
+        return composite * trade_penalty
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
