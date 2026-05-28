@@ -21,6 +21,7 @@ class OrderManager:
         self.paper = paper or cfg.TRADING_MODE == "paper"
         self.risk = RiskManager()
         self.exit_mgr = AdvancedExitManager()
+        self.fusion = None
         self.open_trades = {}
         self._trade_counter = 0
         self._load_trades()
@@ -169,6 +170,8 @@ class OrderManager:
         trade["size_remaining"] = max(0.0, float(trade.get("size_remaining", trade["size"])) - size)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
         self.risk.record_trade(pnl, {**trade["signal"], "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion})
+        if self.fusion is not None:
+            self.fusion.update_live_capital(self.risk.capital)
         logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | pnl={pnl:+.4f}")
 
     async def check_paper_exits(self, current_price: float, high: float = None, low: float = None):
