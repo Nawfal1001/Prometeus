@@ -110,14 +110,23 @@ class FusionEngine:
         fusion_score = float(np.clip(fusion_score, -1.0, 1.0))
         direction = 1 if fusion_score > 0 else -1
         abs_score = abs(fusion_score) * session_mult
-        if htf_bias == 1 and direction == -1 and abs(entry_score) < 0.55:
+
+        htf_block_threshold = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
+        if htf_bias == 1 and direction == -1 and abs(entry_score) < htf_block_threshold:
+            logger.info(f"[Fusion] 4H BULL bias blocks weak short (entry={entry_score:.3f})")
             return self._no_trade("htf_bias_blocks_short")
-        if htf_bias == -1 and direction == 1 and abs(entry_score) < 0.55:
+        if htf_bias == -1 and direction == 1 and abs(entry_score) < htf_block_threshold:
+            logger.info(f"[Fusion] 4H BEAR bias blocks weak long (entry={entry_score:.3f})")
             return self._no_trade("htf_bias_blocks_long")
-        if regime_bias == 1 and direction == -1 and abs(entry_score) < 0.55:
+
+        regime_block_threshold = float(getattr(cfg, "REGIME_BLOCK_THRESHOLD", 0.25))
+        if regime_bias == 1 and direction == -1 and abs(entry_score) < regime_block_threshold:
+            logger.info("[Fusion] BULL regime blocks weak short")
             return self._no_trade("regime_filter")
-        if regime_bias == -1 and direction == 1 and abs(entry_score) < 0.55:
+        if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_block_threshold:
+            logger.info("[Fusion] BEAR regime blocks weak long")
             return self._no_trade("regime_filter")
+
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
         if abs_score < effective_threshold:
             return self._no_trade("below_threshold")
