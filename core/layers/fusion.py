@@ -19,6 +19,143 @@ class FusionEngine:
         }
         self.last_result = {}
 
+    def generate_signal(self, df) -> dict:
+        """
+        Scanner/backtest-compatible signal generator.
+
+        The live fuse() method expects external layer scores such as whale,
+        sentiment, liquidation, and regime. The multi-symbol scanner only has
+        OHLCV-derived features, so this method builds robust proxy scores from
+        the dataframe columns produced by core.models.feature_engine.compute_features().
+        """
+        if df is None or len(df) == 0:
+            return self._no_trade("empty_dataframe")
+
+        clean = df.replace([np.inf, -np.inf], np.nan).dropna()
+        if clean.empty:
+            return self._no_trade("no_valid_feature_rows")
+
+        last = clean.iloc[-1]
+        prev = clean.iloc[-2] if len(clean) > 1 else last
+
+        def val(name: str, default: float = 0.0) -> float:
+            try:
+                x = last.get(name, default)
+                if x is None or np.isnan(float(x)):
+                    return default
+                return float(x)
+            except Exception:
+                return default
+
+        current_price = val("close", 0.0)
+        ema_stack = val("ema_stack", 0.0)
+        adx_strength = val("adx_trend_strength", 0.0)
+        adx_direction = val("adx_direction", 0.0)
+        market_structure = val("market_structure", 0.0)
+        gap_signal = val("gap_signal", 0.0)
+        candle_pattern = val("candle_pattern", 0.0)
+
+        rsi_norm = val("rsi_norm", 0.0)
+        stoch_cross = val("stoch_cross", 0.0)
+        macd_signal = val("macd_signal", 0.0)
+        macd_accel = val("macd_accel", 0.0)
+        cci_norm = val("cci_norm", 0.0)
+        ret_1 = val("ret_1", 0.0)
+        ret_3 = val("ret_3", 0.0)
+        ret_6 = val("ret_6", 0.0)
+
+        vol_ratio = val("vol_ratio", 1.0)
+        vol_delta = val("vol_delta", 0.0)
+        obv_norm = val("obv_norm", 0.0)
+        atr_norm = val("atr_norm", 0.0)
+        vol_regime = val("vol_regime", 1.0)
+        vol_zscore = val("vol_zscore", 0.0)
+
+        # Entry score: fast directional decision from momentum, trend, and candle structure.
+        momentum_score = np.clip(
+            0.24 * rsi_norm
+            + 0.14 * stoch_cross
+            + 0.18 * macd_signal
+            + 0.12 * macd_accel
+            + 0.12 * cci_norm
+            + 0.10 * np.clip(ret_1 * 100, -1, 1)
+            + 0.06 * np.clip(ret_3 * 50, -1, 1)
+            + 0.04 * np.clip(ret_6 * 30, -1, 1),
+            -1,
+            1,
+        )
+        trend_score = np.clip(
+            0.40 * ema_stack
+            + 0.25 * adx_direction * max(adx_strength, 0)
+            + 0.15 * market_structure
+            + 0.12 * gap_signal
+            + 0.08 * candle_pattern,
+            -1,
+            1,
+        )
+        volume_score = np.clip(
+            0.45 * np.tanh(vol_delta / 3)
+            + 0.35 * np.tanh(obv_norm / 2)
+            + 0.20 * np.clip(vol_ratio - 1.0, -1, 1),
+            -1,
+            1,
+        )
+        entry_score = float(np.clip(0.50 * momentum_score + 0.35 * trend_score + 0.15 * volume_score, -1, 1))
+
+        # Proxies for missing live layers.
+        regime_score = float(np.clip(0.70 * trend_score + 0.30 * np.sign(entry_score) * max(adx_strength, 0), -1, 1))
+        sentiment_score = float(np.clip(0.55 * momentum_score + 0.45 * gap_signal, -1, 1))
+        whale_score = float(np.clip(volume_score, -1, 1))
+
+        # Liquidation proxy: volatility/volume expansion in the same direction as entry.
+        liquidation_pressure = np.clip((vol_ratio - 1.0) / 2.0, 0, 1) * np.clip(abs(vol_delta) / 3.0, 0, 1)
+        liquidation_score = float(np.sign(entry_score) * liquidation_pressure)
+
+        regime_bias = 1 if regime_score > 0.10 else -1 if regime_score < -0.10 else 0
+        htf_bias = regime_bias
+
+        # Avoid scanning during extreme volatility spikes, but do not kill normal volatility.
+        threshold_mult = 1.0
+        if vol_zscore > 2.5:
+            threshold_mult = 1.35
+        elif vol_regime < 0.35:
+            threshold_mult = 1.20
+
+        result = self.fuse(
+            regime_score=regime_score,
+            sentiment_score=sentiment_score,
+            whale_score=whale_score,
+            liquidation_score=liquidation_score,
+            entry_score=entry_score,
+            regime_bias=regime_bias,
+            current_price=current_price,
+            liquidation_target=None,
+            htf_bias=htf_bias,
+            session_mult=1.0,
+            threshold_mult=threshold_mult,
+        )
+
+        # Keep downstream scanner/selector code compatible with both naming styles.
+        rr_ratio = result.get("rr_ratio")
+        if rr_ratio is not None:
+            result["rr"] = rr_ratio
+            result["risk_reward"] = rr_ratio
+        result["score"] = result.get("fusion_score", 0.0)
+        result["scanner_features"] = {
+            "entry_score": round(entry_score, 4),
+            "regime_score": round(regime_score, 4),
+            "sentiment_score": round(sentiment_score, 4),
+            "whale_score": round(whale_score, 4),
+            "liquidation_score": round(liquidation_score, 4),
+            "momentum_score": round(float(momentum_score), 4),
+            "trend_score": round(float(trend_score), 4),
+            "volume_score": round(float(volume_score), 4),
+            "vol_regime": round(float(vol_regime), 4),
+            "vol_zscore": round(float(vol_zscore), 4),
+        }
+        self.last_result = result
+        return result
+
     def fuse(
         self,
         regime_score: float,
@@ -117,8 +254,11 @@ class FusionEngine:
             "direction": 0,
             "side": None,
             "fusion_score": 0.0,
+            "score": 0.0,
             "confidence": 0.0,
             "position_size": 0.0,
+            "rr": None,
+            "risk_reward": None,
             "reason": reason,
         }
 
