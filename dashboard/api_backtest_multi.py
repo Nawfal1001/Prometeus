@@ -37,7 +37,7 @@ async def run_multi_backtest(request: Request):
                         rows.append({'symbol': symbol, 'error': 'No data returned'})
                         continue
                     data_by_symbol[symbol] = df
-                    if run_mode != 'auto_symbol':
+                    if run_mode not in ('auto_symbol', 'compete', 'competition'):
                         result = BacktestEngine().run(df, mode=mode)
                         result['symbol'] = symbol
                         rows.append(result)
@@ -53,30 +53,25 @@ async def run_multi_backtest(request: Request):
 
         if run_mode == 'auto_symbol':
             from backtest.auto_symbol_engine import AutoSymbolBacktestConfig, AutoSymbolBacktestEngine
-            cfg_obj = AutoSymbolBacktestConfig(
-                symbols=symbols,
-                timeframe=timeframe,
-                limit=limit,
-                scan_step_bars=int(body.get('scan_step_bars', 10)),
-                lookback_bars=int(body.get('lookback_bars', 300)),
-                mode=mode,
-                min_score=float(body.get('min_score', 0.0)),
-                min_rr=float(body.get('min_rr', 0.0)),
-            )
+            cfg_obj = AutoSymbolBacktestConfig(symbols=symbols, timeframe=timeframe, limit=limit, scan_step_bars=int(body.get('scan_step_bars', 10)), lookback_bars=int(body.get('lookback_bars', 300)), mode=mode, min_score=float(body.get('min_score', 0.0)), min_rr=float(body.get('min_rr', 0.0)))
             result = AutoSymbolBacktestEngine(data_by_symbol=data_by_symbol, config=cfg_obj).run()
             result['timeframe'] = timeframe
             result['limit'] = limit
             return result
 
+        if run_mode in ('compete', 'competition'):
+            from backtest.multi_symbol_engine import MultiSymbolBacktestEngine
+            result = MultiSymbolBacktestEngine().run(data_by_symbol, mode=mode)
+            result['timeframe'] = timeframe
+            result['limit'] = limit
+            result['symbols_requested'] = symbols
+            result['run_mode'] = 'competing_symbols'
+            return result
+
         def score(row):
             if row.get('error'):
                 return -999999
-            return (
-                float(row.get('profit_factor', 0)) * 100
-                + float(row.get('win_rate', 0)) * 100
-                + float(row.get('total_return', 0)) * 50
-                - abs(float(row.get('max_drawdown', 0))) * 50
-            )
+            return float(row.get('profit_factor', 0)) * 100 + float(row.get('win_rate', 0)) * 100 + float(row.get('total_return', 0)) * 50 - abs(float(row.get('max_drawdown', 0))) * 50
 
         ranked = sorted(rows, key=score, reverse=True)
         return {'mode': 'multi_backtest', 'timeframe': timeframe, 'limit': limit, 'symbols': ranked, 'best': ranked[0] if ranked else None}
