@@ -20,6 +20,9 @@ class RegimeDetector:
         self.fear_greed = 50
         self.funding_rate = 0.0
         self._chaos_until = 0.0
+        self._fg_cache = 50
+        self._fg_last_fetch = 0.0
+        self._fg_ttl = 3600
 
     def detect(self, df: pd.DataFrame, funding_rate: float = 0.0) -> dict:
         self.funding_rate = funding_rate
@@ -49,16 +52,16 @@ class RegimeDetector:
             ):
                 self.current_regime = "CHAOS"
                 self._chaos_until = now + 4 * 30 * 60
-                logger.warning(f"[Regime] CHAOS | vol={recent_vol:.3f} baseline={baseline_vol:.3f} cooldown=120min")
+                logger.warning(f"[Regime] CHAOS | vol={recent_vol:.3f}")
                 return {
                     "regime": "CHAOS",
                     "score": 0.0,
                     "bias": None,
-                    "fear_greed": self.fear_greed,
+                    "fear_greed": self._fg_cache,
                     "funding_rate": funding_rate,
                 }
 
-        fg = self._get_fear_greed()
+        fg = self._get_fear_greed_cached()
         self.fear_greed = fg
         if fg >= cfg.FEAR_GREED_BULL_THRESHOLD:
             scores.append(1)
@@ -99,11 +102,22 @@ class RegimeDetector:
     def get_layer_score(self) -> float:
         return self.regime_score
 
-    def _get_fear_greed(self) -> int:
+    def _get_fear_greed_cached(self) -> int:
+        now = time.time()
+        if now - self._fg_last_fetch < self._fg_ttl:
+            return self._fg_cache
+        fresh = self._fetch_fear_greed()
+        self._fg_cache = fresh
+        self._fg_last_fetch = now
+        return fresh
+
+    def _fetch_fear_greed(self) -> int:
         try:
             r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=5)
             data = r.json()
-            return int(data["data"][0]["value"])
+            val = int(data["data"][0]["value"])
+            logger.debug(f"[Regime] F&G refreshed: {val}")
+            return val
         except Exception as e:
             logger.warning(f"[Regime] Fear & Greed fetch failed: {e}")
-            return 50
+            return self._fg_cache
