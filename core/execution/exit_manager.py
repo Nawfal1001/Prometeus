@@ -23,16 +23,37 @@ class AdvancedExitManager:
     """Shared SL/TP/trailing logic for paper/live/backtest."""
 
     def __init__(self):
-        self.sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.5))
-        self.tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.5))
-        self.tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 3.5))
-        self.tp1_exit_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.35))
-        self.tp2_exit_pct = float(getattr(cfg, "TP2_EXIT_PCT", 0.40))
-        self.lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
-        self.max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16))
-        self.breakeven_buffer = float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0005))
-        self.min_atr_norm = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
-        self.max_vol_zscore = float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5))
+        pass
+
+    @property
+    def sl_mult(self): return float(getattr(cfg, "ATR_SL_MULT", 1.5))
+
+    @property
+    def tp1_mult(self): return float(getattr(cfg, "ATR_TP1_MULT", 1.5))
+
+    @property
+    def tp2_mult(self): return float(getattr(cfg, "ATR_TP2_MULT", 3.5))
+
+    @property
+    def tp1_exit_pct(self): return float(getattr(cfg, "TP1_EXIT_PCT", 0.35))
+
+    @property
+    def tp2_exit_pct(self): return float(getattr(cfg, "TP2_EXIT_PCT", 0.40))
+
+    @property
+    def lookback(self): return int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
+
+    @property
+    def max_duration(self): return int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16))
+
+    @property
+    def breakeven_buffer(self): return float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0005))
+
+    @property
+    def min_atr_norm(self): return float(getattr(cfg, "MIN_ATR_NORM", 0.001))
+
+    @property
+    def max_vol_zscore(self): return float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5))
 
     def entry_allowed(self, atr_norm: float, vol_zscore: float = 0.0) -> tuple[bool, str]:
         if vol_zscore > self.max_vol_zscore:
