@@ -26,8 +26,11 @@ class BacktestEngine:
             return self.walk_forward(df)
         return self._simple_split(df)
 
-    def walk_forward(self, df: pd.DataFrame, train_bars: int = 700, test_bars: int = 200, step_bars: int = 100) -> dict:
-        df = self._prepare(df)
+    def walk_forward(self, df: pd.DataFrame, train_bars: int = 700, test_bars: int = 200, step_bars: int = 200) -> dict:
+        if "ema_stack" not in df.columns:
+            df = self._prepare(df)
+        else:
+            df = df.copy()
         usable = len(df)
         if usable < test_bars:
             return {"error": f"Not enough usable candles after indicators: {usable}. Need at least {test_bars}."}
@@ -59,9 +62,12 @@ class BacktestEngine:
         return result
 
     def _simple_split(self, df: pd.DataFrame, train_ratio: float = 0.7) -> dict:
-        df = self._prepare(df)
+        if "ema_stack" not in df.columns:
+            df = self._prepare(df)
+        else:
+            df = df.copy()
         if len(df) < 50:
-            return {"error": f"Not enough usable candles after indicators: {len(df)}."}
+            return {"error": f"Not enough usable candles: {len(df)}."}
         split = int(len(df) * train_ratio)
         test_df = df.iloc[split:] if split < len(df) - 20 else df
         trades, _ = self._simulate_strategy(test_df, start_bar=split)
