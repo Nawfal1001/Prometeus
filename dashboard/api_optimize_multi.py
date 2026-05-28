@@ -10,6 +10,7 @@ from loguru import logger
 import config.settings as cfg
 from optimization.optimizer import PrometheusOptimizer
 from optimization.walkforward_optimizer import WalkForwardOptimizer
+from core.cache.market_cache import get_cached_ohlcv
 
 router = APIRouter()
 
@@ -22,15 +23,21 @@ async def run_multi_optimization(request: Request):
         if isinstance(symbols, str):
             symbols = [s.strip() for s in symbols.split(',') if s.strip()]
 
+        max_symbols = int(getattr(cfg, 'MAX_UI_SYMBOLS', 7))
+        max_candles = int(getattr(cfg, 'MAX_UI_CANDLES', 2000))
+        max_trials = int(getattr(cfg, 'MAX_OPTUNA_TRIALS_UI', 30))
+        max_timeout = int(getattr(cfg, 'MAX_OPTUNA_TIMEOUT_UI', 600))
+
+        symbols = symbols[:max_symbols]
         timeframe = body.get('timeframe', cfg.TIMEFRAME)
-        candles = int(body.get('candles', 3000))
+        candles = min(int(body.get('candles', 1500)), max_candles)
         metric = body.get('metric', cfg.OPTUNA_METRIC)
-        trials = int(body.get('trials', 10))
-        timeout = int(body.get('timeout', 300))
+        trials = min(int(body.get('trials', 10)), max_trials)
+        timeout = min(int(body.get('timeout', 300)), max_timeout)
         wf_opt = bool(body.get('wf_opt', False))
-        train_bars = int(body.get('train_bars', 1200))
-        test_bars = int(body.get('test_bars', 300))
-        step_bars = int(body.get('step_bars', 300))
+        train_bars = min(int(body.get('train_bars', 800)), candles)
+        test_bars = min(int(body.get('test_bars', 200)), candles)
+        step_bars = min(int(body.get('step_bars', 200)), candles)
 
         from core.exchange.factory import get_exchange
         exchange = get_exchange()
@@ -40,9 +47,9 @@ async def run_multi_optimization(request: Request):
         try:
             for symbol in symbols:
                 try:
-                    df = await exchange.get_ohlcv(symbol, timeframe, limit=candles)
+                    df = await get_cached_ohlcv(exchange, symbol, timeframe, candles)
                     if df is None or df.empty:
-                        rows.append({'symbol': symbol, 'error': 'No data returned'})
+                        rows.append({'symbol': symbol, 'error': 'No data returned', 'rank_score': -999})
                         continue
                     if wf_opt:
                         runner = WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
@@ -56,6 +63,7 @@ async def run_multi_optimization(request: Request):
                         result['rank_score'] = float(result.get('best_value', -999))
                     rows.append(result)
                 except Exception as e:
+                    logger.exception(f'[MultiOptimizeAPI] {symbol} failed')
                     rows.append({'symbol': symbol, 'error': str(e), 'rank_score': -999})
         finally:
             closer = getattr(exchange, 'close', None)
@@ -65,7 +73,15 @@ async def run_multi_optimization(request: Request):
                     await maybe
 
         ranked = sorted(rows, key=lambda r: float(r.get('rank_score', -999)), reverse=True)
-        return {'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization', 'symbols': ranked, 'best': ranked[0] if ranked else None}
+        return {
+            'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization',
+            'timeframe': timeframe,
+            'candles': candles,
+            'trials': trials,
+            'timeout': timeout,
+            'symbols': ranked,
+            'best': ranked[0] if ranked else None,
+        }
     except Exception as e:
         logger.exception('[MultiOptimizeAPI] failed')
         return JSONResponse({'error': str(e)}, status_code=500)
