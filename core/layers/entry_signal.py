@@ -46,16 +46,9 @@ class EntrySignal:
         scores.append(vwap_sig * 0.9)
 
         rsi = float(row.get("rsi", 50))
-        if rsi < 35:
-            rsi_sig = 1.0
-        elif rsi > 65:
-            rsi_sig = -1.0
-        elif rsi < 45:
-            rsi_sig = 0.5
-        elif rsi > 55:
-            rsi_sig = -0.5
-        else:
-            rsi_sig = 0.0
+        rsi_sig = float(row.get("rsi_signal", 0))
+        if rsi_sig == 0:
+            rsi_sig = 1.0 if rsi < 30 else (-1.0 if rsi > 70 else 0.6 if rsi < 40 else (-0.6 if rsi > 60 else 0.2 if rsi < 48 else (-0.2 if rsi > 52 else 0.0)))
         signals["rsi"] = rsi_sig
         scores.append(rsi_sig * 0.8)
 
@@ -65,7 +58,12 @@ class EntrySignal:
 
         vol_ratio = float(row.get("vol_ratio", 1.0))
         vol_delta = float(row.get("vol_delta", 0))
-        vol_sig = float(np.sign(vol_delta)) if vol_ratio > 1.05 else 0
+        if vol_ratio > 2.0:
+            vol_sig = float(np.sign(vol_delta)) * 1.0
+        elif vol_ratio > 1.5:
+            vol_sig = float(np.sign(vol_delta)) * 0.6
+        else:
+            vol_sig = 0.0
         signals["volume"] = vol_sig
         scores.append(vol_sig * 0.5)
 
@@ -110,7 +108,8 @@ class EntrySignal:
             signals["ml_model"] = 0
 
         weight_sum = 1.2 + 0.9 + 0.8 + 0.6 + 0.5 + 0.7 + 0.7 + 0.5 + 0.6 + 0.4 + 0.5 + 0.3 + 1.0
-        avg = float(np.sum(scores) / max(1e-9, weight_sum))
+        theoretical_max = weight_sum
+        avg = float(np.clip(np.sum(scores) / max(1e-9, theoretical_max), -1.0, 1.0))
 
         vol_regime = float(row.get("vol_regime", 1.0))
         avg *= vol_regime
@@ -120,19 +119,9 @@ class EntrySignal:
 
         confirmed = sum(1 for s in signals.values() if isinstance(s, (int, float)) and abs(s) > 0.1)
 
-        logger.info(
-            f"[Entry] score={self.last_score:.3f} | confirmed={confirmed} | adx={adx_strength:.2f} | vol_regime={vol_regime:.2f} | signal={self.last_signal}"
-        )
+        logger.info(f"[Entry] score={self.last_score:.3f} | confirmed={confirmed} | adx={adx_strength:.2f} | vol_regime={vol_regime:.2f} | signal={self.last_signal}")
 
-        return {
-            "layer_score": self.last_score,
-            "signals": signals,
-            "confirmed": confirmed,
-            "direction": self.last_signal,
-            "rsi": rsi,
-            "vol_ratio": round(vol_ratio, 2),
-            "adx": round(float(row.get("adx", 0)), 1),
-        }
+        return {"layer_score": self.last_score, "signals": signals, "confirmed": confirmed, "direction": self.last_signal, "rsi": rsi, "vol_ratio": round(vol_ratio, 2), "adx": round(float(row.get("adx", 0)), 1)}
 
     def get_layer_score(self) -> float:
         return self.last_score
