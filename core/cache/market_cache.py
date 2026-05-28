@@ -13,14 +13,6 @@ from loguru import logger
 
 
 class TTLDataFrameCache:
-    """Small in-memory LRU + TTL cache for OHLCV and feature data.
-
-    This is intentionally process-local and conservative for Render:
-    - avoids repeated exchange downloads during scanner/backtest bursts;
-    - avoids keeping unlimited DataFrames in RAM;
-    - returns copies so callers cannot mutate cached frames.
-    """
-
     def __init__(self, ttl_seconds: int = 180, max_items: int = 64):
         self.ttl_seconds = int(ttl_seconds)
         self.max_items = int(max_items)
@@ -58,6 +50,31 @@ OHLCV_CACHE = TTLDataFrameCache(ttl_seconds=180, max_items=48)
 FEATURE_CACHE = TTLDataFrameCache(ttl_seconds=180, max_items=48)
 
 
+def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy(deep=False)
+    rename_map = {
+        "timestamp": "date",
+        "datetime": "date",
+        "time": "date",
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Volume": "volume",
+    }
+    out = out.rename(columns={k: v for k, v in rename_map.items() if k in out.columns})
+    needed = ["open", "high", "low", "close", "volume"]
+    for col in needed:
+        if col not in out.columns:
+            logger.warning(f"[MarketCache] missing OHLCV column: {col}; columns={list(out.columns)}")
+            return pd.DataFrame()
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=needed)
+    return out
+
+
 def ohlcv_key(symbol: str, timeframe: str, limit: int) -> str:
     return f"ohlcv:{symbol}:{timeframe}:{int(limit)}"
 
@@ -77,12 +94,14 @@ async def get_cached_ohlcv(exchange, symbol: str, timeframe: str, limit: int) ->
         logger.debug(f"[MarketCache] OHLCV hit {key}")
         return cached
     df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
+    df = normalize_ohlcv(df)
     if df is not None and not df.empty:
         OHLCV_CACHE.set(key, df)
     return df
 
 
 def get_cached_features(symbol: str, timeframe: str, df: pd.DataFrame, compute_fn) -> pd.DataFrame:
+    df = normalize_ohlcv(df)
     key = feature_key(symbol, timeframe, df)
     cached = FEATURE_CACHE.get(key)
     if cached is not None:
