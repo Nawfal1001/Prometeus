@@ -37,6 +37,7 @@ class PrometheusEngine:
         self._last_whale_update = 0
         self._last_4h_update = 0
         self._last_xgb_retrain = 0
+        self._xgb_trained_on_start = False
         self._4h_bias = 0
         self._consec_errors = 0
         self._backoff_seconds = 30
@@ -72,11 +73,6 @@ class PrometheusEngine:
                 atr_norm = 0.002
                 vol_zscore = 0.0
                 try:
-                    tr = max(
-                        float(df["high"].iloc[-1] - df["low"].iloc[-1]),
-                        abs(float(df["high"].iloc[-1] - df["close"].iloc[-2])),
-                        abs(float(df["low"].iloc[-1] - df["close"].iloc[-2])),
-                    )
                     atr_norm = max(0.002, min(float(df["high"].sub(df["low"]).rolling(14).mean().iloc[-1] / current_price), 0.05))
                     ret_abs = df["close"].pct_change().abs()
                     vol_zscore = float(((ret_abs.iloc[-1] - ret_abs.rolling(48).mean().iloc[-1]) / (ret_abs.rolling(48).std().iloc[-1] + 1e-9)))
@@ -88,7 +84,7 @@ class PrometheusEngine:
                 logger.info(f"[Engine] New candle | price={current_price:.2f} | time={latest_time}")
 
                 regime_result = self.regime.detect(df, funding_rate=await self._get_funding())
-                whale_result = {"layer_score": self.whale.last_score}
+                whale_result = {"layer_score": self.whale.get_layer_score()}
                 sent_result = {"layer_score": self.sentiment.get_layer_score()}
                 liq_result = self.liquidation.update(current_price, cfg.SYMBOL)
                 entry_result = self.entry.evaluate(df)
@@ -152,29 +148,48 @@ class PrometheusEngine:
 
     async def _slow_data_loop(self):
         import time
+
+        if not self._xgb_trained_on_start:
+            try:
+                logger.info("[Engine] Auto-training XGBoost on startup...")
+                df = await self.exchange.get_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, limit=1500)
+                if not df.empty and len(df) >= 300:
+                    self.entry.model.train_if_stale(df, max_age_hours=0)
+                    logger.info("[Engine] XGBoost startup training complete")
+                self._xgb_trained_on_start = True
+            except Exception as e:
+                logger.warning(f"[Engine] XGBoost startup training failed: {e}")
+                self._xgb_trained_on_start = True
+
         while self.running:
             try:
                 now = time.time()
+
                 if now - self._last_sentiment_update > 3600:
                     self.sentiment.update()
                     self._last_sentiment_update = now
+
                 if now - self._last_whale_update > 1800:
                     coin = cfg.SYMBOL.replace("/USDT", "")
                     self.whale.update(coin)
                     self._last_whale_update = now
-                if now - self._last_4h_update > 7200:
+
+                if now - self._last_4h_update > 1800:
                     await self._update_4h_bias()
                     self._last_4h_update = now
+
                 if now - self._last_xgb_retrain > 21600:
                     try:
-                        df = await self.exchange.get_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, limit=1000)
+                        df = await self.exchange.get_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, limit=1500)
                         self.entry.model.train_if_stale(df, max_age_hours=6)
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")
                     self._last_xgb_retrain = now
+
                 now_t = datetime.now().time()
                 if dtime(0, 0) <= now_t <= dtime(0, 5):
                     self.telegram.daily_summary(self.orders.get_stats())
+
             except Exception as e:
                 logger.warning(f"[Engine] Slow loop error: {e}")
             await asyncio.sleep(300)
@@ -204,14 +219,14 @@ class PrometheusEngine:
     def _session_multiplier(self) -> float:
         hour = datetime.utcnow().hour
         if 0 <= hour < 7:
-            return 0.70
+            return 0.85
         if 7 <= hour < 13:
-            return 0.90
+            return 0.92
         if 13 <= hour < 17:
             return 1.00
         if 17 <= hour < 21:
-            return 0.90
-        return 0.75
+            return 0.95
+        return 0.85
 
     async def _get_funding(self) -> float:
         try:
