@@ -20,31 +20,19 @@ class ExitLevels:
 
 
 class AdvancedExitManager:
-    """Shared SL/TP/trailing logic for paper/live/backtest.
-
-    Supports Optuna-tunable parameters:
-    - ATR_SL_MULT
-    - ATR_TP1_MULT
-    - ATR_TP2_MULT
-    - TP1_EXIT_PCT
-    - TP2_EXIT_PCT
-    - CHANDELIER_LOOKBACK
-    - MAX_TRADE_DURATION_BARS
-    - MAX_VOL_ZSCORE
-    - MIN_ATR_NORM
-    """
+    """Shared SL/TP/trailing logic for paper/live/backtest."""
 
     def __init__(self):
         self.sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.5))
-        self.tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.0))
-        self.tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.0))
-        self.tp1_exit_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.40))
-        self.tp2_exit_pct = float(getattr(cfg, "TP2_EXIT_PCT", 0.35))
+        self.tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.5))
+        self.tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 3.5))
+        self.tp1_exit_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.35))
+        self.tp2_exit_pct = float(getattr(cfg, "TP2_EXIT_PCT", 0.40))
         self.lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
-        self.max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 12))
+        self.max_duration = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16))
         self.breakeven_buffer = float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0005))
-        self.min_atr_norm = float(getattr(cfg, "MIN_ATR_NORM", 0.002))
-        self.max_vol_zscore = float(getattr(cfg, "MAX_VOL_ZSCORE", 3.0))
+        self.min_atr_norm = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
+        self.max_vol_zscore = float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5))
 
     def entry_allowed(self, atr_norm: float, vol_zscore: float = 0.0) -> tuple[bool, str]:
         if vol_zscore > self.max_vol_zscore:
