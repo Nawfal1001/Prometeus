@@ -106,7 +106,8 @@ class FusionEngine:
             logger.warning("[Fusion] CHAOS regime → NO TRADE")
             return self._no_trade("chaos_regime")
         scores = {"regime": regime_score, "sentiment": sentiment_score, "whale": whale_score, "liquidation": liquidation_score, "entry": entry_score}
-        fusion_score = sum(scores[k] * self.weights[k] for k in scores)
+        w_total = max(sum(self.weights.values()), 1e-9)
+        fusion_score = sum(scores[k] * self.weights[k] for k in scores) / w_total
         fusion_score = float(np.clip(fusion_score, -1.0, 1.0))
         direction = 1 if fusion_score > 0 else -1
         abs_score = abs(fusion_score) * session_mult
@@ -169,13 +170,17 @@ class FusionEngine:
         threshold = float(threshold if threshold is not None else getattr(cfg, "FUSION_THRESHOLD", 0.17))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         leverage = float(getattr(cfg, "LEVERAGE", 3))
-        edge = max(0.0, confidence - threshold) / max(1e-9, 1.0 - threshold)
-        kelly_frac = min(0.25 * edge, 1.0)
-        return capital * risk_frac * kelly_frac * leverage
+        strength = max(0.0, (confidence - threshold) / max(1e-9, 1.0 - threshold))
+        confidence_mult = 0.35 + 1.15 / (1.0 + np.exp(-8.0 * (strength - 0.35)))
+        confidence_mult = float(np.clip(confidence_mult, 0.35, 1.50))
+        return capital * risk_frac * leverage * confidence_mult
 
     def _no_trade(self, reason: str) -> dict:
         return {"trade": False, "direction": 0, "side": None, "fusion_score": 0.0, "score": 0.0, "confidence": 0.0, "position_size": 0.0, "rr": None, "risk_reward": None, "reason": reason}
 
     def reload_weights(self):
         self.weights = {"regime": cfg.WEIGHT_REGIME, "sentiment": cfg.WEIGHT_SENTIMENT, "whale": cfg.WEIGHT_WHALE, "liquidation": cfg.WEIGHT_LIQUIDATION, "entry": cfg.WEIGHT_ENTRY}
-        logger.info(f"[Fusion] Weights reloaded: {self.weights}")
+        total = sum(self.weights.values())
+        if abs(total - 1.0) > 0.02:
+            logger.warning(f"[Fusion] Weight sum drift detected: sum={total:.4f} weights={self.weights}")
+        logger.info(f"[Fusion] Weights reloaded: {self.weights} sum={total:.4f}")

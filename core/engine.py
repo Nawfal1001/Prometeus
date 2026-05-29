@@ -30,6 +30,7 @@ class PrometheusEngine:
         self.entry = EntrySignal()
         self.fusion = FusionEngine()
         self.orders = OrderManager(exchange=self.exchange, paper=cfg.TRADING_MODE == "paper")
+        self.orders.fusion = self.fusion
         self.telegram = TelegramBot()
         self.running = False
         self._last_candle_time = None
@@ -83,7 +84,20 @@ class PrometheusEngine:
 
                 logger.info(f"[Engine] New candle | price={current_price:.2f} | time={latest_time}")
 
-                regime_result = self.regime.detect(df, funding_rate=await self._get_funding())
+                funding_rate = await self._get_funding()
+                df.loc[df.index[-1], "funding_rate"] = funding_rate
+                try:
+                    ob = await self.exchange.get_orderbook(cfg.SYMBOL, depth=20)
+                    bids = ob.get("bids", [])
+                    asks = ob.get("asks", [])
+                    if bids and asks:
+                        bid_vol = sum(float(b[1]) for b in bids[:10])
+                        ask_vol = sum(float(a[1]) for a in asks[:10])
+                        df.loc[df.index[-1], "ob_imbalance"] = (bid_vol - ask_vol) / (bid_vol + ask_vol + 1e-9)
+                except Exception as e:
+                    logger.debug(f"[Engine] Orderbook fetch skipped: {e}")
+
+                regime_result = self.regime.detect(df, funding_rate=funding_rate)
                 whale_result = {"layer_score": self.whale.get_layer_score()}
                 sent_result = {"layer_score": self.sentiment.get_layer_score()}
                 liq_result = self.liquidation.update(current_price, cfg.SYMBOL)
@@ -115,6 +129,7 @@ class PrometheusEngine:
                     result = await self.orders.execute_signal(signal, current_price)
                     if result.get("status") == "filled":
                         self.telegram.signal_alert(signal, current_price)
+                        self.fusion.reload_weights()
 
                 await self.orders.check_paper_exits(current_price, high=recent_high, low=recent_low)
 
