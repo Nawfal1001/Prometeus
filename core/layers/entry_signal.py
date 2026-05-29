@@ -1,159 +1,111 @@
 # ============================================================
-#  PROMETHEUS — Layer 5: Entry Signal (FIXED + IMPROVED)
+#  PROMETHEUS — Layer 5: Entry Signal
+#
+#  FIXES APPLIED:
+#  9. Adds RSI divergence into entry scoring.
+# 10. Adds order-book imbalance into entry scoring.
+# 11. Adds funding-rate contrarian signal into entry scoring.
+# 12. Keeps XGBoost optional and fails neutral if model unavailable.
 # ============================================================
 
-import pandas as pd
 import numpy as np
 from loguru import logger
-from core.models.xgboost_model import XGBoostSignalModel
-from core.models.feature_engine import compute_features
 
 
 class EntrySignal:
 
     def __init__(self):
-        self.last_score = 0.0
-        self.last_signal = 0
-        self.model = XGBoostSignalModel()
-        self._try_load_model()
+        self._xgb = None
+        self._xgb_loaded = False
 
-    def _try_load_model(self):
+    def _load_xgb(self):
+        if self._xgb_loaded:
+            return
+        self._xgb_loaded = True
         try:
-            self.model.load()
-            logger.info("[Entry] XGBoost model loaded")
-        except Exception:
-            logger.warning("[Entry] No trained model found. Using rule-based signals only.")
+            from core.models.xgboost_model import XGBoostSignalModel
+            self._xgb = XGBoostSignalModel()
+            self._xgb.load()
+            if self._xgb.model is None:
+                logger.warning("[Entry] XGBoost not trained — ML entry score disabled")
+        except Exception as e:
+            logger.warning(f"[Entry] XGBoost load failed: {e}")
+            self._xgb = None
 
-    def evaluate(self, df: pd.DataFrame) -> dict:
-        if df.empty or len(df) < 50:
-            return {"layer_score": 0.0, "signals": {}, "confirmed": 0}
-
-        df = compute_features(df)
-        if df.empty:
-            return {"layer_score": 0.0, "signals": {}, "confirmed": 0}
-        row = df.iloc[-1]
-
-        signals = {}
+    def evaluate(self, row) -> float:
         scores = []
+        W = 0.0
 
-        ema_stack = float(row.get("ema_stack", 0))
-        signals["ema_stack"] = ema_stack
-        scores.append(ema_stack * 1.2)
+        def add(sig, w):
+            nonlocal W
+            try:
+                scores.append(float(sig) * w)
+                W += w
+            except Exception:
+                pass
 
-        vwap_dist = float(row.get("dist_vwap", 0))
-        vwap_sig = 1 if vwap_dist > 0.0004 else (-1 if vwap_dist < -0.0004 else 0)
-        signals["vwap"] = vwap_sig
-        scores.append(vwap_sig * 0.9)
+        # Trend / location
+        add(row.get("ema_stack", 0), 1.1)
+        vd = float(row.get("dist_vwap", 0) or 0)
+        add(1 if vd > 0.0004 else -1 if vd < -0.0004 else 0, 0.8)
 
-        rsi = float(row.get("rsi", 50))
-        rsi_sig = float(row.get("rsi_signal", 0))
-        if rsi_sig == 0:
-            rsi_sig = 1.0 if rsi < 30 else (-1.0 if rsi > 70 else 0.6 if rsi < 40 else (-0.6 if rsi > 60 else 0.2 if rsi < 48 else (-0.2 if rsi > 52 else 0.0)))
-        signals["rsi"] = rsi_sig
-        scores.append(rsi_sig * 0.8)
+        # RSI / stochastic
+        rsi = float(row.get("rsi", 50) or 50)
+        rs = float(row.get("rsi_signal", 0) or 0)
+        if rs == 0:
+            rs = (1.0 if rsi < 30 else -1.0 if rsi > 70 else
+                  0.6 if rsi < 40 else -0.6 if rsi > 60 else
+                  0.2 if rsi < 48 else -0.2 if rsi > 52 else 0.0)
+        add(rs, 0.8)
+        add(row.get("stoch_cross", 0), 0.5)
 
-        stoch_cross = float(row.get("stoch_cross", 0))
-        signals["stochrsi"] = stoch_cross
-        scores.append(stoch_cross * 0.6)
+        # FIX 9: RSI divergence
+        add(row.get("rsi_divergence", 0), 0.9)
 
-        vol_ratio = float(row.get("vol_ratio", 1.0))
-        vol_delta = float(row.get("vol_delta", 0))
-        if vol_ratio > 2.0:
-            vol_sig = float(np.sign(vol_delta)) * 1.0
-        elif vol_ratio > 1.5:
-            vol_sig = float(np.sign(vol_delta)) * 0.6
-        else:
-            vol_sig = 0.0
-        signals["volume"] = vol_sig
-        scores.append(vol_sig * 0.5)
+        # Volume / market structure
+        vr = float(row.get("vol_ratio", 1.0) or 1.0)
+        vd2 = float(row.get("vol_delta", 0) or 0)
+        add(np.sign(vd2) * (1.0 if vr > 2.0 else 0.6 if vr > 1.5 else 0.0), 0.5)
+        add(row.get("market_structure", 0), 0.8)
 
-        cvd_sig = float(row.get("cvd_signal", 0))
-        cvd_div = float(row.get("cvd_divergence", 0))
-        signals["cvd"] = round(cvd_sig, 3)
-        scores.append(cvd_sig * 0.7)
-        signals["cvd_divergence"] = round(cvd_div, 3)
-        scores.append(cvd_div * 0.8)
+        # MACD / volatility expansion
+        ms = float(row.get("macd_signal", 0) or 0) * 0.5 + float(row.get("macd_accel", 0) or 0) * 0.25
+        add(ms, 0.7)
+        add(row.get("squeeze_fire", 0), 1.0)
 
-        atr_exp_sig = float(row.get("atr_expansion_signal", 0))
-        squeeze_imm = float(row.get("squeeze_imminent", 0))
-        signals["atr_expansion"] = round(atr_exp_sig, 3)
-        scores.append(atr_exp_sig * 0.5)
-        scores.append(squeeze_imm * 0.4)
+        # Bollinger / ADX / CCI / candles
+        bp = float(row.get("bb_position", 0.5) or 0.5)
+        add(1 if bp < 0.25 else -1 if bp > 0.75 else 0, 0.45)
+        add(float(row.get("adx_trend_strength", 0) or 0) * float(row.get("adx_direction", 0) or 0), 0.6)
+        add(row.get("cci_norm", 0), 0.35)
+        add(row.get("candle_pattern", 0), 0.45)
+        add(row.get("gap_signal", 0), 0.25)
 
-        zscore_sig = float(row.get("zscore_signal", 0))
-        zscore_rev = float(row.get("zscore_reversion", 0))
-        signals["zscore"] = round(zscore_sig, 3)
-        scores.append(zscore_sig * 0.5)
-        scores.append(zscore_rev * 0.6)
+        # CVD / pressure
+        add(row.get("cvd_divergence", 0), 0.8)
+        add(row.get("cvd_signal", 0), 0.55)
+        add(row.get("pressure_signal", 0), 0.45)
 
-        squeeze_hist = float(row.get("squeeze_hist_norm", 0))
-        squeeze_fire = float(row.get("squeeze_fire", 0))
-        signals["squeeze_hist"] = round(squeeze_hist, 3)
-        signals["squeeze_fire"] = round(squeeze_fire, 3)
-        scores.append(squeeze_hist * 0.4)
-        scores.append(squeeze_fire * 1.0)
+        # FIX 10: order-book imbalance
+        add(row.get("ob_signal", 0), 0.75)
 
-        pressure_sig = float(row.get("pressure_signal", 0))
-        pressure_acc = float(row.get("pressure_accel", 0))
-        signals["buy_pressure"] = round(pressure_sig, 3)
-        scores.append(pressure_sig * 0.6)
-        scores.append(pressure_acc * 0.3)
+        # FIX 11: funding-rate contrarian pressure
+        add(row.get("funding_signal", 0), 0.45)
 
-        ms = float(row.get("market_structure", 0))
-        signals["structure"] = ms
-        scores.append(ms * 0.7)
-
-        macd_sig = float(row.get("macd_signal", 0))
-        macd_accel = float(row.get("macd_accel", 0))
-        macd_score = macd_sig * 0.5 + macd_accel * 0.2
-        signals["macd"] = round(macd_score, 2)
-        scores.append(macd_score)
-
-        bb_pos = float(row.get("bb_position", 0.5))
-        bb_sig = 1 if bb_pos < 0.25 else (-1 if bb_pos > 0.75 else 0)
-        signals["bb"] = bb_sig
-        scores.append(bb_sig * 0.5)
-
-        adx_strength = float(row.get("adx_trend_strength", 0))
-        adx_direction = float(row.get("adx_direction", 0))
-        signals["adx"] = round(adx_strength, 2)
-        scores.append(adx_strength * adx_direction * 0.6)
-
-        cci_norm = float(row.get("cci_norm", 0))
-        signals["cci"] = round(cci_norm, 2)
-        scores.append(cci_norm * 0.4)
-
-        candle_pat = float(row.get("candle_pattern", 0))
-        signals["candle_pattern"] = candle_pat
-        scores.append(candle_pat * 0.5)
-
-        gap_sig = float(row.get("gap_signal", 0))
-        signals["gap"] = round(gap_sig, 2)
-        scores.append(gap_sig * 0.3)
-
-        ml_score = 0.0
+        # Optional ML
         try:
-            ml_score = self.model.get_entry_score(df)
-            signals["ml_model"] = round(ml_score, 3)
-            scores.append(ml_score * 1.0)
+            self._load_xgb()
+            if self._xgb is not None and self._xgb.model is not None:
+                ml = self._xgb.get_entry_score(row.to_frame().T.reset_index(drop=True))
+                add(ml, 1.0)
         except Exception:
-            signals["ml_model"] = 0
+            pass
 
-        weight_sum = 14.5
-        theoretical_max = weight_sum
-        avg = float(np.clip(np.sum(scores) / max(1e-9, theoretical_max), -1.0, 1.0))
+        if W <= 0:
+            return 0.0
+        avg = float(np.sum(scores) / max(1e-9, W))
+        vol_regime = float(row.get("vol_regime", 1.0) or 1.0)
+        return float(np.clip(avg * vol_regime, -1, 1))
 
-        vol_regime = float(row.get("vol_regime", 1.0))
-        avg *= vol_regime
 
-        self.last_score = float(np.clip(avg, -1, 1))
-        self.last_signal = 1 if avg > 0.2 else (-1 if avg < -0.2 else 0)
-
-        confirmed = sum(1 for s in signals.values() if isinstance(s, (int, float)) and abs(s) > 0.1)
-
-        logger.info(f"[Entry] score={self.last_score:.3f} | confirmed={confirmed} | adx={adx_strength:.2f} | vol_regime={vol_regime:.2f} | signal={self.last_signal}")
-
-        return {"layer_score": self.last_score, "signals": signals, "confirmed": confirmed, "direction": self.last_signal, "rsi": rsi, "vol_ratio": round(vol_ratio, 2), "adx": round(float(row.get("adx", 0)), 1)}
-
-    def get_layer_score(self) -> float:
-        return self.last_score
+entry_signal = EntrySignal()
