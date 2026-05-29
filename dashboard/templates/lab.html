@@ -39,14 +39,12 @@
             <div class="field-group"><label>Optuna Trials</label><input id="trials" type="number" min="5" max="300" step="5" value="60"></div>
             <div class="field-group"><label>Optuna Metric</label><select id="metric"><option value="target_150" selected>Target €150</option><option value="composite">Composite</option></select></div>
           </div>
-
           <div class="settings-section" style="margin-top:12px">
             <div class="section-title">🚀 Experimental Toggles</div>
             <div class="switch-line"><div><b>Raw Profit Mode</b><div class="hint-mini">Momentum continuation + breakout + dynamic TP2.</div></div><select id="rawProfit"><option value="true" selected>On</option><option value="false">Off</option></select></div>
             <div class="switch-line"><div><b>Adaptive Risk</b><div class="hint-mini">EdgeGuard + regime memory multipliers.</div></div><select id="adaptiveRisk"><option value="true" selected>On</option><option value="false">Off</option></select></div>
             <div class="switch-line"><div><b>Compare Baseline</b><div class="hint-mini">Run baseline first, then experiment.</div></div><select id="compareBaseline"><option value="true" selected>Yes</option><option value="false">No</option></select></div>
           </div>
-
           <div class="lab-actions">
             <button class="btn btn-primary" onclick="runSingle()">▶ Single Backtest</button>
             <button class="btn btn-primary" onclick="runCompete()">⚔ Compete Symbols</button>
@@ -60,27 +58,15 @@
       <div class="card">
         <div class="card-header">📊 Results</div>
         <div style="padding:16px">
-          <div class="metric-grid" id="metrics">
-            <div class="metric">Final Capital<b>—</b></div><div class="metric">Return<b>—</b></div><div class="metric">Win Rate<b>—</b></div><div class="metric">Max DD<b>—</b></div>
-          </div>
+          <div class="metric-grid" id="metrics"><div class="metric">Final Capital<b>—</b></div><div class="metric">Return<b>—</b></div><div class="metric">Win Rate<b>—</b></div><div class="metric">Max DD<b>—</b></div></div>
           <div style="overflow:auto;margin-top:14px"><table class="results-table" id="results"><thead><tr><th>Run</th><th>Mode</th><th>Capital</th><th>Return</th><th>WR</th><th>PF</th><th>DD</th><th>Trades</th></tr></thead><tbody></tbody></table></div>
         </div>
       </div>
     </div>
 
     <div>
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-header">📝 Live Logs</div>
-        <div style="padding:16px"><div class="logbox" id="logs">Ready. Choose an experiment and run it.\n</div></div>
-      </div>
-      <div class="card">
-        <div class="card-header">🧠 Experimental Fields To Watch</div>
-        <div style="padding:16px">
-          <div class="pill">raw_profit_mode</div> <div class="pill">continuation_mode</div> <div class="pill">breakout_mode</div>
-          <div class="pill">memory_multiplier</div> <div class="pill">edge_guard.risk_multiplier</div> <div class="pill">ruin_pressure</div>
-          <p class="hint-mini" style="margin-top:12px">If return rises but max drawdown explodes, reject the experiment. If return rises while PF and DD remain acceptable, keep it for paper trading.</p>
-        </div>
-      </div>
+      <div class="card" style="margin-bottom:16px"><div class="card-header">📝 Live Logs</div><div style="padding:16px"><div class="logbox" id="logs">Ready. Choose an experiment and run it.\n</div></div></div>
+      <div class="card"><div class="card-header">🧠 Experimental Fields To Watch</div><div style="padding:16px"><div class="pill">raw_profit_mode</div> <div class="pill">continuation_mode</div> <div class="pill">breakout_mode</div> <div class="pill">memory_multiplier</div> <div class="pill">edge_guard.risk_multiplier</div> <div class="pill">ruin_pressure</div><p class="hint-mini" style="margin-top:12px">If return rises but max drawdown explodes, reject the experiment. If return rises while PF and DD remain acceptable, keep it for paper trading.</p></div></div>
     </div>
   </div>
 </div>
@@ -93,6 +79,7 @@ function symbols(){ return $('symbols').value.split(',').map(s=>s.trim()).filter
 function fmtPct(x){ if(x===undefined||x===null||isNaN(Number(x))) return '—'; return (Number(x)*100).toFixed(2)+'%'; }
 function fmtNum(x){ if(x===undefined||x===null||isNaN(Number(x))) return '—'; return Number(x).toFixed(2); }
 function addResult(name, mode, r){
+  r = r || {};
   const tbody=document.querySelector('#results tbody');
   const row=document.createElement('tr');
   row.innerHTML=`<td>${name}</td><td>${mode}</td><td>${fmtNum(r.final_capital||r.capital||r.best_final_equity)}</td><td>${fmtPct(r.total_return||r.best_growth)}</td><td>${fmtPct(r.win_rate)}</td><td>${fmtNum(r.profit_factor)}</td><td>${fmtPct(r.max_drawdown)}</td><td>${r.total_trades||r.trades||'—'}</td>`;
@@ -102,38 +89,24 @@ function addResult(name, mode, r){
 async function post(url, payload){
   log(`POST ${url}`);
   const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-  const data=await res.json();
-  if(!res.ok || data.error){ throw new Error(data.error || res.statusText); }
+  const raw=await res.text();
+  let data={};
+  try{ data=raw ? JSON.parse(raw) : {}; }catch(e){ data={error: raw || res.statusText}; }
+  if(!res.ok || data.error){ throw new Error(data.error || raw || res.statusText || `HTTP ${res.status}`); }
   return data;
 }
 async function saveExperimentSettings(){
-  const payload={RAW_PROFIT_MODE: bool('rawProfit'), ADAPTIVE_RISK_MODE: bool('adaptiveRisk'), OPTUNA_METRIC: $('metric').value, OPTUNA_TRIALS: Number($('trials').value)};
-  try{ await post('/api/settings', payload); log('Saved experiment toggles.'); }catch(e){ log('Save failed: '+e.message); }
+  const payload={raw_profit_mode: bool('rawProfit'), adaptive_risk_mode: bool('adaptiveRisk'), metric: $('metric').value, trials: Number($('trials').value)};
+  try{ await post('/api/lab/settings', payload); log('Saved experiment toggles.'); }catch(e){ log('Save failed: '+(e.message || JSON.stringify(e))); throw e; }
 }
 async function runSingle(){
-  try{
-    await saveExperimentSettings();
-    const sym=symbols()[0]||'BTC/USDT';
-    const payload={symbol:sym,timeframe:$('timeframe').value,limit:Number($('limit').value),mode:$('mode').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk'),compare_baseline:bool('compareBaseline')};
-    const data=await post('/api/lab/backtest',payload);
-    log('Single backtest complete.'); addResult(sym,'single',data.experiment||data);
-  }catch(e){ log('Single failed: '+e.message); }
+  try{ await saveExperimentSettings(); const sym=symbols()[0]||'BTC/USDT'; const payload={symbol:sym,timeframe:$('timeframe').value,limit:Number($('limit').value),mode:$('mode').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk'),compare_baseline:bool('compareBaseline')}; const data=await post('/api/lab/backtest',payload); if(data.baseline){ addResult(sym,'baseline',data.baseline); } log('Single backtest complete.'); addResult(sym,'single',data.experiment||data); }catch(e){ log('Single failed: '+(e.message || JSON.stringify(e))); }
 }
 async function runCompete(){
-  try{
-    await saveExperimentSettings();
-    const payload={symbols:symbols(),timeframe:$('timeframe').value,limit:Number($('limit').value),mode:$('mode').value,run_mode:'compete',raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk'),compare_baseline:bool('compareBaseline')};
-    const data=await post('/api/lab/compete',payload);
-    log('Compete backtest complete.'); addResult('multi','compete',data.experiment||data);
-  }catch(e){ log('Compete failed: '+e.message); }
+  try{ await saveExperimentSettings(); const payload={symbols:symbols(),timeframe:$('timeframe').value,limit:Number($('limit').value),mode:$('mode').value,run_mode:'compete',raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk'),compare_baseline:bool('compareBaseline')}; const data=await post('/api/lab/compete',payload); if(data.baseline){ addResult('multi','baseline',data.baseline); } log('Compete backtest complete.'); addResult('multi','compete',data.experiment||data); }catch(e){ log('Compete failed: '+(e.message || JSON.stringify(e))); }
 }
 async function runOptuna(){
-  try{
-    await saveExperimentSettings();
-    const payload={symbol:symbols()[0]||'BTC/USDT',timeframe:$('timeframe').value,limit:Number($('limit').value),trials:Number($('trials').value),metric:$('metric').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk')};
-    const data=await post('/api/lab/optuna',payload);
-    log('Optuna complete. Best score: '+(data.best_value??'—')); addResult('optuna','optuna',data.best_result||data);
-  }catch(e){ log('Optuna failed: '+e.message); }
+  try{ await saveExperimentSettings(); const payload={symbol:symbols()[0]||'BTC/USDT',timeframe:$('timeframe').value,limit:Number($('limit').value),trials:Number($('trials').value),metric:$('metric').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk')}; const data=await post('/api/lab/optuna',payload); log('Optuna complete. Best score: '+(data.best_value??'—')); addResult('optuna','optuna',data.best_result||data); }catch(e){ log('Optuna failed: '+(e.message || JSON.stringify(e))); }
 }
 function clearLab(){ $('logs').textContent='Cleared.\n'; document.querySelector('#results tbody').innerHTML=''; }
 </script>
