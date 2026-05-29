@@ -26,6 +26,8 @@ import numpy as np
 from loguru import logger
 from core.models.feature_engine import compute_features
 import config.settings as cfg
+from core.risk.edge_guard import AdaptiveEdgeGuard, EdgeGuardState
+from core.risk.regime_memory import RegimeMemory
 
 TAKER_FEE = 0.0005
 SLIPPAGE  = 0.0003
@@ -35,6 +37,8 @@ class BacktestEngine:
 
     def __init__(self):
         self._xgb = None
+        self.edge_guard = AdaptiveEdgeGuard()
+        self.regime_memory = RegimeMemory()
 
     # ── XGBoost lazy loader ──────────────────────────────────
 
@@ -397,6 +401,16 @@ class BacktestEngine:
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
                             consec_losses = 0
+
+                    self._recent_pnls = getattr(self, "_recent_pnls", [])
+                    self._recent_pnls.append(total_pnl)
+                    self._recent_pnls = self._recent_pnls[-50:]
+                    self._peak_capital = max(float(getattr(self, "_peak_capital", capital)), capital)
+                    self._consecutive_losses = 0 if total_pnl > 0 else int(getattr(self, "_consecutive_losses", 0)) + 1
+                    try:
+                        self.regime_memory.update({"atr_norm": signal.get("atr_norm", 0.003), "fusion_score": entry_score}, total_pnl)
+                    except Exception:
+                        pass
 
                     trades.append({
                         "entry":        round(entry_px, 4),
