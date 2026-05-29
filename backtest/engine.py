@@ -1,5 +1,5 @@
 # ============================================================
-#  PROMETHEUS — Backtest Engine (v2 — shared signal base)
+#  PROMETHEUS — Backtest Engine (v3 — shared + competing symbols)
 # ============================================================
 
 import pandas as pd
@@ -388,4 +388,207 @@ class BacktestEngine:
 
 
 class MultiSymbolBacktestEngine(BacktestEngine):
-    pass
+    def run_competing_symbols(self, data_by_symbol: dict, prepared: bool = False) -> dict:
+        if not data_by_symbol:
+            return {"error": "No symbol data provided"}
+        prepared_by_symbol = {}
+        for symbol, df in data_by_symbol.items():
+            if df is None or df.empty:
+                continue
+            try:
+                d = df.copy() if prepared else self._prepare(df)
+                if d is not None and not d.empty and len(d) >= 100:
+                    prepared_by_symbol[symbol] = d.reset_index(drop=True)
+            except Exception as e:
+                logger.debug(f"[MultiBacktest] prepare failed for {symbol}: {e}")
+        if not prepared_by_symbol:
+            return {"error": "No valid prepared symbol data"}
+        min_len = min(len(df) for df in prepared_by_symbol.values())
+        if min_len < 100:
+            return {"error": f"Not enough aligned candles: {min_len}"}
+        aligned = {s: df.tail(min_len).reset_index(drop=True) for s, df in prepared_by_symbol.items()}
+        trades, capital, selection_stats = self._simulate_competing(aligned)
+        if not trades:
+            return {"error": "No competing-symbol trades", "symbols_loaded": list(aligned.keys()), "selection_stats": selection_stats}
+        result = self._metrics(trades)
+        result.update({
+            "mode": "competing-symbol-selector",
+            "symbols_loaded": list(aligned.keys()),
+            "symbols_traded": selection_stats,
+            "equity_curve": self._equity_curve(trades),
+        })
+        return result
+
+    @staticmethod
+    def _volatility_quality(atr_norm: float) -> float:
+        if atr_norm <= 0:
+            return 0.0
+        if atr_norm < 0.001:
+            return 0.0
+        if 0.002 <= atr_norm <= 0.015:
+            return 1.0
+        if atr_norm <= 0.03:
+            return 0.65
+        return 0.25
+
+    def _candidate_score(self, sig: dict, row: pd.Series) -> float:
+        abs_score = max(0.0, min(float(sig.get("abs_score", 0) or 0), 1.0))
+        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.17))
+        edge = max(0.0, (abs_score - threshold) / max(1e-9, 1.0 - threshold))
+        vol_ratio = float(row.get("vol_ratio", 1.0) or 1.0)
+        atr_norm = float(row.get("atr_norm", 0.003) or 0.003)
+        vol_participation = min(max(vol_ratio - 1.0, 0.0), 1.5) / 1.5
+        vol_quality = self._volatility_quality(atr_norm)
+        rr = float(sig.get("tp2_mult", 0) or 0) / max(float(sig.get("sl_mult", 0) or 0), 1e-9) if sig.get("sl_mult") else 0.0
+        rr_quality = min(max((rr - 1.0) / 2.0, 0.0), 1.0) if rr else 0.0
+        return float(edge * 0.45 + abs_score * 0.25 + vol_quality * 0.15 + vol_participation * 0.10 + rr_quality * 0.05)
+
+    def _simulate_competing(self, data_by_symbol: dict):
+        capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
+        leverage = float(getattr(cfg, "LEVERAGE", 3))
+        risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
+        max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.08))
+        max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 6))
+        max_dur = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 32))
+        tp1_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.50))
+        min_len = min(len(df) for df in data_by_symbol.values())
+        in_trade = False
+        active_symbol = None
+        entry_px = sl = tp1 = tp2 = sl_mult = 0.0
+        trade_side = entry_bar = 0
+        entry_score = 0.0
+        entry_capital = capital
+        tp1_hit = False
+        remaining = 1.0
+        realized_pnl = 0.0
+        peak_px = trough_px = 0.0
+        trades = []
+        trades_today = 0
+        day_start_cap = capital
+        last_day = -1
+        consec_losses = 0
+        cooldown = 0
+        selection_stats = {s: {"selected": 0, "trades": 0, "wins": 0, "pnl": 0.0} for s in data_by_symbol}
+        MAX_CONSEC = int(getattr(cfg, "MAX_CONSEC_LOSSES", 5))
+
+        for i in range(min_len):
+            day = i // 48
+            if day != last_day:
+                trades_today = 0
+                day_start_cap = capital
+                last_day = day
+
+            if in_trade:
+                row = data_by_symbol[active_symbol].iloc[i]
+                high = float(row["high"])
+                low = float(row["low"])
+                close = float(row["close"])
+                peak_px = max(peak_px, high)
+                trough_px = min(trough_px, low)
+                if tp1_hit:
+                    an = float(row.get("atr_norm", 0.003))
+                    if trade_side == 1:
+                        sl = max(sl, peak_px - entry_px * an * sl_mult)
+                    else:
+                        sl = min(sl, trough_px + entry_px * an * sl_mult)
+                if not tp1_hit:
+                    hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
+                    if hit_tp1:
+                        ep = tp1 * (1 - trade_side * SLIPPAGE)
+                        rret = ((ep - entry_px) / entry_px) * trade_side
+                        an_sl = float(row.get("atr_norm", 0.003)) * sl_mult
+                        ra = entry_capital * risk_frac * tp1_pct
+                        p1 = ra * (rret / max(an_sl, 1e-9)) * leverage - ra * TAKER_FEE * 2
+                        realized_pnl += p1
+                        capital += p1
+                        remaining = 1.0 - tp1_pct
+                        tp1_hit = True
+                        consec_losses = 0
+                        be = entry_px * (1 + trade_side * float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0002)))
+                        sl = max(sl, be) if trade_side == 1 else min(sl, be)
+                        continue
+
+                hit_tp2 = (trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)
+                hit_sl = (trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl)
+                expired = (i - entry_bar) >= max_dur
+                if hit_tp2 or hit_sl or expired:
+                    if expired and not hit_tp2 and not hit_sl:
+                        exit_px_v = close
+                        raw_ret = ((close - entry_px) / entry_px) * trade_side
+                        raw_ret = max(raw_ret, -0.0002)
+                        exit_type = "TIME"
+                    else:
+                        exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
+                        raw_ret = ((exit_px_v - entry_px) / entry_px) * trade_side
+                        exit_type = "TP" if hit_tp2 else "SL"
+                    an_sl = float(row.get("atr_norm", 0.003)) * sl_mult
+                    ra = entry_capital * risk_frac * remaining
+                    fee = ra * TAKER_FEE * 2
+                    pnl_rem = ra * (raw_ret / max(an_sl, 1e-9)) * leverage - fee
+                    total_pnl = pnl_rem + realized_pnl
+                    capital += pnl_rem
+                    st = selection_stats[active_symbol]
+                    st["trades"] += 1
+                    st["pnl"] = round(float(st["pnl"]) + float(total_pnl), 6)
+                    if total_pnl > 0:
+                        st["wins"] += 1
+                        consec_losses = 0
+                    elif exit_type == "SL":
+                        consec_losses += 1
+                        if consec_losses >= MAX_CONSEC:
+                            cooldown = 5
+                            consec_losses = 0
+                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": i, "entry_bar": entry_bar, "fusion_score": entry_score})
+                    in_trade = False
+                    active_symbol = None
+                    remaining = 1.0
+                    realized_pnl = 0.0
+                    tp1_hit = False
+                    if capital <= 0:
+                        break
+                continue
+
+            if cooldown > 0:
+                cooldown -= 1
+                continue
+            if trades_today >= max_tpd:
+                continue
+            if (day_start_cap - capital) / (day_start_cap + 1e-9) >= max_daily_dd:
+                continue
+
+            candidates = []
+            for symbol, df in data_by_symbol.items():
+                row = df.iloc[i]
+                sig = self.compute_signal(row, current_capital=capital)
+                if not sig.get("trade"):
+                    continue
+                score = self._candidate_score(sig, row)
+                candidates.append((score, symbol, sig, row))
+            if not candidates:
+                continue
+            score, symbol, sig, row = max(candidates, key=lambda x: x[0])
+            selection_stats[symbol]["selected"] += 1
+            active_symbol = symbol
+            trade_side = int(sig["direction"])
+            entry_score = float(sig.get("fusion_score", 0))
+            entry_capital = capital
+            close = float(row["close"])
+            high = float(row["high"])
+            low = float(row["low"])
+            entry_px = close * (1 + trade_side * SLIPPAGE)
+            an = float(sig.get("atr_norm", 0.003))
+            sl_mult = float(sig.get("sl_mult", 1.2))
+            tp1_m = float(sig.get("tp1_mult", 1.2))
+            tp2_m = float(sig.get("tp2_mult", 2.4))
+            sl = entry_px * (1 - trade_side * an * sl_mult)
+            tp1 = entry_px * (1 + trade_side * an * tp1_m)
+            tp2 = entry_px * (1 + trade_side * an * tp2_m)
+            entry_bar = i
+            peak_px = high
+            trough_px = low
+            tp1_hit = False
+            remaining = 1.0
+            realized_pnl = 0.0
+            in_trade = True
+            trades_today += 1
+        return trades, capital, selection_stats
