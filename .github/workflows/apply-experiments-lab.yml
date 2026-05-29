@@ -1,0 +1,62 @@
+name: Apply experiments lab
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-experiments-lab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Apply lab/backend wiring
+        run: python tools/wire_lab_route.py
+
+      - name: Apply raw-profit experiment patch
+        run: python tools/apply_raw_profit_experiment.py
+
+      - name: Integrate adaptive risk layers
+        run: python tools/integrate_adaptive_risk.py
+
+      - name: Harden optimizer
+        run: python tools/harden_optimizer.py
+
+      - name: Validate key Python files
+        run: |
+          python -m py_compile \
+            config/settings.py \
+            dashboard/app.py \
+            dashboard/api_lab.py \
+            backtest/engine.py \
+            optimization/optimizer.py \
+            core/risk/edge_guard.py \
+            core/risk/regime_memory.py
+
+      - name: Commit generated changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            git add .
+            git commit -m "Wire experiments lab and adaptive profit experiments"
+          else
+            echo "No changes to commit"
+          fi
+
+      - name: Push changes
+        run: git push
