@@ -277,9 +277,12 @@ class BacktestEngine:
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
         tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
 
-        # Enforce minimum R:R
+        # Real per-trade R:R: scale achievable TP2 by signal strength.
+        # Weak signals get a haircut on expected reward, so marginal setups
+        # fail the min-R:R gate instead of every trade passing identically.
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
-        if tp2_mult / max(sl_mult, 1e-9) < min_rr:
+        effective_reward = (tp2_mult / max(sl_mult, 1e-9)) * min(1.0, 0.6 + abs_score)
+        if effective_reward < min_rr:
             return {"trade": False, "reason": "rr_too_low", "fusion_score": fusion_score, "abs_score": abs_score}
 
         # FIX 4: position size from current capital (compounding)
@@ -287,7 +290,11 @@ class BacktestEngine:
                     else float(getattr(cfg, "INITIAL_CAPITAL", 50))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         leverage  = float(getattr(cfg, "LEVERAGE", 3))
-        pos_size  = capital * risk_frac * leverage * min(abs_score * 1.2, 1.5)
+        # Fractional-Kelly: edge proxy from signal strength, quarter-Kelly,
+        # hard-capped at risk_frac. Compounds via `capital` without ruin.
+        edge = max(0.0, abs_score - threshold) / max(1e-9, 1.0 - threshold)
+        kelly_frac = min(0.25 * edge, 1.0)
+        pos_size  = capital * risk_frac * kelly_frac * leverage
 
         return {
             "trade":         True,
@@ -388,10 +395,10 @@ class BacktestEngine:
 
                 if hit_tp2 or hit_sl or expired:
                     if expired and not hit_tp2 and not hit_sl:
-                        # FIX 2: TIME = flat scratch, not a loss
-                        exit_px_v = close
-                        raw_ret   = ((close - entry_px) / entry_px) * trade_side
-                        raw_ret   = max(raw_ret, -0.0002)  # cap tiny negatives at ~0
+                        # TIME exit books the REAL close-out return (no scratch).
+                        # Honest accounting — a drifting trade is a real small loss.
+                        exit_px_v = close * (1 - trade_side * SLIPPAGE)
+                        raw_ret   = ((exit_px_v - entry_px) / entry_px) * trade_side
                         exit_type = "TIME"
                     else:
                         exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
@@ -765,8 +772,8 @@ class MultiSymbolBacktestEngine(BacktestEngine):
 
                 if hit_tp2 or hit_sl or expired:
                     if expired and not hit_tp2 and not hit_sl:
-                        exit_px_v = close
-                        raw_ret   = max(((close - entry_px) / entry_px) * trade_side, -0.0002)
+                        exit_px_v = close * (1 - trade_side * SLIPPAGE)
+                        raw_ret   = ((exit_px_v - entry_px) / entry_px) * trade_side
                         exit_type = "TIME"
                     else:
                         exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)

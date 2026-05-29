@@ -200,6 +200,10 @@ async def backtest_page(request: Request):
 async def optimize_page(request: Request):
     return templates.TemplateResponse("optimize.html", {"request": request})
 
+@app.get("/train", response_class=HTMLResponse)
+async def train_page(request: Request):
+    return templates.TemplateResponse("train.html", {"request": request})
+
 @app.get("/health")
 async def health():
     return {
@@ -360,7 +364,24 @@ async def model_status():
 
 @app.get("/api/model/last")
 async def model_last():
-    return _state.get("model_training", {}) or _model_status.get("result") or {"status": "no_result"}
+    cached = _state.get("model_training", {}) or _model_status.get("result")
+    if cached:
+        return cached
+    # Fall back to on-disk truth so the UI is correct across restarts.
+    try:
+        from core.models.xgboost_model import MODEL_PATH, MODEL_VERSION
+        import joblib
+        if MODEL_PATH.exists():
+            data = joblib.load(MODEL_PATH)
+            return {
+                "f1": data.get("f1", 0.0) if isinstance(data, dict) else 0.0,
+                "mode": data.get("version", MODEL_VERSION) if isinstance(data, dict) else MODEL_VERSION,
+                "n_samples": data.get("n_samples", "—") if isinstance(data, dict) else "—",
+                "on_disk": True,
+            }
+    except Exception:
+        pass
+    return {"status": "no_result"}
 
 @app.post("/api/backtest/run")
 async def run_backtest(request: Request):
