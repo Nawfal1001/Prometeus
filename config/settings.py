@@ -1,18 +1,5 @@
 # ============================================================
 #  PROMETHEUS — Settings (v2 — ATR-based engine aligned)
-#
-#  Key changes aligned to the fixed backtest engine:
-#  ATR_SL_MULT  = 1.2   (was 1.5 — tighter SL, better R:R)
-#  ATR_TP1_MULT = 1.2   (was 1.5 — TP1 = 1:1 R:R, quick lock-in)
-#  ATR_TP2_MULT = 2.4   (was 3.5 — enforces 2:1 R:R vs SL)
-#  TP1_EXIT_PCT = 0.50  (was 0.35 — lock half at TP1)
-#  TP2_EXIT_PCT = 0.50  (was 0.40 — remainder at TP2)
-#  MAX_TRADE_DURATION_BARS = 32  (was 16 — 16h on 30m)
-#  MIN_RR_RATIO = 2.0   (enforced: TP2/SL must be >= 2:1)
-#  WEIGHT_ENTRY = 0.35  (highest — best signal without APIs)
-#  WEIGHT_LIQUIDATION = 0.30 (public data, reliable)
-#  MAX_CONSEC_LOSSES = 5 (circuit breaker)
-#  FUSION_THRESHOLD = 0.17 (slightly lower = more trades)
 # ============================================================
 
 import os, json
@@ -28,6 +15,14 @@ SETTINGS_FILE = Path(os.getenv("PROMETHEUS_SETTINGS_FILE", DATA_DIR / "user_sett
 
 def _env(key, default=None):
     return os.getenv(key, default)
+
+
+def _first_env(*keys, default=""):
+    for key in keys:
+        value = os.getenv(key)
+        if value not in (None, ""):
+            return value
+    return default
 
 
 def load_user_settings() -> dict:
@@ -57,6 +52,13 @@ def save_user_settings(data: dict):
 def get(key, default=None):
     user = load_user_settings()
     return user[key] if key in user else _env(key, default)
+
+
+def get_secret(key, *aliases, default=""):
+    user = load_user_settings()
+    if key in user and user[key] not in (None, ""):
+        return user[key]
+    return _first_env(key, *aliases, default=default)
 
 
 def get_bool(key, default="false"):
@@ -111,14 +113,14 @@ def reload_from_sources():
     TRADING_MODE = get("TRADING_MODE", "paper")
     MARGIN_MODE = get("MARGIN_MODE", "isolated")
 
-    BINANCE_API_KEY = get("BINANCE_API_KEY", "")
-    BINANCE_SECRET = get("BINANCE_API_SECRET", "")
+    BINANCE_API_KEY = get_secret("BINANCE_API_KEY")
+    BINANCE_SECRET = get_secret("BINANCE_SECRET", "BINANCE_API_SECRET")
     BINANCE_TESTNET = get_bool("BINANCE_TESTNET", "false")
-    BYBIT_API_KEY = get("BYBIT_API_KEY", "")
-    BYBIT_SECRET = get("BYBIT_API_SECRET", "")
+    BYBIT_API_KEY = get_secret("BYBIT_API_KEY")
+    BYBIT_SECRET = get_secret("BYBIT_SECRET", "BYBIT_API_SECRET")
     BYBIT_TESTNET = get_bool("BYBIT_TESTNET", "false")
-    ALPACA_API_KEY = get("ALPACA_API_KEY", "")
-    ALPACA_SECRET = get("ALPACA_API_SECRET", "")
+    ALPACA_API_KEY = get_secret("ALPACA_API_KEY")
+    ALPACA_SECRET = get_secret("ALPACA_SECRET", "ALPACA_API_SECRET")
     ALPACA_PAPER = get_bool("ALPACA_PAPER", "true")
 
     SYMBOL = get("SYMBOL", "BTC/USDT")
@@ -173,14 +175,14 @@ def reload_from_sources():
     WEIGHT_LIQUIDATION = get_float("WEIGHT_LIQUIDATION", 0.25)
     WEIGHT_ENTRY = get_float("WEIGHT_ENTRY", 0.35)
 
-    CRYPTOCOMPARE_KEY = get("CRYPTOCOMPARE_API_KEY", "")
-    ETHERSCAN_KEY = get("ETHERSCAN_API_KEY", "")
-    COINGLASS_KEY = get("COINGLASS_API_KEY", "")
-    CRYPTOQUANT_KEY = get("CRYPTOQUANT_API_KEY", "")
-    POLYGON_KEY = get("POLYGON_API_KEY", "")
+    CRYPTOCOMPARE_KEY = get_secret("CRYPTOCOMPARE_KEY", "CRYPTOCOMPARE_API_KEY")
+    ETHERSCAN_KEY = get_secret("ETHERSCAN_KEY", "ETHERSCAN_API_KEY")
+    COINGLASS_KEY = get_secret("COINGLASS_KEY", "COINGLASS_API_KEY")
+    CRYPTOQUANT_KEY = get_secret("CRYPTOQUANT_KEY", "CRYPTOQUANT_API_KEY")
+    POLYGON_KEY = get_secret("POLYGON_KEY", "POLYGON_API_KEY")
 
     SENTIMENT_MODEL = get("SENTIMENT_MODEL", "vader")
-    GEMINI_API_KEY = get("GEMINI_API_KEY", "")
+    GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
     SENTIMENT_VELOCITY_WINDOW = get_int("SENTIMENT_VELOCITY_WINDOW", 6)
     FEAR_GREED_BULL_THRESHOLD = get_int("FEAR_GREED_BULL_THRESHOLD", 60)
     FEAR_GREED_BEAR_THRESHOLD = get_int("FEAR_GREED_BEAR_THRESHOLD", 40)
@@ -206,8 +208,8 @@ def reload_from_sources():
     ADAPTIVE_RISK_MODE = get_bool("ADAPTIVE_RISK_MODE", "true")
     AUTO_SYMBOL_SELECTION = get_bool("AUTO_SYMBOL_SELECTION", "false")
 
-    TELEGRAM_BOT_TOKEN = get("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_CHAT_ID = get("TELEGRAM_CHAT_ID", "")
+    TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
     ALERT_ON_SIGNAL = get_bool("ALERT_ON_SIGNAL", "true")
     ALERT_ON_TRADE = get_bool("ALERT_ON_TRADE", "true")
     ALERT_ON_DAILY_SUMMARY = get_bool("ALERT_ON_DAILY_SUMMARY", "true")
