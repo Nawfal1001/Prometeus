@@ -52,6 +52,14 @@ class PrometheusEngine:
         self.running = False
         logger.info("[Engine] PROMETHEUS stopped")
 
+    def _normalize_layer_score(self, value, key: str = "layer_score") -> float:
+        try:
+            if isinstance(value, dict):
+                return float(value.get(key, value.get("score", 0.0)) or 0.0)
+            return float(value or 0.0)
+        except Exception:
+            return 0.0
+
     async def _candle_loop(self):
         while self.running:
             try:
@@ -77,8 +85,8 @@ class PrometheusEngine:
                     atr_norm = max(0.002, min(float(df["high"].sub(df["low"]).rolling(14).mean().iloc[-1] / current_price), 0.05))
                     ret_abs = df["close"].pct_change().abs()
                     vol_zscore = float(((ret_abs.iloc[-1] - ret_abs.rolling(48).mean().iloc[-1]) / (ret_abs.rolling(48).std().iloc[-1] + 1e-9)))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[Engine] ATR/vol estimate skipped: {e}")
                 self._consec_errors = 0
                 self._backoff_seconds = 30
 
@@ -101,17 +109,23 @@ class PrometheusEngine:
                 whale_result = {"layer_score": self.whale.get_layer_score()}
                 sent_result = {"layer_score": self.sentiment.get_layer_score()}
                 liq_result = self.liquidation.update(current_price, cfg.SYMBOL)
-                entry_result = self.entry.evaluate(df)
+
+                entry_raw = self.entry.evaluate(df)
+                entry_score = self._normalize_layer_score(entry_raw)
+                whale_score = self._normalize_layer_score(whale_result)
+                sentiment_score = self._normalize_layer_score(sent_result)
+                liquidation_score = self._normalize_layer_score(liq_result)
+
                 session_mult = self._session_multiplier()
                 threshold_mult = self.orders.risk.threshold_multiplier()
 
                 signal = self.fusion.fuse(
-                    regime_score=regime_result["score"],
-                    sentiment_score=sent_result["layer_score"],
-                    whale_score=whale_result["layer_score"],
-                    liquidation_score=liq_result["layer_score"],
-                    entry_score=entry_result["layer_score"],
-                    regime_bias=regime_result["bias"],
+                    regime_score=float(regime_result.get("score", 0.0)),
+                    sentiment_score=sentiment_score,
+                    whale_score=whale_score,
+                    liquidation_score=liquidation_score,
+                    entry_score=entry_score,
+                    regime_bias=regime_result.get("bias", 0),
                     current_price=current_price,
                     liquidation_target=liq_result.get("nearest_target", {}).get("price") if liq_result.get("nearest_target") else None,
                     htf_bias=self._4h_bias,
@@ -134,11 +148,11 @@ class PrometheusEngine:
                 await self.orders.check_paper_exits(current_price, high=recent_high, low=recent_low)
 
                 layer_scores = {
-                    "regime": regime_result["score"],
-                    "sentiment": sent_result["layer_score"],
-                    "whale": whale_result["layer_score"],
-                    "liquidation": liq_result["layer_score"],
-                    "entry": entry_result["layer_score"],
+                    "regime": float(regime_result.get("score", 0.0)),
+                    "sentiment": sentiment_score,
+                    "whale": whale_score,
+                    "liquidation": liquidation_score,
+                    "entry": entry_score,
                     "fusion": signal.get("fusion_score", 0),
                 }
                 await self._broadcast_state(current_price, signal, layer_scores, regime_result)
@@ -168,9 +182,11 @@ class PrometheusEngine:
             try:
                 logger.info("[Engine] Auto-training XGBoost on startup...")
                 df = await self.exchange.get_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, limit=1500)
-                if not df.empty and len(df) >= 300:
-                    self.entry.model.train_if_stale(df, max_age_hours=0)
-                    logger.info("[Engine] XGBoost startup training complete")
+                if not df.empty and len(df) >= 300 and hasattr(self.entry, "_load_xgb"):
+                    self.entry._load_xgb()
+                    model = getattr(self.entry, "_xgb", None)
+                    if model is not None and hasattr(model, "train_if_stale"):
+                        model.train_if_stale(df, max_age_hours=0)
                 self._xgb_trained_on_start = True
             except Exception as e:
                 logger.warning(f"[Engine] XGBoost startup training failed: {e}")
@@ -179,32 +195,30 @@ class PrometheusEngine:
         while self.running:
             try:
                 now = time.time()
-
                 if now - self._last_sentiment_update > 3600:
                     self.sentiment.update()
                     self._last_sentiment_update = now
-
                 if now - self._last_whale_update > 1800:
                     coin = cfg.SYMBOL.replace("/USDT", "")
                     self.whale.update(coin)
                     self._last_whale_update = now
-
                 if now - self._last_4h_update > 1800:
                     await self._update_4h_bias()
                     self._last_4h_update = now
-
                 if now - self._last_xgb_retrain > 21600:
                     try:
                         df = await self.exchange.get_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, limit=1500)
-                        self.entry.model.train_if_stale(df, max_age_hours=6)
+                        if hasattr(self.entry, "_load_xgb"):
+                            self.entry._load_xgb()
+                            model = getattr(self.entry, "_xgb", None)
+                            if model is not None and hasattr(model, "train_if_stale"):
+                                model.train_if_stale(df, max_age_hours=6)
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")
                     self._last_xgb_retrain = now
-
                 now_t = datetime.now().time()
                 if dtime(0, 0) <= now_t <= dtime(0, 5):
                     self.telegram.daily_summary(self.orders.get_stats())
-
             except Exception as e:
                 logger.warning(f"[Engine] Slow loop error: {e}")
             await asyncio.sleep(300)
@@ -220,13 +234,10 @@ class PrometheusEngine:
             last = float(df_4h["close"].iloc[-1])
             if last > ema20 > ema50:
                 self._4h_bias = 1
-                logger.info(f"[Engine] 4H bias: BULL price={last:.0f}")
             elif last < ema20 < ema50:
                 self._4h_bias = -1
-                logger.info(f"[Engine] 4H bias: BEAR price={last:.0f}")
             else:
                 self._4h_bias = 0
-                logger.info("[Engine] 4H bias: NEUTRAL")
         except Exception as e:
             logger.warning(f"[Engine] 4H bias update failed: {e}")
             self._4h_bias = 0
