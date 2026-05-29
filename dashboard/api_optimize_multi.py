@@ -17,7 +17,7 @@ router = APIRouter()
 
 def _clean_symbols(symbols):
     if isinstance(symbols, str):
-        return [s.strip() for s in symbols.split(',') if s.strip()]
+        return [s.strip() for s in symbols.replace(';', ',').split(',') if s.strip()]
     if isinstance(symbols, list):
         return [str(s).strip() for s in symbols if str(s).strip()]
     return []
@@ -44,7 +44,7 @@ async def run_multi_optimization(request: Request):
         trials = min(int(body.get('trials', 10)), max_trials)
         timeout = min(int(body.get('timeout', 300)), max_timeout)
         wf_opt = bool(body.get('wf_opt', False))
-        run_mode = body.get('run_mode', body.get('mode', 'compare'))
+        run_mode = str(body.get('run_mode', body.get('mode', 'compare'))).lower()
         train_bars = min(int(body.get('train_bars', 800)), candles)
         test_bars = min(int(body.get('test_bars', 200)), candles)
         step_bars = min(int(body.get('step_bars', 200)), candles)
@@ -62,8 +62,13 @@ async def run_multi_optimization(request: Request):
                         rows.append({'symbol': symbol, 'error': 'No data returned', 'rank_score': -999})
                         continue
                     data_by_symbol[symbol] = df
+
+                    # compete mode optimizes one portfolio-selector across all symbols,
+                    # so we only fetch/cache here and run once after the loop.
                     if run_mode in ('compete', 'competition'):
                         continue
+
+                    # compare / rotate mode: keep old behavior and optimize each symbol independently.
                     if wf_opt:
                         runner = WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
                         result = await loop.run_in_executor(None, runner.run)
@@ -71,7 +76,7 @@ async def run_multi_optimization(request: Request):
                         result['rank_score'] = float(result.get('summary', {}).get('avg_profit_factor', 0)) * 100 + float(result.get('summary', {}).get('avg_win_rate', 0)) * 100
                     else:
                         optimizer = PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout)
-                        result = await loop.run_in_executor(None, optimizer.run)
+                        result = await loop.run_in_executor(None, lambda opt=optimizer: opt.run(mode='single'))
                         result['symbol'] = symbol
                         result['rank_score'] = float(result.get('best_value', -999))
                     rows.append(result)
@@ -90,12 +95,31 @@ async def run_multi_optimization(request: Request):
             if not valid:
                 return JSONResponse({'error': 'No symbol data available for competing-symbol optimization', 'symbols': rows}, status_code=400)
             optimizer = PrometheusOptimizer(df=next(iter(valid.values())), metric=metric, n_trials=trials, timeout=timeout)
-            result = await loop.run_in_executor(None, lambda: optimizer.run(valid))
-            result.update({'mode': 'competing_symbols_optimization', 'timeframe': timeframe, 'candles': candles, 'trials': trials, 'timeout': timeout, 'symbols_requested': symbols, 'symbols_loaded': list(valid.keys())})
+            result = await loop.run_in_executor(None, lambda: optimizer.run(valid, mode='compete'))
+            result.update({
+                'mode': 'competing_symbols_optimization',
+                'optimizer_mode': result.get('mode', 'compete'),
+                'selection_logic': 'scan_all_symbols_each_candle_pick_highest_candidate_score',
+                'timeframe': timeframe,
+                'candles': candles,
+                'trials': trials,
+                'timeout': timeout,
+                'symbols_requested': symbols,
+                'symbols_loaded': list(valid.keys()),
+            })
             return JSONResponse(result)
 
         ranked = sorted(rows, key=lambda r: float(r.get('rank_score', -999)), reverse=True)
-        return JSONResponse({'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_optimization', 'timeframe': timeframe, 'candles': candles, 'trials': trials, 'timeout': timeout, 'symbols': ranked, 'best': ranked[0] if ranked else None})
+        return JSONResponse({
+            'mode': 'multi_walkforward_optimization' if wf_opt else 'multi_symbol_compare_optimization',
+            'selection_logic': 'optimize_each_symbol_separately_rank_best_symbol',
+            'timeframe': timeframe,
+            'candles': candles,
+            'trials': trials,
+            'timeout': timeout,
+            'symbols': ranked,
+            'best': ranked[0] if ranked else None,
+        })
     except Exception as e:
         logger.exception('[MultiOptimizeAPI] failed')
         return JSONResponse({'error': str(e)}, status_code=500)
