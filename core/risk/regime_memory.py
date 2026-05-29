@@ -102,3 +102,17 @@ class RegimeMemory:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: asdict(v) for k, v in self.buckets.items()}
         self.path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+_original_regime_memory_update = RegimeMemory.update
+
+
+def _regime_memory_update_with_save(self, *args, **kwargs):
+    result = _original_regime_memory_update(self, *args, **kwargs)
+    try:
+        self.save()
+    except Exception:
+        pass
+    return result
+
+
+RegimeMemory.update = _regime_memory_update_with_save

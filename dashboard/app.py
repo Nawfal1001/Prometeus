@@ -216,3 +216,50 @@ async def get_logs():
 async def clear_logs():
     _ui_logs.clear()
     return {"status": "cleared"}
+
+# PROMETHEUS_ROUTE_COMPAT_FIXES
+try:
+    from fastapi import Body
+except Exception:
+    Body = None
+
+@app.get("/api/settings")
+def api_get_settings_compat():
+    import config.settings as cfg
+    keys = [k for k in dir(cfg) if k.isupper()]
+    return {k: getattr(cfg, k) for k in keys if not k.startswith("_")}
+
+@app.post("/api/settings")
+def api_save_settings_compat(payload: dict = Body(default={}) if Body else {}):
+    import config.settings as cfg
+    cfg.save_user_settings(payload or {})
+    return {"ok": True, "settings": cfg.load_user_settings()}
+
+@app.post("/api/settings/normalize_weights")
+def api_normalize_weights_compat():
+    import config.settings as cfg
+    names = ["WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE", "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY"]
+    vals = {n: float(getattr(cfg, n, 0.0)) for n in names}
+    total = sum(vals.values()) or 1.0
+    normalized = {n: vals[n] / total for n in names}
+    cfg.save_user_settings(normalized)
+    return {"ok": True, "weights": normalized, "sum": sum(normalized.values())}
+
+@app.get("/api/model/status")
+def api_model_status_compat():
+    from pathlib import Path
+    import config.settings as cfg
+    model_path = Path(getattr(cfg, "MODEL_DIR", Path("data/models"))) / "xgb_model.pkl"
+    return {"exists": model_path.exists(), "path": str(model_path)}
+
+@app.get("/api/model/last")
+def api_model_last_compat():
+    return api_model_status_compat()
+
+@app.post("/api/optimize/status")
+def api_optimize_status_compat():
+    return {"running": False, "status": "idle"}
+
+@app.post("/api/optimize/cancel")
+def api_optimize_cancel_compat():
+    return {"ok": True, "status": "cancelled"}

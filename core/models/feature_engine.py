@@ -221,3 +221,47 @@ def _cvd_divergence(df: pd.DataFrame, lookback: int = 20) -> pd.Series:
     out[bullish] = 1.0
     out[bearish] = -1.0
     return out.fillna(0.0)
+
+def get_feature_columns() -> list[str]:
+    return [
+        "ema_stack", "rsi", "rsi_signal", "rsi_norm", "rsi_divergence",
+        "stoch_k", "stoch_d", "stoch_cross", "macd", "macd_signal_line",
+        "macd_hist", "macd_signal", "macd_accel", "bb_position", "bb_width",
+        "atr_norm", "vol_zscore", "vol_regime", "vol_ratio", "vol_delta",
+        "obv_norm", "dist_vwap", "adx", "adx_direction", "adx_trend_strength",
+        "cci_norm", "candle_pattern", "gap_signal", "market_structure",
+        "squeeze_fire", "cvd_signal", "cvd_divergence", "pressure_signal",
+        "ob_signal", "funding_signal", "ret_1", "ret_3", "ret_6", "ret_12",
+    ]
+
+
+def label_data(df, min_rr: float = 1.5):
+    import config.settings as cfg
+    df = df.copy()
+    if "atr" not in df.columns:
+        df["atr"] = df["close"] * float(getattr(cfg, "MIN_ATR_NORM", 0.003))
+    atr = df["atr"].fillna(df["close"] * 0.003)
+    sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
+    tp_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.2))
+    labels = []
+    lookahead = int(getattr(cfg, "XGB_LABEL_LOOKAHEAD", 10))
+    for i in range(len(df)):
+        if i >= len(df) - lookahead:
+            labels.append(0)
+            continue
+        entry = float(df["close"].iloc[i])
+        atr_v = float(atr.iloc[i])
+        hi = df["high"].iloc[i + 1:i + 1 + lookahead]
+        lo = df["low"].iloc[i + 1:i + 1 + lookahead]
+        long_tp = entry + atr_v * tp_mult
+        long_sl = entry - atr_v * sl_mult
+        short_tp = entry - atr_v * tp_mult
+        short_sl = entry + atr_v * sl_mult
+        if bool((hi >= long_tp).any()) and not bool((lo <= long_sl).any()):
+            labels.append(1)
+        elif bool((lo <= short_tp).any()) and not bool((hi >= short_sl).any()):
+            labels.append(-1)
+        else:
+            labels.append(0)
+    df["label"] = labels[:len(df)]
+    return df[df["label"] != 0].copy()

@@ -208,3 +208,7 @@ class XGBoostSignalModel:
                 self._binary_mode = False
         else:
             logger.warning("[XGBoost] No saved model found. Train first.")
+
+def train_xgb_model(df):
+    model = XGBoostSignalModel()
+    return model.train(df)

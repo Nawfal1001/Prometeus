@@ -30,3 +30,7 @@ logs/
 .DS_Store
 .vscode/
 .idea/
+data/models/*.pkl
+data/models/*.tmp
+data/user_settings.json
+data/regime_memory.json

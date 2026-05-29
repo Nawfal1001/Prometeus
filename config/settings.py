@@ -204,6 +204,7 @@ def reload_from_sources():
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
     RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "true")
     ADAPTIVE_RISK_MODE = get_bool("ADAPTIVE_RISK_MODE", "true")
+    AUTO_SYMBOL_SELECTION = get_bool("AUTO_SYMBOL_SELECTION", "false")
 
     TELEGRAM_BOT_TOKEN = get("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT_ID = get("TELEGRAM_CHAT_ID", "")

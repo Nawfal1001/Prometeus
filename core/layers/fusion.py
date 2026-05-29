@@ -190,3 +190,13 @@ class FusionEngine:
         if abs(total - 1.0) > 0.02:
             logger.warning(f"[Fusion] Weight sum drift detected: sum={total:.4f} weights={self.weights}")
         logger.info(f"[Fusion] Weights reloaded: {self.weights} sum={total:.4f}")
+
+def _fusion_update_live_capital(self, capital: float):
+    try:
+        self.live_capital = float(capital)
+    except Exception:
+        self.live_capital = None
+
+
+if not hasattr(FusionEngine, "update_live_capital"):
+    FusionEngine.update_live_capital = _fusion_update_live_capital
