@@ -1,0 +1,27 @@
+name: Apply Final Fixes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-final-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run final fix pack
+        run: python scripts/apply_final_fixes.py
+
+      - name: Commit and push patched files
+        run: |
+          git config user.name "prometheus-fix-bot"
+          git config user.email "actions@github.com"
+          git add config/settings.py backtest/engine.py core/layers/fusion.py core/scanner/multi_symbol_scanner.py scripts/apply_final_fixes.py
+          git commit -m "Apply final Prometheus logic fixes" || echo "No changes to commit"
+          git push
