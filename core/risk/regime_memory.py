@@ -1,23 +1,16 @@
 # ============================================================
 # PROMETHEUS — Regime Memory
 # ============================================================
-#
-# A lightweight market-memory layer for compounding systems.
-# It learns which feature regimes historically produced positive expectancy
-# and returns a confidence multiplier for similar future regimes.
-#
-# Deterministic, JSON-backed, and safe to use in backtest/live.
-# ============================================================
 
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
-import math
 from typing import Any
 
-MEMORY_PATH = Path("config/regime_memory.json")
+BASE_DIR = Path(__file__).resolve().parents[2]
+MEMORY_PATH = BASE_DIR / "data" / "regime_memory.json"
 
 
 @dataclass
@@ -62,7 +55,6 @@ class RegimeMemory:
         vol_z = get("vol_zscore", 0.0)
         trend = get("ema_stack", 0.0)
         score = get("fusion_score", get("score", 0.0))
-
         atr_bin = "dead" if atr < 0.0012 else "calm" if atr < 0.003 else "active" if atr < 0.008 else "hot"
         vol_bin = "normal" if vol_z < 1.5 else "elevated" if vol_z < 2.5 else "shock"
         trend_bin = "bull" if trend > 0 else "bear" if trend < 0 else "range"
@@ -87,13 +79,14 @@ class RegimeMemory:
         bucket.wins += 1 if pnl > 0 else 0
         bucket.pnl_sum += pnl
         bucket.pnl_abs_sum += abs(pnl)
+        self.save()
 
     def load(self) -> None:
         if not self.path.exists():
             self.buckets = {}
             return
         try:
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding="utf-8"))
             self.buckets = {k: RegimeBucket(**v) for k, v in data.items()}
         except Exception:
             self.buckets = {}
@@ -101,18 +94,6 @@ class RegimeMemory:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: asdict(v) for k, v in self.buckets.items()}
-        self.path.write_text(json.dumps(data, indent=2, sort_keys=True))
-
-_original_regime_memory_update = RegimeMemory.update
-
-
-def _regime_memory_update_with_save(self, *args, **kwargs):
-    result = _original_regime_memory_update(self, *args, **kwargs)
-    try:
-        self.save()
-    except Exception:
-        pass
-    return result
-
-
-RegimeMemory.update = _regime_memory_update_with_save
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(self.path)
