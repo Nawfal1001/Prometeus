@@ -1,11 +1,5 @@
 # ============================================================
 #  PROMETHEUS — Layer 5: Entry Signal
-#
-#  FIXES APPLIED:
-#  9. Adds RSI divergence into entry scoring.
-# 10. Adds order-book imbalance into entry scoring.
-# 11. Adds funding-rate contrarian signal into entry scoring.
-# 12. Keeps XGBoost optional and fails neutral if model unavailable.
 # ============================================================
 
 import numpy as np
@@ -33,6 +27,17 @@ class EntrySignal:
             self._xgb = None
 
     def evaluate(self, row) -> float:
+        """
+        Canonical live entry scorer.
+        Accepts either a single feature row or a full feature dataframe.
+        The live engine passes a dataframe; using the last row here prevents
+        pandas Series conversion errors from silently zeroing the entry layer.
+        """
+        if hasattr(row, "columns") and hasattr(row, "iloc"):
+            if len(row) == 0:
+                return 0.0
+            row = row.iloc[-1]
+
         scores = []
         W = 0.0
 
@@ -44,12 +49,10 @@ class EntrySignal:
             except Exception:
                 pass
 
-        # Trend / location
         add(row.get("ema_stack", 0), 1.1)
         vd = float(row.get("dist_vwap", 0) or 0)
         add(1 if vd > 0.0004 else -1 if vd < -0.0004 else 0, 0.8)
 
-        # RSI / stochastic
         rsi = float(row.get("rsi", 50) or 50)
         rs = float(row.get("rsi_signal", 0) or 0)
         if rs == 0:
@@ -58,22 +61,17 @@ class EntrySignal:
                   0.2 if rsi < 48 else -0.2 if rsi > 52 else 0.0)
         add(rs, 0.8)
         add(row.get("stoch_cross", 0), 0.5)
-
-        # FIX 9: RSI divergence
         add(row.get("rsi_divergence", 0), 0.9)
 
-        # Volume / market structure
         vr = float(row.get("vol_ratio", 1.0) or 1.0)
         vd2 = float(row.get("vol_delta", 0) or 0)
         add(np.sign(vd2) * (1.0 if vr > 2.0 else 0.6 if vr > 1.5 else 0.0), 0.5)
         add(row.get("market_structure", 0), 0.8)
 
-        # MACD / volatility expansion
         ms = float(row.get("macd_signal", 0) or 0) * 0.5 + float(row.get("macd_accel", 0) or 0) * 0.25
         add(ms, 0.7)
         add(row.get("squeeze_fire", 0), 1.0)
 
-        # Bollinger / ADX / CCI / candles
         bp = float(row.get("bb_position", 0.5) or 0.5)
         add(1 if bp < 0.25 else -1 if bp > 0.75 else 0, 0.45)
         add(float(row.get("adx_trend_strength", 0) or 0) * float(row.get("adx_direction", 0) or 0), 0.6)
@@ -81,18 +79,12 @@ class EntrySignal:
         add(row.get("candle_pattern", 0), 0.45)
         add(row.get("gap_signal", 0), 0.25)
 
-        # CVD / pressure
         add(row.get("cvd_divergence", 0), 0.8)
         add(row.get("cvd_signal", 0), 0.55)
         add(row.get("pressure_signal", 0), 0.45)
-
-        # FIX 10: order-book imbalance
         add(row.get("ob_signal", 0), 0.75)
-
-        # FIX 11: funding-rate contrarian pressure
         add(row.get("funding_signal", 0), 0.45)
 
-        # Optional ML
         try:
             self._load_xgb()
             if self._xgb is not None and self._xgb.model is not None:
