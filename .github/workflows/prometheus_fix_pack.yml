@@ -1,0 +1,87 @@
+name: Apply Prometheus Fix Pack
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply targeted fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'Missing expected block in {path}: {old[:80]!r}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          # settings.py: safer runtime path, atomic save, reload after save
+          replace('config/settings.py', 'BASE_DIR = Path(__file__).resolve().parent.parent\nSETTINGS_FILE = BASE_DIR / "config" / "user_settings.json"', 'BASE_DIR = Path(__file__).resolve().parent.parent\nDATA_DIR = BASE_DIR / "data"\nDATA_DIR.mkdir(parents=True, exist_ok=True)\nSETTINGS_FILE = Path(os.getenv("PROMETHEUS_SETTINGS_FILE", DATA_DIR / "user_settings.json"))')
+          replace('config/settings.py', 'def save_user_settings(data: dict):\n    existing = load_user_settings()\n    existing.update(data)\n    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)\n    with open(SETTINGS_FILE, "w") as f:\n        json.dump(existing, f, indent=2)', 'def save_user_settings(data: dict):\n    if not isinstance(data, dict):\n        return\n    existing = load_user_settings()\n    existing.update(data)\n    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)\n    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + ".tmp")\n    with open(tmp, "w", encoding="utf-8") as f:\n        json.dump(existing, f, indent=2)\n    tmp.replace(SETTINGS_FILE)\n    reload_from_sources()')
+          replace('config/settings.py', 'with open(SETTINGS_FILE) as f:\n                return json.load(f)', 'with open(SETTINGS_FILE, encoding="utf-8") as f:\n                data = json.load(f)\n                return data if isinstance(data, dict) else {}')
+          replacements = {
+              'LEVERAGE = get_int("LEVERAGE", 3)': 'LEVERAGE = get_int("LEVERAGE", 5)',
+              'MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 6)': 'MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 10)',
+              'FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.17)': 'FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.15)',
+              'ATR_TP2_MULT = get_float("ATR_TP2_MULT", 2.4)': 'ATR_TP2_MULT = get_float("ATR_TP2_MULT", 3.2)',
+              'TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.50)': 'TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.40)',
+              'TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.50)': 'TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.60)',
+              'MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 32)': 'MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 20)',
+              'WEIGHT_REGIME = get_float("WEIGHT_REGIME", 0.20)': 'WEIGHT_REGIME = get_float("WEIGHT_REGIME", 0.18)',
+              'WEIGHT_SENTIMENT = get_float("WEIGHT_SENTIMENT", 0.05)': 'WEIGHT_SENTIMENT = get_float("WEIGHT_SENTIMENT", 0.12)',
+              'WEIGHT_LIQUIDATION = get_float("WEIGHT_LIQUIDATION", 0.30)': 'WEIGHT_LIQUIDATION = get_float("WEIGHT_LIQUIDATION", 0.25)',
+              'OPTUNA_METRIC = get("OPTUNA_METRIC", "composite")': 'OPTUNA_METRIC = get("OPTUNA_METRIC", "target_150")',
+              'RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "false")': 'RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "true")',
+          }
+          text = Path('config/settings.py').read_text(encoding='utf-8')
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+          Path('config/settings.py').write_text(text, encoding='utf-8')
+
+          # XGBoost model: save in data/models for persistent runtime data
+          replace('core/models/xgboost_model.py', 'MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "xgb_model.pkl"\nMODEL_PATH.parent.mkdir(exist_ok=True)', 'BASE_DIR = Path(__file__).resolve().parent.parent.parent\nMODEL_DIR = Path(getattr(cfg, "MODEL_DIR", BASE_DIR / "data" / "models"))\nMODEL_DIR.mkdir(parents=True, exist_ok=True)\nMODEL_PATH = MODEL_DIR / "xgb_model.pkl"')
+          replace('core/models/xgboost_model.py', 'def save(self):\n        joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION, "binary_mode": self._binary_mode}, MODEL_PATH)\n        logger.info(f"[XGBoost] Model saved ({MODEL_VERSION})")', 'def save(self):\n        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)\n        joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION, "binary_mode": self._binary_mode}, MODEL_PATH)\n        logger.info(f"[XGBoost] Model saved ({MODEL_VERSION}) at {MODEL_PATH}")')
+
+          # Feature engine minimal signal pack additions
+          text = Path('core/models/feature_engine.py').read_text(encoding='utf-8')
+          if 'rsi_divergence' not in text:
+              marker = '    df["rsi_signal"] = np.where(\n        df["rsi"] < 30,  1.0, np.where(\n        df["rsi"] < 40,  0.6, np.where(\n        df["rsi"] < 48,  0.2, np.where(\n        df["rsi"] > 70, -1.0, np.where(\n        df["rsi"] > 60, -0.6, np.where(\n        df["rsi"] > 52, -0.2, 0.0))))))\n'
+              insert = marker + '\n    lookback_div = 10\n    price_chg = df["close"].diff(lookback_div)\n    rsi_chg = df["rsi"].diff(lookback_div)\n    bull_div = ((price_chg < 0) & (rsi_chg > 2)).astype(float)\n    bear_div = ((price_chg > 0) & (rsi_chg < -2)).astype(float)\n    df["rsi_divergence"] = bull_div - bear_div\n'
+              text = text.replace(marker, insert)
+          if 'ob_signal' not in text:
+              marker = '    df.dropna(inplace=True)\n    return df\n'
+              insert = '    if "ob_imbalance" in df.columns:\n        df["ob_imbalance"] = df["ob_imbalance"].fillna(0)\n        df["ob_signal"] = np.clip(df["ob_imbalance"] * 2, -1, 1)\n    else:\n        df["ob_signal"] = 0.0\n\n    if "funding_rate" in df.columns:\n        df["funding_rate"] = df["funding_rate"].fillna(0)\n        df["funding_signal"] = np.clip(-df["funding_rate"] * 200, -1, 1)\n    else:\n        df["funding_signal"] = 0.0\n\n' + marker
+              text = text.replace(marker, insert)
+          text = text.replace('"rsi_norm", "rsi_signal",', '"rsi_norm", "rsi_signal", "rsi_divergence",')
+          text = text.replace('"gap_signal", "candle_pattern",', '"gap_signal", "candle_pattern", "ob_signal", "funding_signal",')
+          Path('core/models/feature_engine.py').write_text(text, encoding='utf-8')
+
+      - name: Validate syntax
+        run: |
+          python -m py_compile \
+            config/settings.py \
+            core/models/xgboost_model.py \
+            core/models/feature_engine.py \
+            core/layers/sentiment.py \
+            core/layers/whale.py \
+            core/layers/regime.py
+
+      - name: Commit changes
+        run: |
+          git config user.name "prometheus-fix-bot"
+          git config user.email "actions@github.com"
+          git add config/settings.py core/models/xgboost_model.py core/models/feature_engine.py core/layers/sentiment.py core/layers/whale.py core/layers/regime.py
+          git commit -m "Apply runtime settings, model persistence, and signal feature fixes" || echo "No changes to commit"
+          git push
