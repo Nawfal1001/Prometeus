@@ -1,17 +1,12 @@
 # ============================================================
-#  PROMETHEUS — Multi-symbol Scanner / Ranker (v2 — consistent)
+#  PROMETHEUS — Multi-symbol Scanner / Ranker (v3 — calibrated)
 #
-#  FIX vs v1:
-#   - Ranks via BacktestEngine.compute_signal (the SAME logic that
-#     actually trades), not a separate FusionEngine formula. The symbol
-#     ranked #1 is now one the engine would genuinely trade.
-#   - Removes the incoherent double-gate (it re-checked abs(fusion_score)
-#     against a different threshold than fusion used).
-#   - rr defaults to 0 when genuinely unavailable (was silently gifting
-#     MIN_RR_RATIO, which rewarded failed computations).
-#   - Volatility scoring rewards a healthy ATR band and only penalizes
-#     dead or spiking vol — a momentum strategy should not prefer flat
-#     symbols, which the old linear penalty caused.
+#  Key points:
+#   - Ranks via BacktestEngine.compute_signal (same logic that trades).
+#   - Separates directional fusion_score from confidence/display score.
+#   - Confidence is always 0-100 and never negative.
+#   - rank_score remains an internal sortable quality score.
+#   - display_score is safe for UI and always 0-100.
 # ============================================================
 
 import asyncio
@@ -33,7 +28,6 @@ class MultiSymbolScanner:
             self.symbols = [s.strip() for s in self.symbols.split(",") if s.strip()]
         self.timeframe = timeframe or cfg.TIMEFRAME
         self.limit = int(limit)
-        # Single source of truth — same engine that trades.
         from backtest.engine import BacktestEngine
         self.engine = BacktestEngine()
         self.engine._load_xgb()
@@ -60,8 +54,14 @@ class MultiSymbolScanner:
                     rows.append(await self._scan_symbol(symbol))
                 except Exception as e:
                     logger.exception(f"[Scanner] {symbol} failed")
-                    rows.append({"symbol": symbol, "tradable": False,
-                                 "rank_score": -999, "error": f"{type(e).__name__}: {e}"})
+                    rows.append({
+                        "symbol": symbol,
+                        "tradable": False,
+                        "rank_score": -999,
+                        "display_score": 0.0,
+                        "confidence": 0.0,
+                        "error": f"{type(e).__name__}: {e}",
+                    })
 
             ranked = sorted(rows, key=lambda x: float(x.get("rank_score", -999) or -999), reverse=True)
             best = next((r for r in ranked if r.get("tradable")), ranked[0] if ranked else None)
@@ -74,16 +74,27 @@ class MultiSymbolScanner:
                     if asyncio.iscoroutine(maybe):
                         await maybe
 
+    @staticmethod
+    def _volatility_quality(atr_norm: float) -> float:
+        if atr_norm <= 0:
+            return 0.0
+        if atr_norm < 0.001:
+            return 0.0
+        if 0.002 <= atr_norm <= 0.015:
+            return 1.0
+        if atr_norm <= 0.03:
+            return 0.65
+        return 0.25
+
     async def _scan_symbol(self, symbol: str) -> dict[str, Any]:
         try:
             df = await self.exchange.get_ohlcv(symbol, self.timeframe, limit=self.limit)
             if df is None or df.empty:
-                return {"symbol": symbol, "tradable": False, "rank_score": -999, "error": "no_data"}
+                return {"symbol": symbol, "tradable": False, "rank_score": -999, "display_score": 0.0, "confidence": 0.0, "error": "no_data"}
             if len(df) < 100:
-                return {"symbol": symbol, "tradable": False, "rank_score": -999,
+                return {"symbol": symbol, "tradable": False, "rank_score": -999, "display_score": 0.0, "confidence": 0.0,
                         "error": f"not_enough_data:{len(df)}"}
 
-            # Inject live order-book imbalance so ob_signal is real for each symbol.
             try:
                 ob = await self.exchange.get_orderbook(symbol, depth=10)
                 bids = ob.get("bids", [])
@@ -94,59 +105,68 @@ class MultiSymbolScanner:
                     imb = (bid_vol - ask_vol) / (bid_vol + ask_vol + 1e-9)
                     df.loc[df.index[-1], "ob_imbalance"] = imb
             except Exception:
-                pass  # safe — feature engine defaults ob_signal to 0.0
+                pass
 
             df = compute_features(df.copy())
             if df is None or df.empty:
-                return {"symbol": symbol, "tradable": False, "rank_score": -999,
+                return {"symbol": symbol, "tradable": False, "rank_score": -999, "display_score": 0.0, "confidence": 0.0,
                         "error": "feature_engine_empty"}
 
             last = df.iloc[-1]
-            # Rank using the SAME signal the engine trades on.
             sig = self.engine.compute_signal(last, current_capital=float(getattr(cfg, "INITIAL_CAPITAL", 50)))
 
             tradable = bool(sig.get("trade", False))
-            abs_score = float(sig.get("abs_score", 0) or 0)
+            abs_score = max(0.0, min(float(sig.get("abs_score", 0) or 0), 1.0))
             fusion_score = float(sig.get("fusion_score", 0) or 0)
             side = sig.get("side", "long" if fusion_score > 0 else "short" if fusion_score < 0 else "none")
+            reason = sig.get("reason", "ok")
 
             atr_norm = float(last.get("atr_norm", 0) or 0)
             vol_ratio = float(last.get("vol_ratio", 1) or 1)
+            threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.17))
 
-            # rr: only real values. No gift default when unavailable.
             rr = (float(sig.get("tp2_mult", 0) or 0) /
                   max(float(sig.get("sl_mult", 0) or 0), 1e-9)) if sig.get("sl_mult") else 0.0
 
-            # --- Ranking score (momentum-aware) -----------------------
-            confidence = abs_score
-            vol_participation = min(max(vol_ratio - 1.0, 0.0), 1.0) * 0.10
-            rr_bonus = min(max(rr - 1.0, 0.0), 2.0) * 0.08
+            edge = max(0.0, (abs_score - threshold) / max(1e-9, 1.0 - threshold))
+            vol_participation = min(max(vol_ratio - 1.0, 0.0), 1.5) / 1.5
+            vol_quality = self._volatility_quality(atr_norm)
+            rr_quality = min(max((rr - 1.0) / 2.0, 0.0), 1.0) if rr else 0.0
 
-            if atr_norm < 0.001:
-                vol_band = -0.15
-            elif atr_norm > 0.03:
-                vol_band = -0.15
-            else:
-                vol_band = +0.05
+            rank_score = (
+                edge * 0.45 +
+                abs_score * 0.25 +
+                vol_quality * 0.15 +
+                vol_participation * 0.10 +
+                rr_quality * 0.05
+            )
 
-            rank_score = confidence + vol_participation + rr_bonus + vol_band
             if not tradable:
-                rank_score -= 0.50
+                rank_score *= 0.35
+
+            display_score = max(0.0, min(rank_score * 100.0, 100.0))
+            confidence_pct = max(0.0, min(abs_score * 100.0, 100.0))
 
             return {
                 "symbol": symbol,
                 "tradable": tradable,
                 "rank_score": round(rank_score, 5),
+                "display_score": round(display_score, 1),
+                "confidence": round(confidence_pct, 1),
                 "fusion_score": round(fusion_score, 5),
+                "directional_score": round(fusion_score, 5),
+                "edge": round(edge, 5),
                 "side": side,
-                "threshold": float(getattr(cfg, "FUSION_THRESHOLD", 0.17)),
+                "threshold": threshold,
                 "risk_reward": round(rr, 3),
+                "rr_quality": round(rr_quality, 3),
+                "vol_quality": round(vol_quality, 3),
                 "atr_norm": atr_norm,
                 "vol_ratio": vol_ratio,
                 "price": float(last.get("close", 0) or 0),
-                "reason": sig.get("reason", "ok"),
+                "reason": reason,
             }
         except Exception as e:
             logger.exception(f"[Scanner] Fatal error scanning {symbol}")
-            return {"symbol": symbol, "tradable": False, "rank_score": -999,
+            return {"symbol": symbol, "tradable": False, "rank_score": -999, "display_score": 0.0, "confidence": 0.0,
                     "error": f"{type(e).__name__}: {e}"}
