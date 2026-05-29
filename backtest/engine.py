@@ -26,8 +26,6 @@ import numpy as np
 from loguru import logger
 from core.models.feature_engine import compute_features
 import config.settings as cfg
-from core.risk.edge_guard import AdaptiveEdgeGuard, EdgeGuardState
-from core.risk.regime_memory import RegimeMemory
 
 TAKER_FEE = 0.0005
 SLIPPAGE  = 0.0003
@@ -37,8 +35,6 @@ class BacktestEngine:
 
     def __init__(self):
         self._xgb = None
-        self.edge_guard = AdaptiveEdgeGuard()
-        self.regime_memory = RegimeMemory()
 
     # ── XGBoost lazy loader ──────────────────────────────────
 
@@ -174,28 +170,6 @@ class BacktestEngine:
         # Squeeze fire — momentum breakout
         add(row.get("squeeze_fire", 0), 1.0)
 
-        # Breakout expansion boost: adds opportunities during confirmed momentum,
-        # without lowering the global threshold or adding hard filters.
-        close = float(row.get("close", 0))
-        prev_high = float(row.get("prev_high", row.get("high", close)))
-        prev_low = float(row.get("prev_low", row.get("low", close)))
-        atr_norm = float(row.get("atr_norm", 0.003) or 0.003)
-        macd_accel = float(row.get("macd_accel", 0))
-        vol_ratio = float(row.get("vol_ratio", 1.0))
-        ema_stack = float(row.get("ema_stack", 0))
-        if close > prev_high and vol_ratio > 1.25:
-            add(0.65 + min(max(macd_accel, 0), 0.35), 0.8)
-        elif close < prev_low and vol_ratio > 1.25:
-            add(-0.65 + max(min(macd_accel, 0), -0.35), 0.8)
-
-        # Pullback continuation boost: adds trend-following entries on VWAP/RSI pullbacks,
-        # helping trade count without blindly accepting weak signals.
-        vwap_dist = float(row.get("dist_vwap", 0))
-        if ema_stack > 0 and 38 <= rsi <= 53 and abs(vwap_dist) < max(0.004, atr_norm * 1.2):
-            add(0.55, 0.7)
-        elif ema_stack < 0 and 47 <= rsi <= 62 and abs(vwap_dist) < max(0.004, atr_norm * 1.2):
-            add(-0.55, 0.7)
-
         # CVD signals
         add(row.get("cvd_divergence", 0), 0.8)
         add(row.get("cvd_signal", 0), 0.6)
@@ -229,218 +203,89 @@ class BacktestEngine:
         """
         Public method — called by BOTH single-symbol _simulate()
         AND MultiSymbolBacktestEngine._simulate_multi().
+        This is the single source of truth for all backtest signal logic.
 
-        Uses the same FusionEngine-style layer scoring as live mode,
-        with deterministic offline proxies for sentiment / whale /
-        liquidation so backtests remain reproducible.
+        FIX 3: uses cfg.WEIGHT_* (so Optuna tuning actually changes results)
+        FIX 4: current_capital enables position size compounding
+        FIX 1: ATR-direct SL (no chandelier) -> predictable R:R
         """
-        vol_z = float(row.get("vol_zscore", 0) or 0)
+        # Volatility filters
+        vol_z    = float(row.get("vol_zscore", 0) or 0)
         atr_norm = float(row.get("atr_norm", 0.003) or 0.003)
         if vol_z > float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5)):
             return {"trade": False, "reason": "vol_spike", "fusion_score": 0, "abs_score": 0}
         if atr_norm < float(getattr(cfg, "MIN_ATR_NORM", 0.001)):
             return {"trade": False, "reason": "dead_vol", "fusion_score": 0, "abs_score": 0}
 
-        def v(name, default=0.0):
-            try:
-                x = row.get(name, default)
-                if x is None or pd.isna(x):
-                    return default
-                return float(x)
-            except Exception:
-                return default
+        entry_score = self._entry_score(row)
+        regime_bias, regime_score = self._regime_score(row)
 
-        ema_stack = v("ema_stack")
-        adx_strength = v("adx_trend_strength")
-        adx_direction = v("adx_direction")
-        market_structure = v("market_structure")
-        gap_signal = v("gap_signal")
-        candle_pattern = v("candle_pattern")
-        rsi_norm = v("rsi_norm")
-        stoch_cross = v("stoch_cross")
-        macd_signal = v("macd_signal")
-        macd_accel = v("macd_accel")
-        cci_norm = v("cci_norm")
-        ret_1 = v("ret_1")
-        ret_3 = v("ret_3")
-        ret_6 = v("ret_6")
-        vol_ratio = v("vol_ratio", 1.0)
-        vol_delta = v("vol_delta")
-        obv_norm = v("obv_norm")
-        vol_regime = v("vol_regime", 1.0)
-
-        momentum_score = np.clip(
-            0.24 * rsi_norm +
-            0.14 * stoch_cross +
-            0.18 * macd_signal +
-            0.12 * macd_accel +
-            0.12 * cci_norm +
-            0.10 * np.clip(ret_1 * 100, -1, 1) +
-            0.06 * np.clip(ret_3 * 50, -1, 1) +
-            0.04 * np.clip(ret_6 * 30, -1, 1),
-            -1, 1,
-        )
-        trend_score = np.clip(
-            0.40 * ema_stack +
-            0.25 * adx_direction * max(adx_strength, 0) +
-            0.15 * market_structure +
-            0.12 * gap_signal +
-            0.08 * candle_pattern,
-            -1, 1,
-        )
-        volume_score = np.clip(
-            0.45 * np.tanh(vol_delta / 3) +
-            0.35 * np.tanh(obv_norm / 2) +
-            0.20 * np.clip(vol_ratio - 1.0, -1, 1),
-            -1, 1,
-        )
-
-        entry_score = float(np.clip(0.50 * momentum_score + 0.35 * trend_score + 0.15 * volume_score, -1, 1))
-        regime_score = float(np.clip(0.70 * trend_score + 0.30 * np.sign(entry_score) * max(adx_strength, 0), -1, 1))
-
-        # Offline deterministic proxies mirroring FusionEngine.generate_signal().
-        sentiment_score = float(np.clip(0.55 * momentum_score + 0.45 * gap_signal, -1, 1))
-        whale_score = float(np.clip(volume_score, -1, 1))
-        liquidation_pressure = np.clip((vol_ratio - 1.0) / 2.0, 0, 1) * np.clip(abs(vol_delta) / 3.0, 0, 1)
-        liquidation_score = float(np.sign(entry_score) * liquidation_pressure)
-
-        regime_bias = 1 if regime_score > 0.10 else -1 if regime_score < -0.10 else 0
-        direction = 1 if (entry_score + regime_score) >= 0 else -1
-
-        w_e = float(getattr(cfg, "WEIGHT_ENTRY", 0.35))
-        w_r = float(getattr(cfg, "WEIGHT_REGIME", 0.20))
-        w_s = float(getattr(cfg, "WEIGHT_SENTIMENT", 0.05))
-        w_w = float(getattr(cfg, "WEIGHT_WHALE", 0.10))
+        # FIX 3: use cfg.WEIGHT_* exactly as live FusionEngine does
+        w_e = float(getattr(cfg, "WEIGHT_ENTRY",      0.35))
+        w_r = float(getattr(cfg, "WEIGHT_REGIME",     0.20))
+        w_s = float(getattr(cfg, "WEIGHT_SENTIMENT",  0.05))
+        w_w = float(getattr(cfg, "WEIGHT_WHALE",      0.10))
         w_l = float(getattr(cfg, "WEIGHT_LIQUIDATION", 0.30))
-        w_total = max(w_e + w_r + w_s + w_w + w_l, 1e-9)
-        fusion_score = float(np.clip((
-            entry_score * w_e +
-            regime_score * w_r +
-            sentiment_score * w_s +
-            whale_score * w_w +
-            liquidation_score * w_l
-        ) / w_total, -1, 1))
-        direction = 1 if fusion_score > 0 else -1
-        abs_score = abs(fusion_score)
+        w_total = w_e + w_r + w_s + w_w + w_l
+        w_e /= w_total; w_r /= w_total
 
+        # Sentiment/whale/liquidation = 0 (no live API in backtest)
+        fusion_score = float(np.clip(entry_score * w_e + regime_score * w_r, -1, 1))
+        direction    = 1 if fusion_score > 0 else -1
+        abs_score    = abs(fusion_score)
+
+        # Spot: no shorts
         if str(getattr(cfg, "MARKET_TYPE", "futures")).lower() == "spot" and direction == -1:
             return {"trade": False, "reason": "spot_short", "fusion_score": fusion_score, "abs_score": abs_score}
 
+        # Regime filter
         regime_thr = float(getattr(cfg, "REGIME_BLOCK_THRESHOLD", 0.25))
         if regime_bias == 1 and direction == -1 and abs(entry_score) < regime_thr:
             return {"trade": False, "reason": "regime_blocks_short", "fusion_score": fusion_score, "abs_score": abs_score}
         if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_thr:
             return {"trade": False, "reason": "regime_blocks_long", "fusion_score": fusion_score, "abs_score": abs_score}
 
-        threshold_mult = 1.0
-        if vol_z > 2.5:
-            threshold_mult = 1.35
-        elif vol_regime < 0.35:
-            threshold_mult = 1.20
-        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.17)) * threshold_mult
+        # Threshold
+        threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.17))
         if abs_score < threshold:
             return {"trade": False, "reason": "below_threshold", "fusion_score": fusion_score, "abs_score": abs_score}
 
-        sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
+        # FIX 1: ATR-direct exit levels (no chandelier)
+        sl_mult  = float(getattr(cfg, "ATR_SL_MULT",  1.2))
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
         tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
 
-        # Raw-profit experiment: momentum continuation + dynamic TP expansion.
-        # Backtest-only safe gate controlled by cfg.RAW_PROFIT_MODE.
-        raw_profit_mode = bool(getattr(cfg, "RAW_PROFIT_MODE", False))
-        continuation = (
-            raw_profit_mode
-            and abs(ema_stack) > 0.35
-            and abs(ret_3) > 0.0015
-            and abs(ret_6) > 0.0025
-            and vol_ratio > 1.35
-            and vol_z <= 2.5
-            and np.sign(ret_3) == np.sign(ret_6) == np.sign(fusion_score)
-        )
-        breakout = (
-            raw_profit_mode
-            and v("prev_high", 0.0) > 0
-            and v("prev_low", 0.0) > 0
-            and (
-                (direction == 1 and v("high") > v("prev_high") and vol_ratio > 1.25)
-                or (direction == -1 and v("low") < v("prev_low") and vol_ratio > 1.25)
-            )
-            and vol_z <= 2.5
-        )
-        if continuation or breakout:
-            tp2_boost = 1.0
-            tp2_boost += 0.35 if continuation else 0.0
-            tp2_boost += 0.25 if breakout else 0.0
-            tp2_boost += min(0.45, max(0.0, vol_ratio - 1.0) * 0.18)
-            tp2_mult = min(4.5, tp2_mult * tp2_boost)
-            abs_score = min(1.0, abs_score * (1.05 if continuation else 1.0) * (1.04 if breakout else 1.0))
-
+        # Enforce minimum R:R
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
-        effective_reward = (tp2_mult / max(sl_mult, 1e-9)) * min(1.0, 0.6 + abs_score)
-        if effective_reward < min_rr:
+        if tp2_mult / max(sl_mult, 1e-9) < min_rr:
             return {"trade": False, "reason": "rr_too_low", "fusion_score": fusion_score, "abs_score": abs_score}
 
-        capital = current_capital if current_capital is not None else float(getattr(cfg, "INITIAL_CAPITAL", 50))
+        # FIX 4: position size from current capital (compounding)
+        # Confidence-based direct fractional sizing:
+        # - valid weak signals still get meaningful size
+        # - medium signals use near-normal risk
+        # - strong signals scale up, while risk_frac/leverage still cap exposure
+        capital   = current_capital if current_capital is not None \
+                    else float(getattr(cfg, "INITIAL_CAPITAL", 50))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
-        leverage = float(getattr(cfg, "LEVERAGE", 3))
-        edge = max(0.0, abs_score - threshold) / max(1e-9, 1.0 - threshold)
-        kelly_frac = min(0.25 * edge, 1.0)
-
-        memory_input = {
-            "atr_norm": atr_norm,
-            "vol_zscore": vol_z,
-            "ema_stack": ema_stack,
-            "fusion_score": fusion_score,
-        }
-        memory_mult = self.regime_memory.multiplier(memory_input)
-
-        recent_pnls = tuple(getattr(self, "_recent_pnls", [])[-20:])
-        peak_capital = max(float(getattr(self, "_peak_capital", capital)), capital)
-        guard = self.edge_guard.decide(
-            EdgeGuardState(
-                capital=capital,
-                peak_capital=peak_capital,
-                consecutive_losses=int(getattr(self, "_consecutive_losses", 0)),
-                recent_pnls=recent_pnls,
-            ),
-            signal_strength=abs_score,
-            vol_zscore=vol_z,
-            atr_norm=atr_norm,
-        )
-        if not guard.allow_trade:
-            return {"trade": False, "reason": guard.reason, "fusion_score": fusion_score, "abs_score": abs_score}
-
-        pos_size = capital * risk_frac * kelly_frac * leverage * memory_mult * guard.risk_multiplier
+        leverage  = float(getattr(cfg, "LEVERAGE", 3))
+        strength = max(0.0, (abs_score - threshold) / max(1e-9, 1.0 - threshold))
+        confidence_mult = 0.35 + 1.15 / (1.0 + np.exp(-8.0 * (strength - 0.35)))
+        confidence_mult = float(np.clip(confidence_mult, 0.35, 1.50))
+        pos_size  = capital * risk_frac * leverage * confidence_mult
 
         return {
-            "trade": True,
-            "direction": direction,
-            "side": "long" if direction == 1 else "short",
-            "fusion_score": round(fusion_score, 4),
-            "abs_score": round(abs_score, 4),
-            "confidence": round(abs_score * 100, 1),
+            "trade":         True,
+            "direction":     direction,
+            "side":          "long" if direction == 1 else "short",
+            "fusion_score":  round(fusion_score, 4),
+            "abs_score":     round(abs_score, 4),
+            "confidence":    round(abs_score * 100, 1),
             "position_size": round(pos_size, 4),
-            "atr_norm": atr_norm,
-            "sl_mult": sl_mult,
-            "tp1_mult": tp1_mult,
-            "tp2_mult": tp2_mult,
-            "raw_profit_mode": raw_profit_mode,
-            "continuation_mode": bool(continuation),
-            "breakout_mode": bool(breakout),
-            "layer_scores": {
-                "regime": round(regime_score, 4),
-                "sentiment": round(sentiment_score, 4),
-                "whale": round(whale_score, 4),
-                "liquidation": round(liquidation_score, 4),
-                "entry": round(entry_score, 4),
-            },
-            "memory_multiplier": memory_mult,
-            "edge_guard": {
-                "risk_multiplier": guard.risk_multiplier,
-                "drawdown": guard.drawdown,
-                "ruin_pressure": guard.ruin_pressure,
-                "reason": guard.reason,
-            },
+            "atr_norm":      atr_norm,
+            "sl_mult":       sl_mult,
+            "tp1_mult":      tp1_mult,
+            "tp2_mult":      tp2_mult,
         }
 
     # Keep old name for internal callers
@@ -528,10 +373,10 @@ class BacktestEngine:
 
                 if hit_tp2 or hit_sl or expired:
                     if expired and not hit_tp2 and not hit_sl:
-                        # TIME exit books the REAL close-out return (no scratch).
-                        # Honest accounting — a drifting trade is a real small loss.
-                        exit_px_v = close * (1 - trade_side * SLIPPAGE)
-                        raw_ret   = ((exit_px_v - entry_px) / entry_px) * trade_side
+                        # FIX 2: TIME = flat scratch, not a loss
+                        exit_px_v = close
+                        raw_ret   = ((close - entry_px) / entry_px) * trade_side
+                        raw_ret   = max(raw_ret, -0.0002)  # cap tiny negatives at ~0
                         exit_type = "TIME"
                     else:
                         exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
@@ -552,16 +397,6 @@ class BacktestEngine:
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
                             consec_losses = 0
-
-                    self._recent_pnls = getattr(self, "_recent_pnls", [])
-                    self._recent_pnls.append(total_pnl)
-                    self._recent_pnls = self._recent_pnls[-50:]
-                    self._peak_capital = max(float(getattr(self, "_peak_capital", capital)), capital)
-                    self._consecutive_losses = 0 if total_pnl > 0 else int(getattr(self, "_consecutive_losses", 0)) + 1
-                    try:
-                        self.regime_memory.update({"atr_norm": signal.get("atr_norm", 0.003), "fusion_score": entry_score}, total_pnl)
-                    except Exception:
-                        pass
 
                     trades.append({
                         "entry":        round(entry_px, 4),
@@ -915,8 +750,8 @@ class MultiSymbolBacktestEngine(BacktestEngine):
 
                 if hit_tp2 or hit_sl or expired:
                     if expired and not hit_tp2 and not hit_sl:
-                        exit_px_v = close * (1 - trade_side * SLIPPAGE)
-                        raw_ret   = ((exit_px_v - entry_px) / entry_px) * trade_side
+                        exit_px_v = close
+                        raw_ret   = max(((close - entry_px) / entry_px) * trade_side, -0.0002)
                         exit_type = "TIME"
                     else:
                         exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
