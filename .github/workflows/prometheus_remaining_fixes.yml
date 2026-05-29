@@ -1,0 +1,65 @@
+name: Apply Remaining Prometheus Live Fixes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-remaining-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch fusion and live engine safely
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8')
+
+          fusion = Path('core/layers/fusion.py').read_text(encoding='utf-8')
+          fusion = fusion.replace(
+              '        fusion_score = sum(scores[k] * self.weights[k] for k in scores)\n        fusion_score = float(np.clip(fusion_score, -1.0, 1.0))',
+              '        w_total = max(sum(self.weights.values()), 1e-9)\n        fusion_score = sum(scores[k] * self.weights[k] for k in scores) / w_total\n        fusion_score = float(np.clip(fusion_score, -1.0, 1.0))'
+          )
+          fusion = fusion.replace(
+              '        edge = max(0.0, confidence - threshold) / max(1e-9, 1.0 - threshold)\n        kelly_frac = min(0.25 * edge, 1.0)\n        return capital * risk_frac * kelly_frac * leverage',
+              '        strength = max(0.0, (confidence - threshold) / max(1e-9, 1.0 - threshold))\n        confidence_mult = 0.35 + 1.15 / (1.0 + np.exp(-8.0 * (strength - 0.35)))\n        confidence_mult = float(np.clip(confidence_mult, 0.35, 1.50))\n        return capital * risk_frac * leverage * confidence_mult'
+          )
+          fusion = fusion.replace(
+              '        self.weights = {"regime": cfg.WEIGHT_REGIME, "sentiment": cfg.WEIGHT_SENTIMENT, "whale": cfg.WEIGHT_WHALE, "liquidation": cfg.WEIGHT_LIQUIDATION, "entry": cfg.WEIGHT_ENTRY}\n        logger.info(f"[Fusion] Weights reloaded: {self.weights}")',
+              '        self.weights = {"regime": cfg.WEIGHT_REGIME, "sentiment": cfg.WEIGHT_SENTIMENT, "whale": cfg.WEIGHT_WHALE, "liquidation": cfg.WEIGHT_LIQUIDATION, "entry": cfg.WEIGHT_ENTRY}\n        total = sum(self.weights.values())\n        if abs(total - 1.0) > 0.02:\n            logger.warning(f"[Fusion] Weight sum drift detected: sum={total:.4f} weights={self.weights}")\n        logger.info(f"[Fusion] Weights reloaded: {self.weights} sum={total:.4f}")'
+          )
+          write('core/layers/fusion.py', fusion)
+
+          engine = Path('core/engine.py').read_text(encoding='utf-8')
+          engine = engine.replace(
+              '        self.orders = OrderManager(exchange=self.exchange, paper=cfg.TRADING_MODE == "paper")\n        self.telegram = TelegramBot()',
+              '        self.orders = OrderManager(exchange=self.exchange, paper=cfg.TRADING_MODE == "paper")\n        self.orders.fusion = self.fusion\n        self.telegram = TelegramBot()'
+          )
+          engine = engine.replace(
+              '                regime_result = self.regime.detect(df, funding_rate=await self._get_funding())',
+              '                funding_rate = await self._get_funding()\n                df.loc[df.index[-1], "funding_rate"] = funding_rate\n                try:\n                    ob = await self.exchange.get_orderbook(cfg.SYMBOL, depth=20)\n                    bids = ob.get("bids", [])\n                    asks = ob.get("asks", [])\n                    if bids and asks:\n                        bid_vol = sum(float(b[1]) for b in bids[:10])\n                        ask_vol = sum(float(a[1]) for a in asks[:10])\n                        df.loc[df.index[-1], "ob_imbalance"] = (bid_vol - ask_vol) / (bid_vol + ask_vol + 1e-9)\n                except Exception as e:\n                    logger.debug(f"[Engine] Orderbook fetch skipped: {e}")\n\n                regime_result = self.regime.detect(df, funding_rate=funding_rate)'
+          )
+          engine = engine.replace(
+              '                    if result.get("status") == "filled":\n                        self.telegram.signal_alert(signal, current_price)',
+              '                    if result.get("status") == "filled":\n                        self.telegram.signal_alert(signal, current_price)\n                        self.fusion.reload_weights()'
+          )
+          write('core/engine.py', engine)
+
+      - name: Validate syntax
+        run: |
+          python -m py_compile core/layers/fusion.py core/engine.py core/layers/entry_signal.py core/models/feature_engine.py config/settings.py core/models/xgboost_model.py
+
+      - name: Commit changes
+        run: |
+          git config user.name "prometheus-fix-bot"
+          git config user.email "actions@github.com"
+          git add core/layers/fusion.py core/engine.py
+          git commit -m "Apply remaining live fusion and engine fixes" || echo "No changes to commit"
+          git push
