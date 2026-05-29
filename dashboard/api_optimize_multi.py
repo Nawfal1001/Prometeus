@@ -53,7 +53,7 @@ async def run_multi_optimization(request: Request):
         exchange = get_exchange()
         rows = []
         data_by_symbol = {}
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             for symbol in symbols:
                 try:

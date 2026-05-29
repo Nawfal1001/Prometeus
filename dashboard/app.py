@@ -226,8 +226,14 @@ except Exception:
 @app.get("/api/settings")
 def api_get_settings_compat():
     import config.settings as cfg
-    keys = [k for k in dir(cfg) if k.isupper()]
-    return {k: getattr(cfg, k) for k in keys if not k.startswith("_")}
+    _SECRET_KEYS = {
+        "BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET",
+        "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY",
+        "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY",
+        "POLYGON_KEY",
+    }
+    keys = [k for k in dir(cfg) if k.isupper() and not k.startswith("_")]
+    return {k: getattr(cfg, k) for k in keys if k not in _SECRET_KEYS}
 
 @app.post("/api/settings")
 def api_save_settings_compat(payload: dict = Body(default={}) if Body else {}):
@@ -263,3 +269,108 @@ def api_optimize_status_compat():
 @app.post("/api/optimize/cancel")
 def api_optimize_cancel_compat():
     return {"ok": True, "status": "cancelled"}
+
+# PROMETHEUS_MISSING_ROUTES_FIXED
+
+@app.post("/api/backtest/run")
+async def run_backtest(request: Request):
+    body = await request.json()
+    symbol = body.get("symbol", cfg.SYMBOL)
+    timeframe = body.get("timeframe", cfg.TIMEFRAME)
+    limit = int(body.get("limit", 1500))
+    mode = body.get("mode", "walkforward")
+    try:
+        from core.exchange.factory import get_exchange
+        from backtest.engine import BacktestEngine
+        exchange = get_exchange()
+        try:
+            df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
+        finally:
+            closer = getattr(exchange, "close", None)
+            if closer:
+                maybe = closer()
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+        if df is None or df.empty:
+            return JSONResponse({"error": "No data returned from exchange"}, status_code=400)
+        results = BacktestEngine().run(df, mode=mode)
+        _state["backtest"] = results
+        ui_log(f"Backtest complete | symbol={symbol} mode={mode} trades={results.get('total_trades', 0)}")
+        return results
+    except Exception as e:
+        logger.exception("[Backtest] run_backtest failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/model/train")
+async def train_model_route(request: Request):
+    if _model_status["running"]:
+        return JSONResponse({"error": "Model training already running", "status": _model_status}, status_code=409)
+    body = await request.json()
+    asyncio.create_task(_run_training_job(body))
+    return {"status": "started", "message": "Training started in background. Poll /api/model/status."}
+
+
+@app.post("/api/optimize/run")
+async def run_optimization_single(request: Request):
+    body = await request.json()
+    symbol = body.get("symbol", cfg.SYMBOL)
+    timeframe = body.get("timeframe", cfg.TIMEFRAME)
+    candles = int(body.get("candles", getattr(cfg, "OPTUNA_DATA_CANDLES", 1500)))
+    metric = body.get("metric", cfg.OPTUNA_METRIC)
+    trials = min(int(body.get("trials", cfg.OPTUNA_TRIALS)), 200)
+    timeout = min(int(body.get("timeout", cfg.OPTUNA_TIMEOUT_SEC)), 3600)
+    try:
+        from core.exchange.factory import get_exchange
+        exchange = get_exchange()
+        try:
+            df = await exchange.get_ohlcv(symbol, timeframe, limit=candles)
+        finally:
+            closer = getattr(exchange, "close", None)
+            if closer:
+                maybe = closer()
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+        if df is None or df.empty:
+            return JSONResponse({"error": "No data returned from exchange"}, status_code=400)
+        ui_log(f"Optimization starting | symbol={symbol} metric={metric} trials={trials}")
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(executor, lambda: PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout).run())
+        _opt_status["result"] = result
+        ui_log(f"Optimization done | best={result.get('best_value', 0):.4f}")
+        return result
+    except Exception as e:
+        logger.exception("[Optimize] run_optimization_single failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/optimize/apply")
+async def apply_optimization_params(request: Request):
+    try:
+        params = await request.json()
+        if not isinstance(params, dict) or not params:
+            return JSONResponse({"error": "No params provided"}, status_code=400)
+        save_user_settings(params)
+        reload_runtime_settings()
+        ui_log(f"Optimization params applied: {list(params.keys())}")
+        return {"status": "applied", "count": len(params), "params": params}
+    except Exception as e:
+        logger.exception("[Optimize] apply_optimization_params failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    _ws_clients.append(websocket)
+    try:
+        await websocket.send_json({"type": "state", "data": _state})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        if websocket in _ws_clients:
+            _ws_clients.remove(websocket)

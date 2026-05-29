@@ -41,7 +41,8 @@ async function saveSettings() {
       msg.textContent = `❌ ${data.error || "Settings save failed"}`;
       msg.className = "save-msg error";
     } else {
-      msg.textContent = `✅ Settings saved (${data.keys.length} values)`;
+      const savedCount = Array.isArray(data.keys) ? data.keys.length : (data.ok ? Object.keys(data.settings || {}).length : 0);
+      msg.textContent = `✅ Settings saved (${savedCount} values)`;
       msg.className = "save-msg ok";
       await loadSettings();
     }
