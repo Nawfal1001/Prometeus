@@ -140,19 +140,18 @@ class FusionEngine:
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
-        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
+        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.2))
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
-        effective_reward = (tp2_mult / max(sl_mult, 1e-9)) * min(1.0, 0.6 + abs_score)
-        if effective_reward < min_rr:
+        rr_ratio = tp2_mult / max(sl_mult, 1e-9)
+        if rr_ratio < min_rr:
             return self._no_trade("rr_too_low")
 
         position_size = self._kelly_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
-        stop_loss = take_profit = rr_ratio = None
+        stop_loss = take_profit = None
         if current_price > 0:
             atr_norm = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
             stop_loss = current_price * (1 - direction * atr_norm * sl_mult)
             take_profit = current_price * (1 + direction * atr_norm * tp2_mult)
-            rr_ratio = abs(take_profit - current_price) / max(abs(stop_loss - current_price), 1e-9)
         result = {
             "trade": True,
             "direction": direction,
@@ -162,7 +161,7 @@ class FusionEngine:
             "position_size": round(position_size, 2),
             "stop_loss": round(stop_loss, 2) if stop_loss else None,
             "take_profit": round(take_profit, 2) if take_profit else None,
-            "rr_ratio": round(rr_ratio, 2) if rr_ratio else None,
+            "rr_ratio": round(rr_ratio, 2),
             "layer_scores": {k: round(v, 4) for k, v in scores.items()},
             "htf_bias": htf_bias,
             "session_mult": round(session_mult, 2),
