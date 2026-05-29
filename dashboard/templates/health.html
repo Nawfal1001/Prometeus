@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Health</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scan">Scanner</a>
+    <a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a>
+    <a href="/lab">Lab</a>
+    <a href="/train">Train ML</a>
+    <a href="/health-dashboard" class="active">Health</a>
+    <a href="/settings">Settings</a>
+  </div>
+</nav>
+<div class="container">
+  <div class="card mt">
+    <div class="card-header">🩺 System Health</div>
+    <div style="padding:16px">
+      <button class="btn btn-primary" onclick="runHealth()">Run health tests</button>
+      <span id="health-summary" style="margin-left:12px;color:var(--muted)">Not checked yet</span>
+    </div>
+  </div>
+  <div class="stats-grid mt" id="health-cards"></div>
+  <div class="card mt">
+    <div class="card-header">Detailed tests</div>
+    <table class="trade-table">
+      <thead><tr><th>Area</th><th>Status</th><th>Message</th><th>Details</th></tr></thead>
+      <tbody id="health-body"><tr><td colspan="4" class="empty-state">Run health tests</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<script>
+function statusClass(s){return s==='ok'?'badge-success':(s==='warn'?'badge-warning':'badge-danger')}
+function esc(v){return String(v ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+async function runHealth(){
+  const summary=document.getElementById('health-summary');
+  const body=document.getElementById('health-body');
+  const cards=document.getElementById('health-cards');
+  summary.textContent='Running...';
+  body.innerHTML='<tr><td colspan="4" class="empty-state">Testing...</td></tr>';
+  try{
+    const res=await fetch('/api/health/full');
+    const data=await res.json();
+    summary.textContent=`Overall: ${data.overall_status?.toUpperCase()} | ${data.ok_count} ok, ${data.warn_count} warn, ${data.fail_count} fail`;
+    cards.innerHTML='';
+    for(const [name,group] of Object.entries(data.groups||{})){
+      cards.innerHTML += `<div class="stat-card"><div class="stat-label">${esc(name)}</div><div class="stat-value">${esc(group.status).toUpperCase()}</div><div class="stat-sub">${esc(group.summary)}</div></div>`;
+    }
+    body.innerHTML='';
+    for(const t of data.tests||[]){
+      body.innerHTML += `<tr><td>${esc(t.group)}</td><td><span class="badge ${statusClass(t.status)}">${esc(t.status)}</span></td><td>${esc(t.name)} — ${esc(t.message)}</td><td><pre style="white-space:pre-wrap;margin:0">${esc(JSON.stringify(t.details||{},null,2))}</pre></td></tr>`;
+    }
+  }catch(e){summary.textContent='Health check failed'; body.innerHTML=`<tr><td colspan="4">${esc(e.message)}</td></tr>`}
+}
+runHealth();
+</script>
+</body>
+</html>
