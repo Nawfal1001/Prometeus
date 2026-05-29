@@ -130,14 +130,22 @@ class FusionEngine:
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
         if abs_score < effective_threshold:
             return self._no_trade("below_threshold")
-        position_size = self._kelly_size(abs_score, current_capital=current_capital)
+
+        sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
+        tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
+        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
+        min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
+        effective_reward = (tp2_mult / max(sl_mult, 1e-9)) * min(1.0, 0.6 + abs_score)
+        if effective_reward < min_rr:
+            return self._no_trade("rr_too_low")
+
+        position_size = self._kelly_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
         stop_loss = take_profit = rr_ratio = None
         if current_price > 0:
-            stop_loss = current_price * (1 - direction * cfg.STOP_LOSS_PCT)
-            take_profit = liquidation_target or current_price * (1 + direction * cfg.TAKE_PROFIT_PCT)
+            atr_norm = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
+            stop_loss = current_price * (1 - direction * atr_norm * sl_mult)
+            take_profit = current_price * (1 + direction * atr_norm * tp2_mult)
             rr_ratio = abs(take_profit - current_price) / max(abs(stop_loss - current_price), 1e-9)
-        if rr_ratio is not None and rr_ratio < cfg.MIN_RR_RATIO:
-            return self._no_trade("rr_too_low")
         result = {
             "trade": True,
             "direction": direction,
@@ -156,11 +164,14 @@ class FusionEngine:
         self.last_result = result
         return result
 
-    def _kelly_size(self, confidence: float, current_capital: float = None) -> float:
+    def _kelly_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
         capital = float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL)
-        max_risk = cfg.MAX_RISK_PER_TRADE
-        kelly = min(confidence * 0.25, max_risk)
-        return capital * kelly * cfg.LEVERAGE
+        threshold = float(threshold if threshold is not None else getattr(cfg, "FUSION_THRESHOLD", 0.17))
+        risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
+        leverage = float(getattr(cfg, "LEVERAGE", 3))
+        edge = max(0.0, confidence - threshold) / max(1e-9, 1.0 - threshold)
+        kelly_frac = min(0.25 * edge, 1.0)
+        return capital * risk_frac * kelly_frac * leverage
 
     def _no_trade(self, reason: str) -> dict:
         return {"trade": False, "direction": 0, "side": None, "fusion_score": 0.0, "score": 0.0, "confidence": 0.0, "position_size": 0.0, "rr": None, "risk_reward": None, "reason": reason}
