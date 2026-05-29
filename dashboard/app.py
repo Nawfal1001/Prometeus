@@ -200,6 +200,11 @@ async def backtest_page(request: Request):
 async def optimize_page(request: Request):
     return templates.TemplateResponse("optimize.html", {"request": request})
 
+
+@app.get("/lab", response_class=HTMLResponse)
+async def lab_page(request: Request):
+    return templates.TemplateResponse("lab.html", {"request": request})
+
 @app.get("/train", response_class=HTMLResponse)
 async def train_page(request: Request):
     return templates.TemplateResponse("train.html", {"request": request})

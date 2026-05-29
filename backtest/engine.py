@@ -26,6 +26,8 @@ import numpy as np
 from loguru import logger
 from core.models.feature_engine import compute_features
 import config.settings as cfg
+from core.risk.edge_guard import AdaptiveEdgeGuard, EdgeGuardState
+from core.risk.regime_memory import RegimeMemory
 
 TAKER_FEE = 0.0005
 SLIPPAGE  = 0.0003
@@ -35,6 +37,8 @@ class BacktestEngine:
 
     def __init__(self):
         self._xgb = None
+        self.edge_guard = AdaptiveEdgeGuard()
+        self.regime_memory = RegimeMemory()
 
     # ── XGBoost lazy loader ──────────────────────────────────
 
@@ -341,6 +345,36 @@ class BacktestEngine:
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
         tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
 
+        # Raw-profit experiment: momentum continuation + dynamic TP expansion.
+        # Backtest-only safe gate controlled by cfg.RAW_PROFIT_MODE.
+        raw_profit_mode = bool(getattr(cfg, "RAW_PROFIT_MODE", False))
+        continuation = (
+            raw_profit_mode
+            and abs(ema_stack) > 0.35
+            and abs(ret_3) > 0.0015
+            and abs(ret_6) > 0.0025
+            and vol_ratio > 1.35
+            and vol_z <= 2.5
+            and np.sign(ret_3) == np.sign(ret_6) == np.sign(fusion_score)
+        )
+        breakout = (
+            raw_profit_mode
+            and v("prev_high", 0.0) > 0
+            and v("prev_low", 0.0) > 0
+            and (
+                (direction == 1 and v("high") > v("prev_high") and vol_ratio > 1.25)
+                or (direction == -1 and v("low") < v("prev_low") and vol_ratio > 1.25)
+            )
+            and vol_z <= 2.5
+        )
+        if continuation or breakout:
+            tp2_boost = 1.0
+            tp2_boost += 0.35 if continuation else 0.0
+            tp2_boost += 0.25 if breakout else 0.0
+            tp2_boost += min(0.45, max(0.0, vol_ratio - 1.0) * 0.18)
+            tp2_mult = min(4.5, tp2_mult * tp2_boost)
+            abs_score = min(1.0, abs_score * (1.05 if continuation else 1.0) * (1.04 if breakout else 1.0))
+
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
         effective_reward = (tp2_mult / max(sl_mult, 1e-9)) * min(1.0, 0.6 + abs_score)
         if effective_reward < min_rr:
@@ -351,7 +385,32 @@ class BacktestEngine:
         leverage = float(getattr(cfg, "LEVERAGE", 3))
         edge = max(0.0, abs_score - threshold) / max(1e-9, 1.0 - threshold)
         kelly_frac = min(0.25 * edge, 1.0)
-        pos_size = capital * risk_frac * kelly_frac * leverage
+
+        memory_input = {
+            "atr_norm": atr_norm,
+            "vol_zscore": vol_z,
+            "ema_stack": ema_stack,
+            "fusion_score": fusion_score,
+        }
+        memory_mult = self.regime_memory.multiplier(memory_input)
+
+        recent_pnls = tuple(getattr(self, "_recent_pnls", [])[-20:])
+        peak_capital = max(float(getattr(self, "_peak_capital", capital)), capital)
+        guard = self.edge_guard.decide(
+            EdgeGuardState(
+                capital=capital,
+                peak_capital=peak_capital,
+                consecutive_losses=int(getattr(self, "_consecutive_losses", 0)),
+                recent_pnls=recent_pnls,
+            ),
+            signal_strength=abs_score,
+            vol_zscore=vol_z,
+            atr_norm=atr_norm,
+        )
+        if not guard.allow_trade:
+            return {"trade": False, "reason": guard.reason, "fusion_score": fusion_score, "abs_score": abs_score}
+
+        pos_size = capital * risk_frac * kelly_frac * leverage * memory_mult * guard.risk_multiplier
 
         return {
             "trade": True,
@@ -365,12 +424,22 @@ class BacktestEngine:
             "sl_mult": sl_mult,
             "tp1_mult": tp1_mult,
             "tp2_mult": tp2_mult,
+            "raw_profit_mode": raw_profit_mode,
+            "continuation_mode": bool(continuation),
+            "breakout_mode": bool(breakout),
             "layer_scores": {
                 "regime": round(regime_score, 4),
                 "sentiment": round(sentiment_score, 4),
                 "whale": round(whale_score, 4),
                 "liquidation": round(liquidation_score, 4),
                 "entry": round(entry_score, 4),
+            },
+            "memory_multiplier": memory_mult,
+            "edge_guard": {
+                "risk_multiplier": guard.risk_multiplier,
+                "drawdown": guard.drawdown,
+                "ruin_pressure": guard.ruin_pressure,
+                "reason": guard.reason,
             },
         }
 
@@ -483,6 +552,16 @@ class BacktestEngine:
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
                             consec_losses = 0
+
+                    self._recent_pnls = getattr(self, "_recent_pnls", [])
+                    self._recent_pnls.append(total_pnl)
+                    self._recent_pnls = self._recent_pnls[-50:]
+                    self._peak_capital = max(float(getattr(self, "_peak_capital", capital)), capital)
+                    self._consecutive_losses = 0 if total_pnl > 0 else int(getattr(self, "_consecutive_losses", 0)) + 1
+                    try:
+                        self.regime_memory.update({"atr_norm": signal.get("atr_norm", 0.003), "fusion_score": entry_score}, total_pnl)
+                    except Exception:
+                        pass
 
                     trades.append({
                         "entry":        round(entry_px, 4),

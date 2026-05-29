@@ -134,7 +134,9 @@ class PrometheusOptimizer:
             if prepared is None or prepared.empty or len(prepared) < 100:
                 return -1.0
 
-            results = BacktestEngine()._simple_split(prepared)
+            # Walk-forward is slower but far harder to overfit than a single 70/30 split.
+            # For a small compounding account, robustness matters more than peak backtest score.
+            results = BacktestEngine().walk_forward(prepared)
 
             if "error" in results or results.get("total_trades", 0) < 15:
                 n = results.get("total_trades", 0)
@@ -210,8 +212,10 @@ class PrometheusOptimizer:
             "EMA_MID": ema_mid,
             "EMA_SLOW": ema_slow,
             "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 4, 18),
-            "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.03, 0.07, step=0.005),
-            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 4, 9),
+            # Small-account futures: keep risk bounded. High risk may optimize well
+            # on one history window but greatly increases ruin probability.
+            "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.015, 0.04, step=0.005),
+            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 3, 7),
             "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
             "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.20, 0.45, step=0.05),
         }
@@ -238,6 +242,13 @@ class PrometheusOptimizer:
             return -0.5
 
         time_penalty = max(0.30, 1.0 - ter * 1.8)
+
+        # Hazard proxy: punish parameter sets that only win by accepting ruin-like drawdowns.
+        ruin_penalty = 1.0
+        if dd > 0.12:
+            ruin_penalty *= max(0.25, 1.0 - (dd - 0.12) * 3.5)
+        if n < 30:
+            ruin_penalty *= max(0.35, n / 30)
 
         if self.metric == "target_150":
             initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
@@ -272,7 +283,7 @@ class PrometheusOptimizer:
                  + ret_score * 0.30
                  + sh_score * 0.10
                  + dd_score * 0.10)
-        return score * trade_penalty * time_penalty
+        return score * trade_penalty * time_penalty * ruin_penalty
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
