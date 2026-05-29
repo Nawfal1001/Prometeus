@@ -16,8 +16,10 @@ from loguru import logger
 import config.settings as cfg
 from core.models.feature_engine import get_feature_columns, compute_features, label_data
 
-MODEL_PATH = Path(__file__).parent.parent.parent / "models" / "xgb_model.pkl"
-MODEL_PATH.parent.mkdir(exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+MODEL_DIR = Path(getattr(cfg, "MODEL_DIR", BASE_DIR / "data" / "models"))
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH = MODEL_DIR / "xgb_model.pkl"
 MODEL_VERSION = "v5_binary_spot_aware"
 
 
@@ -182,8 +184,9 @@ class XGBoostSignalModel:
         return 0.0
 
     def save(self):
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION, "binary_mode": self._binary_mode}, MODEL_PATH)
-        logger.info(f"[XGBoost] Model saved ({MODEL_VERSION})")
+        logger.info(f"[XGBoost] Model saved ({MODEL_VERSION}) at {MODEL_PATH}")
 
     def load(self):
         if MODEL_PATH.exists():

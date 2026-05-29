@@ -21,7 +21,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
-SETTINGS_FILE = BASE_DIR / "config" / "user_settings.json"
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+SETTINGS_FILE = Path(os.getenv("PROMETHEUS_SETTINGS_FILE", DATA_DIR / "user_settings.json"))
 
 
 def _env(key, default=None):
@@ -31,19 +33,25 @@ def _env(key, default=None):
 def load_user_settings() -> dict:
     if SETTINGS_FILE.exists():
         try:
-            with open(SETTINGS_FILE) as f:
-                return json.load(f)
+            with open(SETTINGS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
         except Exception:
             return {}
     return {}
 
 
 def save_user_settings(data: dict):
+    if not isinstance(data, dict):
+        return
     existing = load_user_settings()
     existing.update(data)
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SETTINGS_FILE, "w") as f:
+    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(existing, f, indent=2)
+    tmp.replace(SETTINGS_FILE)
+    reload_from_sources()
 
 
 def get(key, default=None):
@@ -115,14 +123,14 @@ def reload_from_sources():
 
     SYMBOL = get("SYMBOL", "BTC/USDT")
     TIMEFRAME = get("TIMEFRAME", "30m")
-    LEVERAGE = get_int("LEVERAGE", 3)
+    LEVERAGE = get_int("LEVERAGE", 5)
     INITIAL_CAPITAL = get_float("INITIAL_CAPITAL", 50)
     MAX_RISK_PER_TRADE = get_float("MAX_RISK_PER_TRADE", 0.05)
     MAX_DAILY_DRAWDOWN = get_float("MAX_DAILY_DRAWDOWN", 0.08)
-    MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 6)
+    MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 10)
     MAX_CONSEC_LOSSES = get_int("MAX_CONSEC_LOSSES", 5)
 
-    FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.17)
+    FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.15)
     MIN_RR_RATIO = get_float("MIN_RR_RATIO", 2.0)
 
     STOP_LOSS_PCT = get_float("STOP_LOSS_PCT", 0.007)
@@ -130,10 +138,10 @@ def reload_from_sources():
 
     ATR_SL_MULT = get_float("ATR_SL_MULT", 1.2)
     ATR_TP1_MULT = get_float("ATR_TP1_MULT", 1.2)
-    ATR_TP2_MULT = get_float("ATR_TP2_MULT", 2.4)
-    TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.50)
-    TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.50)
-    MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 32)
+    ATR_TP2_MULT = get_float("ATR_TP2_MULT", 3.2)
+    TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.40)
+    TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.60)
+    MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 20)
     BREAKEVEN_BUFFER_PCT = get_float("BREAKEVEN_BUFFER_PCT", 0.0002)
 
     MIN_SESSION_MULT = get_float("MIN_SESSION_MULT", 0.75)
@@ -159,10 +167,10 @@ def reload_from_sources():
     BB_STD = get_float("BB_STD", 1.5)
     VOLUME_MA_PERIOD = get_int("VOLUME_MA_PERIOD", 20)
 
-    WEIGHT_REGIME = get_float("WEIGHT_REGIME", 0.20)
-    WEIGHT_SENTIMENT = get_float("WEIGHT_SENTIMENT", 0.05)
+    WEIGHT_REGIME = get_float("WEIGHT_REGIME", 0.18)
+    WEIGHT_SENTIMENT = get_float("WEIGHT_SENTIMENT", 0.12)
     WEIGHT_WHALE = get_float("WEIGHT_WHALE", 0.10)
-    WEIGHT_LIQUIDATION = get_float("WEIGHT_LIQUIDATION", 0.30)
+    WEIGHT_LIQUIDATION = get_float("WEIGHT_LIQUIDATION", 0.25)
     WEIGHT_ENTRY = get_float("WEIGHT_ENTRY", 0.35)
 
     CRYPTOCOMPARE_KEY = get("CRYPTOCOMPARE_API_KEY", "")
@@ -188,13 +196,13 @@ def reload_from_sources():
 
     OPTUNA_TRIALS = get_int("OPTUNA_TRIALS", 60)
     OPTUNA_TIMEOUT_SEC = get_int("OPTUNA_TIMEOUT_SEC", 420)
-    OPTUNA_METRIC = get("OPTUNA_METRIC", "composite")
+    OPTUNA_METRIC = get("OPTUNA_METRIC", "target_150")
     OPTUNA_DATA_CANDLES = get_int("OPTUNA_DATA_CANDLES", 1500)
     OPTUNA_TIMEFRAME = get("OPTUNA_TIMEFRAME", TIMEFRAME)
     OPTUNA_PRUNING = get_bool("OPTUNA_PRUNING", "false")
     OPTUNA_DIRECTION = "maximize"
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
-    RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "false")
+    RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "true")
     ADAPTIVE_RISK_MODE = get_bool("ADAPTIVE_RISK_MODE", "true")
 
     TELEGRAM_BOT_TOKEN = get("TELEGRAM_BOT_TOKEN", "")
