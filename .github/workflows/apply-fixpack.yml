@@ -28,6 +28,14 @@ jobs:
       - name: Apply remaining fix pack
         run: python tools/apply_fixpack_remaining.py --commit
 
+      - name: Align backtest fusion scoring
+        run: |
+          python tools/align_backtest_fusion.py
+          if [ -n "$(git status --porcelain backtest/engine.py)" ]; then
+            git add backtest/engine.py
+            git commit -m "Align backtest signal with fusion engine"
+          fi
+
       - name: Push changes
         run: |
           if [ -n "$(git status --porcelain)" ]; then
