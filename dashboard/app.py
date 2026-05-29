@@ -63,6 +63,9 @@ _opt_status = {
     "started_at": None,
     "finished_at": None,
     "progress": None,
+    "progress_pct": 0,
+    "current_step": 0,
+    "total_steps": 0,
     "result": None,
     "error": None,
     "params": {},
@@ -176,12 +179,31 @@ async def _run_training_job(params: dict):
         await broadcast({"type": "model_training", "status": "error", "error": str(e)})
 
 
-def _run_optimizer_sync(df, metric, trials, timeout):
-    return PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout).run()
+def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None):
+    return PrometheusOptimizer(
+        df=df,
+        metric=metric,
+        n_trials=trials,
+        timeout=timeout,
+        progress_callback=progress_callback,
+    ).run()
 
 
 async def _run_optimization_job(params: dict):
-    _opt_status.update({"running": True, "cancel_requested": False, "started_at": datetime.utcnow().isoformat(), "finished_at": None, "error": None, "result": None, "params": params, "progress": "fetching_data"})
+    loop = asyncio.get_running_loop()
+    _opt_status.update({
+        "running": True,
+        "cancel_requested": False,
+        "started_at": datetime.utcnow().isoformat(),
+        "finished_at": None,
+        "error": None,
+        "result": None,
+        "params": params,
+        "progress": {"phase": "fetching_data", "message": "Fetching market data..."},
+        "progress_pct": 0,
+        "current_step": 0,
+        "total_steps": int(params.get("trials", cfg.OPTUNA_TRIALS)),
+    })
     try:
         symbol = params.get("symbol", cfg.SYMBOL)
         timeframe = params.get("timeframe", cfg.TIMEFRAME)
@@ -189,22 +211,58 @@ async def _run_optimization_job(params: dict):
         metric = params.get("metric", cfg.OPTUNA_METRIC)
         trials = min(int(params.get("trials", cfg.OPTUNA_TRIALS)), 200)
         timeout = min(int(params.get("timeout", cfg.OPTUNA_TIMEOUT_SEC)), 3600)
+        _opt_status["total_steps"] = trials
         ui_log(f"Optimization starting | symbol={symbol} metric={metric} trials={trials}")
         df = await _fetch_ohlcv(symbol, timeframe, candles)
         if df is None or df.empty:
             raise RuntimeError("No data returned from exchange")
-        _opt_status["progress"] = "running"
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout))
+
+        def progress_callback(**payload):
+            trial_num = int(payload.get("trial_num") or 0)
+            total = int(payload.get("total") or trials or 1)
+            pct = round((trial_num / total) * 100, 2) if total else 0
+            progress = {
+                "phase": "running",
+                "trial_num": trial_num,
+                "total": total,
+                "best_value": payload.get("best_value", 0),
+                "best_params": payload.get("best_params", {}),
+                "trial_results": payload.get("trial_results", {}),
+                "progress_pct": pct,
+                "message": f"Trial {trial_num}/{total}",
+            }
+            _opt_status.update({
+                "progress": progress,
+                "progress_pct": pct,
+                "current_step": trial_num,
+                "total_steps": total,
+            })
+            ui_log(f"Optimizer trial {trial_num}/{total} | best={payload.get('best_value', 0)}")
+            try:
+                loop.call_soon_threadsafe(asyncio.create_task, broadcast({"type": "optimization", "status": "progress", "progress": progress}))
+            except Exception:
+                pass
+
+        _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
+        result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback))
         if _opt_status.get("cancel_requested"):
-            _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": "cancelled"})
+            _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "cancelled", "message": "Cancelled"}})
             return
-        _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": "done", "result": result})
+        _opt_status.update({
+            "running": False,
+            "finished_at": datetime.utcnow().isoformat(),
+            "progress": {"phase": "done", "trial_num": len(result.get("trial_results", [])), "total": trials, "progress_pct": 100, "message": "Done"},
+            "progress_pct": 100,
+            "current_step": len(result.get("trial_results", [])) or trials,
+            "total_steps": trials,
+            "result": result,
+        })
         _state["optimization"] = result
+        ui_log(f"Optimization finished | best={result.get('best_value')}")
         await broadcast({"type": "optimization", "status": "done", "result": result})
     except Exception as e:
         logger.exception("Optimization failed")
-        _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": "error", "error": str(e)})
+        _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "error", "message": str(e)}, "error": str(e)})
         await broadcast({"type": "optimization", "status": "error", "error": str(e)})
 
 
@@ -353,7 +411,7 @@ def api_optimize_cancel():
     _opt_status["cancel_requested"] = True
     if _opt_task is not None and not _opt_task.done():
         _opt_task.cancel()
-    _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": "cancelled"})
+    _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "cancelled", "message": "Cancelled"}})
     return {"ok": True, "status": _opt_status}
 
 
