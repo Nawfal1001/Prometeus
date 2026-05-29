@@ -83,6 +83,19 @@ class MultiSymbolScanner:
                 return {"symbol": symbol, "tradable": False, "rank_score": -999,
                         "error": f"not_enough_data:{len(df)}"}
 
+            # Inject live order-book imbalance so ob_signal is real for each symbol.
+            try:
+                ob = await self.exchange.get_orderbook(symbol, depth=10)
+                bids = ob.get("bids", [])
+                asks = ob.get("asks", [])
+                if bids and asks:
+                    bid_vol = sum(float(b[1]) for b in bids[:5])
+                    ask_vol = sum(float(a[1]) for a in asks[:5])
+                    imb = (bid_vol - ask_vol) / (bid_vol + ask_vol + 1e-9)
+                    df.loc[df.index[-1], "ob_imbalance"] = imb
+            except Exception:
+                pass  # safe — feature engine defaults ob_signal to 0.0
+
             df = compute_features(df.copy())
             if df is None or df.empty:
                 return {"symbol": symbol, "tradable": False, "rank_score": -999,

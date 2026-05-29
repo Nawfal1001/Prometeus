@@ -123,14 +123,14 @@ def reload_from_sources():
 
     SYMBOL = get("SYMBOL", "BTC/USDT")
     TIMEFRAME = get("TIMEFRAME", "30m")
-    LEVERAGE = get_int("LEVERAGE", 5)
+    LEVERAGE = get_int("LEVERAGE", 3)
     INITIAL_CAPITAL = get_float("INITIAL_CAPITAL", 50)
     MAX_RISK_PER_TRADE = get_float("MAX_RISK_PER_TRADE", 0.05)
     MAX_DAILY_DRAWDOWN = get_float("MAX_DAILY_DRAWDOWN", 0.08)
-    MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 10)
+    MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 6)
     MAX_CONSEC_LOSSES = get_int("MAX_CONSEC_LOSSES", 5)
 
-    FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.15)
+    FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.19)
     MIN_RR_RATIO = get_float("MIN_RR_RATIO", 2.0)
 
     STOP_LOSS_PCT = get_float("STOP_LOSS_PCT", 0.007)
@@ -138,10 +138,10 @@ def reload_from_sources():
 
     ATR_SL_MULT = get_float("ATR_SL_MULT", 1.2)
     ATR_TP1_MULT = get_float("ATR_TP1_MULT", 1.2)
-    ATR_TP2_MULT = get_float("ATR_TP2_MULT", 3.2)
-    TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.40)
-    TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.60)
-    MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 20)
+    ATR_TP2_MULT = get_float("ATR_TP2_MULT", 2.2)
+    TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.65)
+    TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.35)
+    MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 28)
     BREAKEVEN_BUFFER_PCT = get_float("BREAKEVEN_BUFFER_PCT", 0.0002)
 
     MIN_SESSION_MULT = get_float("MIN_SESSION_MULT", 0.75)
@@ -160,7 +160,7 @@ def reload_from_sources():
 
     EMA_FAST = get_int("EMA_FAST", 20)
     EMA_MID = get_int("EMA_MID", 50)
-    EMA_SLOW = get_int("EMA_SLOW", 200)
+    EMA_SLOW = get_int("EMA_SLOW", 150)
     RSI_PERIOD = get_int("RSI_PERIOD", 9)
     STOCHRSI_PERIOD = get_int("STOCHRSI_PERIOD", 14)
     BB_PERIOD = get_int("BB_PERIOD", 10)

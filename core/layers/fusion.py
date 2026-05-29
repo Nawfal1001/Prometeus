@@ -11,13 +11,19 @@ class FusionEngine:
 
     def __init__(self):
         self.weights = {
-            "regime": cfg.WEIGHT_REGIME,
-            "sentiment": cfg.WEIGHT_SENTIMENT,
-            "whale": cfg.WEIGHT_WHALE,
+            "regime":      cfg.WEIGHT_REGIME,
+            "sentiment":   cfg.WEIGHT_SENTIMENT,
+            "whale":       cfg.WEIGHT_WHALE,
             "liquidation": cfg.WEIGHT_LIQUIDATION,
-            "entry": cfg.WEIGHT_ENTRY,
+            "entry":       cfg.WEIGHT_ENTRY,
         }
         self.last_result = {}
+        _wsum = sum(self.weights.values())
+        if abs(_wsum - 1.0) > 0.05:
+            logger.warning(
+                f"[Fusion] Weight sum={_wsum:.3f} (expected ~1.0) — "
+                f"normalization will be applied. Check Settings > Layer Weights."
+            )
 
     def generate_signal(self, df) -> dict:
         if df is None or len(df) == 0:

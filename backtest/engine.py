@@ -86,7 +86,11 @@ class BacktestEngine:
             return r
 
         while start + train_bars + test_bars <= usable:
-            test_df = df.iloc[start + train_bars: start + train_bars + test_bars]
+            # Include a warmup prefix so EMA_SLOW is valid at the start of each test window.
+            # Without this, the first EMA_SLOW bars of every test window have zero ema_stack.
+            warmup = min(cfg.EMA_SLOW, start + train_bars)
+            test_df_raw = df.iloc[(start + train_bars - warmup): start + train_bars + test_bars]
+            test_df = self._prepare(test_df_raw).iloc[warmup:]  # discard warmup after features
             trades, capital = self._simulate(test_df, start + train_bars)
             all_trades.extend(trades)
             if trades:
@@ -408,7 +412,12 @@ class BacktestEngine:
                     self._peak_capital = max(float(getattr(self, "_peak_capital", capital)), capital)
                     self._consecutive_losses = 0 if total_pnl > 0 else int(getattr(self, "_consecutive_losses", 0)) + 1
                     try:
-                        self.regime_memory.update({"atr_norm": signal.get("atr_norm", 0.003), "fusion_score": entry_score}, total_pnl)
+                        self.regime_memory.update({
+                            "atr_norm":    sig.get("atr_norm", float(row.get("atr_norm", 0.003))),
+                            "vol_zscore":  float(row.get("vol_zscore", 0)),
+                            "ema_stack":   float(row.get("ema_stack", 0)),
+                            "fusion_score": entry_score,
+                        }, total_pnl)
                     except Exception:
                         pass
 
@@ -623,9 +632,10 @@ class MultiSymbolBacktestEngine(BacktestEngine):
             return {"error": f"Not enough aligned bars: {min_len}. Need {test_bars}+"}
 
         all_trades, window_stats, start = [], [], 0
+        running_capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))  # carry across windows
 
         if min_len < train_bars + test_bars:
-            trades, _ = self._simulate_multi(aligned, 0)
+            trades, _ = self._simulate_multi(aligned, 0, initial_capital=running_capital)
             if not trades:
                 return self._no_trade_error_multi(aligned)
             r = self._metrics(trades)
@@ -637,7 +647,9 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         while start + train_bars + test_bars <= min_len:
             window = {sym: df.iloc[start + train_bars: start + train_bars + test_bars]
                       for sym, df in aligned.items()}
-            trades, capital = self._simulate_multi(window, start + train_bars)
+            trades, capital = self._simulate_multi(window, start + train_bars,
+                                                   initial_capital=running_capital)
+            running_capital = capital  # carry compounded capital to next window
             all_trades.extend(trades)
             if trades:
                 window_stats.append({"start": start, "trades": len(trades),
@@ -673,7 +685,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                    "equity_curve": self._equity_curve(trades)})
         return r
 
-    def _simulate_multi(self, data: dict, start_bar: int = 0):
+    def _simulate_multi(self, data: dict, start_bar: int = 0, initial_capital: float = None):
         """
         Competing-symbol simulation.
         Each bar: scan all symbols, trade the best fusion score.
@@ -682,7 +694,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         Uses self.compute_signal() (inherited from BacktestEngine)
         so ALL fixes (weights, ATR-direct SL, TIME=flat) apply here too.
         """
-        capital      = float(getattr(cfg, "INITIAL_CAPITAL", 50))
+        capital      = initial_capital if initial_capital is not None                        else float(getattr(cfg, "INITIAL_CAPITAL", 50))
         risk_frac    = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         leverage     = float(getattr(cfg, "LEVERAGE", 3))
         max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.08))
