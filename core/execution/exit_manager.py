@@ -26,28 +26,28 @@ class AdvancedExitManager:
         pass
 
     @property
-    def sl_mult(self): return float(getattr(cfg, "ATR_SL_MULT", 1.5))
+    def sl_mult(self): return float(getattr(cfg, "ATR_SL_MULT", 1.2))
 
     @property
-    def tp1_mult(self): return float(getattr(cfg, "ATR_TP1_MULT", 1.5))
+    def tp1_mult(self): return float(getattr(cfg, "ATR_TP1_MULT", 1.2))
 
     @property
-    def tp2_mult(self): return float(getattr(cfg, "ATR_TP2_MULT", 3.5))
+    def tp2_mult(self): return float(getattr(cfg, "ATR_TP2_MULT", 2.4))
 
     @property
-    def tp1_exit_pct(self): return float(getattr(cfg, "TP1_EXIT_PCT", 0.35))
+    def tp1_exit_pct(self): return float(getattr(cfg, "TP1_EXIT_PCT", 0.50))
 
     @property
-    def tp2_exit_pct(self): return float(getattr(cfg, "TP2_EXIT_PCT", 0.40))
+    def tp2_exit_pct(self): return float(getattr(cfg, "TP2_EXIT_PCT", 0.50))
 
     @property
     def lookback(self): return int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
 
     @property
-    def max_duration(self): return int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 16))
+    def max_duration(self): return int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 32))
 
     @property
-    def breakeven_buffer(self): return float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0005))
+    def breakeven_buffer(self): return float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0002))
 
     @property
     def min_atr_norm(self): return float(getattr(cfg, "MIN_ATR_NORM", 0.001))
@@ -63,16 +63,28 @@ class AdvancedExitManager:
         return True, "ok"
 
     def build_levels(self, *, entry_price: float, direction: int, atr_norm: float, recent_high: float, recent_low: float) -> ExitLevels:
+        """
+        Build ATR-direct initial exits.
+
+        Earlier live logic used a chandelier initial SL while the backtest used
+        ATR-direct SL from entry. That made paper/live and backtest disagree.
+        Chandelier logic is now reserved for trailing after entry, not the
+        initial risk definition.
+        """
         atr_norm = max(self.min_atr_norm, min(float(atr_norm or 0), 0.05))
         atr_abs = max(entry_price * atr_norm, entry_price * self.min_atr_norm)
+
+        stop_loss = entry_price - direction * atr_abs * self.sl_mult
+        tp1 = entry_price + direction * atr_abs * self.tp1_mult
+        tp2 = entry_price + direction * atr_abs * self.tp2_mult
+
         chandelier = recent_high - atr_abs * self.sl_mult if direction == 1 else recent_low + atr_abs * self.sl_mult
         if direction == 1:
             chandelier = min(chandelier, entry_price - atr_abs * 0.5)
         else:
             chandelier = max(chandelier, entry_price + atr_abs * 0.5)
-        tp1 = entry_price + direction * atr_abs * self.tp1_mult
-        tp2 = entry_price + direction * atr_abs * self.tp2_mult
-        return ExitLevels(stop_loss=chandelier, tp1=tp1, tp2=tp2, atr_abs=atr_abs, chandelier_sl=chandelier)
+
+        return ExitLevels(stop_loss=stop_loss, tp1=tp1, tp2=tp2, atr_abs=atr_abs, chandelier_sl=chandelier)
 
     def ratchet_stop(self, *, current_sl: float, direction: int, peak_price: float, trough_price: float, atr_abs: float) -> float:
         trail = peak_price - atr_abs * self.sl_mult if direction == 1 else trough_price + atr_abs * self.sl_mult
