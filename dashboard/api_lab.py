@@ -12,11 +12,13 @@ router = APIRouter()
 def temporary_settings(values):
     snapshot = {k: getattr(cfg, k, None) for k in values}
     try:
-        for k, v in values.items(): setattr(cfg, k, v)
+        for k, v in values.items():
+            setattr(cfg, k, v)
         yield
     finally:
         for k, v in snapshot.items():
-            if v is not None: setattr(cfg, k, v)
+            if v is not None:
+                setattr(cfg, k, v)
 
 def exp_settings(body):
     return {
@@ -25,6 +27,13 @@ def exp_settings(body):
         "OPTUNA_METRIC": body.get("metric", getattr(cfg, "OPTUNA_METRIC", "target_150")),
         "OPTUNA_TRIALS": int(body.get("trials", getattr(cfg, "OPTUNA_TRIALS", 60))),
     }
+
+def _clean_symbols(symbols):
+    if isinstance(symbols, str):
+        return [s.strip() for s in symbols.replace(";", ",").split(",") if s.strip()]
+    if isinstance(symbols, list):
+        return [str(s).strip() for s in symbols if str(s).strip()]
+    return []
 
 async def fetch_ohlcv(symbol, timeframe, limit):
     from core.exchange.factory import get_exchange
@@ -35,14 +44,36 @@ async def fetch_ohlcv(symbol, timeframe, limit):
         closer = getattr(ex, "close", None)
         if closer:
             maybe = closer()
-            if asyncio.iscoroutine(maybe): await maybe
+            if asyncio.iscoroutine(maybe):
+                await maybe
+
+async def fetch_many_ohlcv(symbols, timeframe, limit):
+    from core.exchange.factory import get_exchange
+    ex = get_exchange()
+    data = {}
+    try:
+        for sym in symbols:
+            try:
+                df = await ex.get_ohlcv(sym, timeframe, limit=limit)
+                if df is not None and not df.empty:
+                    data[sym] = df
+            except Exception as e:
+                logger.warning(f"Lab data fetch failed for {sym}: {e}")
+    finally:
+        closer = getattr(ex, "close", None)
+        if closer:
+            maybe = closer()
+            if asyncio.iscoroutine(maybe):
+                await maybe
+    return data
 
 @router.post("/api/lab/settings")
 async def lab_settings(request: Request):
     body = await request.json()
     data = exp_settings(body)
     save_user_settings(data)
-    if hasattr(cfg, "reload_from_sources"): cfg.reload_from_sources()
+    if hasattr(cfg, "reload_from_sources"):
+        cfg.reload_from_sources()
     return {"ok": True, "settings": data}
 
 @router.post("/api/lab/backtest")
@@ -54,16 +85,15 @@ async def lab_backtest(request: Request):
         limit = int(body.get("limit", 1500))
         mode = body.get("mode", "walkforward")
         df = await fetch_ohlcv(symbol, timeframe, limit)
-        if df is None or df.empty: return JSONResponse({"error":"No data returned"}, status_code=400)
-        from core.models.feature_engine import compute_features
+        if df is None or df.empty:
+            return JSONResponse({"error": "No data returned"}, status_code=400)
         from backtest.engine import BacktestEngine
-        prepared = compute_features(df.copy())
-        out = {"symbol": symbol, "timeframe": timeframe, "limit": limit}
+        out = {"symbol": symbol, "timeframe": timeframe, "limit": limit, "logic": "paper_aligned_backtest_engine"}
         if body.get("compare_baseline", False):
             with temporary_settings({"RAW_PROFIT_MODE": False, "ADAPTIVE_RISK_MODE": False}):
-                out["baseline"] = BacktestEngine().run(prepared.copy(), mode=mode)
+                out["baseline"] = BacktestEngine().run(df.copy(), mode=mode)
         with temporary_settings(exp_settings(body)):
-            out["experiment"] = BacktestEngine().run(prepared.copy(), mode=mode)
+            out["experiment"] = BacktestEngine().run(df.copy(), mode=mode)
         return out
     except Exception as e:
         logger.exception("Lab backtest failed")
@@ -73,30 +103,19 @@ async def lab_backtest(request: Request):
 async def lab_compete(request: Request):
     try:
         body = await request.json()
-        symbols = body.get("symbols") or ["BTC/USDT","ETH/USDT","SOL/USDT","BNB/USDT"]
-        if isinstance(symbols, str): symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+        symbols = _clean_symbols(body.get("symbols") or ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"])
         timeframe = body.get("timeframe", getattr(cfg, "TIMEFRAME", "30m"))
         limit = int(body.get("limit", 1500))
-        mode = body.get("mode", "walkforward")
-        from core.exchange.factory import get_exchange
-        ex = get_exchange(); data = {}
-        try:
-            for sym in symbols:
-                df = await ex.get_ohlcv(sym, timeframe, limit=limit)
-                if df is not None and not df.empty: data[sym] = df
-        finally:
-            closer = getattr(ex, "close", None)
-            if closer:
-                maybe = closer()
-                if asyncio.iscoroutine(maybe): await maybe
-        if not data: return JSONResponse({"error":"No symbol data returned"}, status_code=400)
+        data = await fetch_many_ohlcv(symbols, timeframe, limit)
+        if not data:
+            return JSONResponse({"error": "No symbol data returned"}, status_code=400)
         from backtest.engine import MultiSymbolBacktestEngine
-        out = {"symbols": list(data.keys()), "timeframe": timeframe, "limit": limit}
+        out = {"symbols": list(data.keys()), "timeframe": timeframe, "limit": limit, "logic": "competing_symbol_selector_same_as_compete_optimizer"}
         if body.get("compare_baseline", False):
             with temporary_settings({"RAW_PROFIT_MODE": False, "ADAPTIVE_RISK_MODE": False}):
-                out["baseline"] = MultiSymbolBacktestEngine().run(data, mode=mode)
+                out["baseline"] = MultiSymbolBacktestEngine().run_competing_symbols(data)
         with temporary_settings(exp_settings(body)):
-            out["experiment"] = MultiSymbolBacktestEngine().run(data, mode=mode)
+            out["experiment"] = MultiSymbolBacktestEngine().run_competing_symbols(data)
         return out
     except Exception as e:
         logger.exception("Lab compete failed")
@@ -112,10 +131,11 @@ async def lab_optuna(request: Request):
         trials = int(body.get("trials", getattr(cfg, "OPTUNA_TRIALS", 60)))
         metric = body.get("metric", "target_150")
         df = await fetch_ohlcv(symbol, timeframe, limit)
-        if df is None or df.empty: return JSONResponse({"error":"No data returned"}, status_code=400)
+        if df is None or df.empty:
+            return JSONResponse({"error": "No data returned"}, status_code=400)
         from optimization.optimizer import PrometheusOptimizer
         with temporary_settings(exp_settings(body)):
-            return PrometheusOptimizer(df=df, metric=metric, n_trials=trials).run()
+            return PrometheusOptimizer(df=df, metric=metric, n_trials=trials).run(mode="single")
     except Exception as e:
         logger.exception("Lab optuna failed")
         return JSONResponse({"error": str(e)}, status_code=500)
