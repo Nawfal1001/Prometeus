@@ -1,15 +1,5 @@
 # ============================================================
-#  PROMETHEUS — Optimizer (v3 — TP1-heavy scalping search)
-#
-#  Key changes:
-#  1. Seed params use ATR multiples (not STOP_LOSS_PCT/TAKE_PROFIT_PCT)
-#  2. Search space covers ATR_SL_MULT, ATR_TP1_MULT, ATR_TP2_MULT
-#     with flexible scalping R:R and TP1-heavy exits
-#  3. MAX_TRADE_DURATION_BARS searched: 20-48 bars
-#  4. WEIGHT_* params now actually affect backtest -> worth optimizing
-#  5. Composite score weights win_rate heavily (primary growth driver)
-#  6. "target_150" metric added: score based on reaching 150 from 50
-#  7. Removed STOP_LOSS_PCT/TAKE_PROFIT_PCT from search (not used by engine)
+#  PROMETHEUS — Optimizer (v4 — runtime-aligned search)
 # ============================================================
 
 import optuna
@@ -25,7 +15,8 @@ from backtest.engine import BacktestEngine, MultiSymbolBacktestEngine
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-RESULTS_PATH = Path(__file__).parent.parent / "config" / "optuna_results.json"
+RESULTS_PATH = Path(__file__).parent.parent / "data" / "optuna_results.json"
+RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 _OPT_KEYS = [
     "FUSION_THRESHOLD", "MIN_RR_RATIO",
@@ -39,32 +30,21 @@ _OPT_KEYS = [
 ]
 
 SEED_PARAMS = [
-    # Balanced fallback
-    dict(FUSION_THRESHOLD=0.17, MIN_RR_RATIO=1.8,
-         ATR_SL_MULT=1.2, ATR_TP1_MULT=1.1, ATR_TP2_MULT=2.0,
-         TP1_EXIT_PCT=0.70, TP2_EXIT_PCT=0.30, MAX_TRADE_DURATION_BARS=28,
-         EMA_FAST=20, EMA_MID=50, EMA_SLOW=200, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=7,
-         WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.05, WEIGHT_WHALE=0.10,
-         WEIGHT_LIQUIDATION=0.30, WEIGHT_ENTRY=0.35,
+    dict(FUSION_THRESHOLD=0.19, MIN_RR_RATIO=1.8,
+         ATR_SL_MULT=1.2, ATR_TP1_MULT=1.2, ATR_TP2_MULT=2.2,
+         TP1_EXIT_PCT=0.65, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=28,
+         EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
+         MAX_RISK_PER_TRADE=0.035, MAX_TRADES_PER_DAY=6,
+         WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35,
          REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.30),
-    # TP1-heavy scalping
-    dict(FUSION_THRESHOLD=0.14, MIN_RR_RATIO=1.4,
-         ATR_SL_MULT=1.0, ATR_TP1_MULT=0.9, ATR_TP2_MULT=1.6,
-         TP1_EXIT_PCT=0.85, TP2_EXIT_PCT=0.15, MAX_TRADE_DURATION_BARS=18,
+    dict(FUSION_THRESHOLD=0.17, MIN_RR_RATIO=1.6,
+         ATR_SL_MULT=1.1, ATR_TP1_MULT=1.0, ATR_TP2_MULT=1.9,
+         TP1_EXIT_PCT=0.75, TP2_EXIT_PCT=0.25, MAX_TRADE_DURATION_BARS=24,
          EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=7,
-         MAX_RISK_PER_TRADE=0.055, MAX_TRADES_PER_DAY=9,
-         WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.05, WEIGHT_WHALE=0.10,
-         WEIGHT_LIQUIDATION=0.35, WEIGHT_ENTRY=0.35,
-         REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
-    # Very fast scalp
-    dict(FUSION_THRESHOLD=0.13, MIN_RR_RATIO=1.3,
-         ATR_SL_MULT=0.9, ATR_TP1_MULT=0.8, ATR_TP2_MULT=1.4,
-         TP1_EXIT_PCT=1.00, TP2_EXIT_PCT=0.00, MAX_TRADE_DURATION_BARS=14,
-         EMA_FAST=12, EMA_MID=35, EMA_SLOW=120, RSI_PERIOD=6,
-         MAX_RISK_PER_TRADE=0.045, MAX_TRADES_PER_DAY=10,
-         WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.04, WEIGHT_WHALE=0.08,
-         WEIGHT_LIQUIDATION=0.35, WEIGHT_ENTRY=0.35,
+         MAX_RISK_PER_TRADE=0.03, MAX_TRADES_PER_DAY=7,
+         WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.10,
+         WEIGHT_LIQUIDATION=0.30, WEIGHT_ENTRY=0.35,
          REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
 ]
 
@@ -111,6 +91,8 @@ class PrometheusOptimizer:
                             timeout=self.timeout, callbacks=[self._trial_callback],
                             show_progress_bar=False)
 
+        if not self.study.trials:
+            return {"error": "No optimizer trials completed"}
         best = self.study.best_trial
         self.best_params = best.params
         self.best_value = best.value
@@ -134,8 +116,6 @@ class PrometheusOptimizer:
             if prepared is None or prepared.empty or len(prepared) < 100:
                 return -1.0
 
-            # Walk-forward is slower but far harder to overfit than a single 70/30 split.
-            # For a small compounding account, robustness matters more than peak backtest score.
             results = BacktestEngine().walk_forward(prepared)
 
             if "error" in results or results.get("total_trades", 0) < 15:
@@ -188,11 +168,13 @@ class PrometheusOptimizer:
 
         sl_mult = trial.suggest_float("ATR_SL_MULT", 0.8, 1.8, step=0.1)
         tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.8, 1.8, step=0.1)
-        # Flexible TP2 for high-frequency scalping.
-        # We still keep TP2 above TP1 / SL, but do not force a rigid 2R target.
         min_tp2 = round(max(sl_mult * 1.3, tp1_mult + 0.2), 1)
         max_tp2 = max(min_tp2 + 0.3, 3.2)
         tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.1)
+        rr_cap = max(1.1, min(2.4, tp2_mult / max(sl_mult, 1e-9)))
+        min_rr = trial.suggest_float("MIN_RR_RATIO", 1.1, rr_cap, step=0.1)
+        tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
+        tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
 
         return {
             "WEIGHT_REGIME": w1,
@@ -201,19 +183,17 @@ class PrometheusOptimizer:
             "WEIGHT_LIQUIDATION": w4,
             "WEIGHT_ENTRY": w5,
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.13, 0.30, step=0.01),
-            "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.3, 2.4, step=0.1),
+            "MIN_RR_RATIO": min_rr,
             "ATR_SL_MULT": sl_mult,
             "ATR_TP1_MULT": tp1_mult,
             "ATR_TP2_MULT": tp2_mult,
-            "TP1_EXIT_PCT": trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05),
-            "TP2_EXIT_PCT": trial.suggest_float("TP2_EXIT_PCT", 0.00, 0.45, step=0.05),
+            "TP1_EXIT_PCT": tp1_exit,
+            "TP2_EXIT_PCT": tp2_exit,
             "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 12, 48),
             "EMA_FAST": ema_fast,
             "EMA_MID": ema_mid,
             "EMA_SLOW": ema_slow,
             "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 4, 18),
-            # Small-account futures: keep risk bounded. High risk may optimize well
-            # on one history window but greatly increases ruin probability.
             "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.015, 0.04, step=0.005),
             "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 3, 7),
             "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
@@ -242,8 +222,6 @@ class PrometheusOptimizer:
             return -0.5
 
         time_penalty = max(0.30, 1.0 - ter * 1.8)
-
-        # Hazard proxy: punish parameter sets that only win by accepting ruin-like drawdowns.
         ruin_penalty = 1.0
         if dd > 0.12:
             ruin_penalty *= max(0.25, 1.0 - (dd - 0.12) * 3.5)
@@ -276,13 +254,7 @@ class PrometheusOptimizer:
         sh_score = max(min(sh, 3.0), -1.0) / 3.0
         ret_score = max(min(ret, 1.5), -0.5) / 1.5
         dd_score = max(0.0, 1.0 - dd / 0.25)
-
-        # Profit-first composite while keeping trade frequency rewarded.
-        score = (wr_score * 0.25
-                 + pf_score * 0.25
-                 + ret_score * 0.30
-                 + sh_score * 0.10
-                 + dd_score * 0.10)
+        score = (wr_score * 0.25 + pf_score * 0.25 + ret_score * 0.30 + sh_score * 0.10 + dd_score * 0.10)
         return score * trade_penalty * time_penalty * ruin_penalty
 
     def _trial_callback(self, study, trial):
@@ -325,6 +297,7 @@ class PrometheusOptimizer:
 
     def _save_results(self, result: dict):
         try:
+            RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
             RESULTS_PATH.write_text(json.dumps(result, indent=2, default=str))
         except Exception as e:
             logger.warning(f"[Optimizer] Save failed: {e}")
