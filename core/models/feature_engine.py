@@ -114,6 +114,10 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ll"] = (df["low"] < df["low"].shift(1)) & (df["low"].shift(1) < df["low"].shift(2))
     df["market_structure"] = np.where(df["hh"], 1, np.where(df["ll"], -1, 0))
 
+    # Previous-bar extremes — required by breakout/pullback entry boosts.
+    df["prev_high"] = df["high"].shift(1)
+    df["prev_low"]  = df["low"].shift(1)
+
     df["ret_1"] = df["close"].pct_change(1)
     df["ret_3"] = df["close"].pct_change(3)
     df["ret_6"] = df["close"].pct_change(6)
