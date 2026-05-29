@@ -1,0 +1,26 @@
+name: Apply Remaining Dashboard Fixes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-remaining-dashboard-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply remaining fixes
+        run: python scripts/apply_remaining_fixes.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "prometheus-fix-bot"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Apply remaining dashboard and API fixes" || echo "No changes to commit"
+          git push
