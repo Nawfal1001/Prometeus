@@ -1,0 +1,36 @@
+name: Apply remaining fix pack
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fixpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Apply remaining fix pack
+        run: python tools/apply_fixpack_remaining.py --commit
+
+      - name: Push changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+          fi
+          git push
