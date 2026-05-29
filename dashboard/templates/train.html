@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Train ML</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scan">Scanner</a>
+    <a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a>
+    <a href="/train" class="active">Train ML</a>
+    <a href="/settings">Settings</a>
+  </div>
+  <div class="nav-status"><span id="status-badge" class="badge badge-stopped">STOPPED</span></div>
+</nav>
+
+<div class="container">
+  <h1>🧠 Train XGBoost Signal Model</h1>
+  <p style="color:var(--muted);margin-bottom:20px">
+    The ML layer contributes 0 to every signal until a model exists. Train it here, then
+    confirm <b>Model present</b> shows ✅ before backtesting or going live.
+  </p>
+
+  <div class="card">
+    <div class="card-header">📦 Current Model Status</div>
+    <div class="stats-grid" style="padding:16px">
+      <div class="stat-card"><div class="stat-label">Model Present</div><div class="stat-value" id="m-present">—</div><div class="stat-sub" id="m-version">version —</div></div>
+      <div class="stat-card"><div class="stat-label">Last F1</div><div class="stat-value" id="m-f1">—</div><div class="stat-sub" id="m-samples">— samples</div></div>
+      <div class="stat-card"><div class="stat-label">Training</div><div class="stat-value" id="m-running">Idle</div><div class="stat-sub" id="m-finished">—</div></div>
+      <div class="stat-card"><div class="stat-label">Rows Loaded</div><div class="stat-value" id="m-rows">—</div><div class="stat-sub" id="m-symbols-n">— symbols</div></div>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <div class="card-header">⚙️ Training Configuration</div>
+    <div class="settings-grid" style="padding:20px">
+      <div class="field-group">
+        <label>Symbol Set</label>
+        <select id="t-set" onchange="toggleSet()">
+          <option value="default" selected>All default crypto (recommended)</option>
+          <option value="custom">Custom symbols</option>
+        </select>
+        <span class="hint">More symbols = more labeled samples = a more robust model.</span>
+      </div>
+      <div class="field-group" id="t-custom-box" style="display:none">
+        <label>Symbols comma-separated</label>
+        <input id="t-symbols" value="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT">
+      </div>
+      <div class="field-group">
+        <label>Timeframe</label>
+        <select id="t-timeframe">
+          <option value="15m">15 min</option>
+          <option value="30m" selected>30 min</option>
+          <option value="1h">1 hour</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label>Candles per symbol</label>
+        <input type="number" id="t-candles" value="3000" min="1000" max="10000" step="500">
+        <span class="hint">Need 20+ long & 20+ short labels. 3000+ recommended.</span>
+      </div>
+    </div>
+    <div style="padding:0 20px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary" id="t-run-btn" onclick="trainModel()">🧠 Train Model</button>
+      <button class="btn btn-secondary" onclick="refreshStatus()">🔄 Refresh Status</button>
+      <span id="t-status-text" style="color:var(--muted);font-size:13px"></span>
+    </div>
+  </div>
+
+  <div class="card mt">
+    <div class="card-header">🧾 Training Logs</div>
+    <pre id="ui-logs" class="ui-log-box" style="padding:14px;max-height:260px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;font-size:12px">Waiting for logs...</pre>
+  </div>
+</div>
+
+<script>
+function set(id,v){const e=document.getElementById(id);if(e)e.textContent=v}
+function toggleSet(){
+  const custom = document.getElementById('t-set').value === 'custom';
+  document.getElementById('t-custom-box').style.display = custom ? 'block' : 'none';
+}
+
+async function loadLogs(){
+  try{
+    const r = await fetch('/api/logs'); const d = await r.json();
+    const b = document.getElementById('ui-logs');
+    const ml = (d.logs||[]).filter(l => /ML train|XGBoost|training/i.test(l.message));
+    b.textContent = ml.length ? ml.map(l=>`[${l.time}] [${l.level}] ${l.message}`).join('\n')
+                              : 'No training logs yet.';
+    b.scrollTop = b.scrollHeight;
+  }catch(e){}
+}
+
+async function refreshStatus(){
+  try{
+    const [statusRes, lastRes] = await Promise.all([
+      fetch('/api/model/status'), fetch('/api/model/last')
+    ]);
+    const status = await statusRes.json();
+    const last = await lastRes.json();
+
+    const running = !!status.running;
+    set('m-running', running ? 'Running…' : 'Idle');
+    set('m-finished', status.finished_at ? ('finished ' + String(status.finished_at).slice(11,19)) : '—');
+    document.getElementById('t-run-btn').disabled = running;
+
+    const res = (last && last.f1 !== undefined) ? last : (status.result || {});
+    const present = res && res.f1 !== undefined;
+    const pEl = document.getElementById('m-present');
+    pEl.textContent = present ? '✅ Yes' : '❌ Not trained';
+    pEl.className = 'stat-value ' + (present ? 'green' : 'red');
+    set('m-version', res.mode ? res.mode : 'version —');
+    set('m-f1', present ? Number(res.f1).toFixed(3) : '—');
+    set('m-samples', (res.n_samples ?? '—') + ' samples');
+    set('m-rows', res.rows_loaded ?? '—');
+    set('m-symbols-n', (res.symbols ? res.symbols.length : '—') + ' symbols');
+
+    if (status.error) { set('t-status-text', 'Error: ' + status.error); }
+    else if (running) { set('t-status-text', 'Training in progress…'); }
+  }catch(e){ set('t-status-text', 'Status error: ' + e.message); }
+}
+
+async function trainModel(){
+  const useDefault = document.getElementById('t-set').value === 'default';
+  const payload = {
+    all_default: useDefault,
+    symbols: useDefault ? null : document.getElementById('t-symbols').value,
+    timeframe: document.getElementById('t-timeframe').value,
+    candles: parseInt(document.getElementById('t-candles').value),
+  };
+  document.getElementById('t-run-btn').disabled = true;
+  set('t-status-text', 'Training started… this can take a minute.');
+  try{
+    const res = await fetch('/api/model/train', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if(!res.ok || data.error) throw new Error(data.error || 'Training failed');
+    set('t-status-text', `Done — F1=${Number(data.f1).toFixed(3)}, ${data.n_samples} samples`);
+  }catch(e){
+    set('t-status-text', 'Error: ' + e.message);
+  }finally{
+    document.getElementById('t-run-btn').disabled = false;
+    refreshStatus(); loadLogs();
+  }
+}
+
+setInterval(()=>{ loadLogs(); refreshStatus(); }, 3000);
+loadLogs(); refreshStatus(); toggleSet();
+</script>
+</body>
+</html>
