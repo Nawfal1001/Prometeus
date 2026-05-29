@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Experiments Lab</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.lab-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}.lab-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.lab-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.logbox{background:#060914;color:#d7e6ff;border:1px solid #1f2a44;border-radius:12px;padding:12px;height:320px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;white-space:pre-wrap}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.metric{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:10px}.metric b{display:block;font-size:18px;margin-top:4px}.switch-line{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.07)}.switch-line:last-child{border-bottom:0}.hint-mini{opacity:.72;font-size:12px}.results-table{width:100%;border-collapse:collapse}.results-table th,.results-table td{padding:8px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left}.pill{display:inline-block;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.08);font-size:12px}@media(max-width:900px){.lab-grid,.lab-row,.metric-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a><a href="/backtest">Backtest</a><a href="/optimize">Optimize</a><a href="/lab" class="active">Experiments Lab</a><a href="/train">Train ML</a><a href="/settings">Settings</a>
+  </div>
+  <div class="nav-status"><span id="status-badge" class="badge badge-stopped">LAB</span></div>
+</nav>
+
+<div class="container">
+  <div class="settings-header">
+    <h1>🧪 Experiments Lab</h1>
+    <div class="hint-mini">One page for raw-profit tests, single backtests, competing symbols, and Optuna.</div>
+  </div>
+
+  <div class="lab-grid">
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">⚙️ Experiment Controls</div>
+        <div style="padding:16px">
+          <div class="lab-row">
+            <div class="field-group"><label>Symbols</label><input id="symbols" value="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT"><span class="hint">Comma separated. First symbol is used for single-symbol mode.</span></div>
+            <div class="field-group"><label>Timeframe</label><select id="timeframe"><option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m" selected>30m</option><option value="1h">1h</option></select></div>
+            <div class="field-group"><label>Candles</label><input id="limit" type="number" min="300" max="5000" step="100" value="1500"></div>
+          </div>
+          <div class="lab-row">
+            <div class="field-group"><label>Backtest Mode</label><select id="mode"><option value="walkforward" selected>Walk-forward</option><option value="simple">Simple split</option></select></div>
+            <div class="field-group"><label>Optuna Trials</label><input id="trials" type="number" min="5" max="300" step="5" value="60"></div>
+            <div class="field-group"><label>Optuna Metric</label><select id="metric"><option value="target_150" selected>Target €150</option><option value="composite">Composite</option></select></div>
+          </div>
+
+          <div class="settings-section" style="margin-top:12px">
+            <div class="section-title">🚀 Experimental Toggles</div>
+            <div class="switch-line"><div><b>Raw Profit Mode</b><div class="hint-mini">Momentum continuation + breakout + dynamic TP2.</div></div><select id="rawProfit"><option value="true" selected>On</option><option value="false">Off</option></select></div>
+            <div class="switch-line"><div><b>Adaptive Risk</b><div class="hint-mini">EdgeGuard + regime memory multipliers.</div></div><select id="adaptiveRisk"><option value="true" selected>On</option><option value="false">Off</option></select></div>
+            <div class="switch-line"><div><b>Compare Baseline</b><div class="hint-mini">Run baseline first, then experiment.</div></div><select id="compareBaseline"><option value="true" selected>Yes</option><option value="false">No</option></select></div>
+          </div>
+
+          <div class="lab-actions">
+            <button class="btn btn-primary" onclick="runSingle()">▶ Single Backtest</button>
+            <button class="btn btn-primary" onclick="runCompete()">⚔ Compete Symbols</button>
+            <button class="btn btn-primary" onclick="runOptuna()">🧬 Run Optuna</button>
+            <button class="btn btn-secondary" onclick="saveExperimentSettings()">💾 Save Toggles</button>
+            <button class="btn btn-secondary" onclick="clearLab()">🧹 Clear</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">📊 Results</div>
+        <div style="padding:16px">
+          <div class="metric-grid" id="metrics">
+            <div class="metric">Final Capital<b>—</b></div><div class="metric">Return<b>—</b></div><div class="metric">Win Rate<b>—</b></div><div class="metric">Max DD<b>—</b></div>
+          </div>
+          <div style="overflow:auto;margin-top:14px"><table class="results-table" id="results"><thead><tr><th>Run</th><th>Mode</th><th>Capital</th><th>Return</th><th>WR</th><th>PF</th><th>DD</th><th>Trades</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">📝 Live Logs</div>
+        <div style="padding:16px"><div class="logbox" id="logs">Ready. Choose an experiment and run it.\n</div></div>
+      </div>
+      <div class="card">
+        <div class="card-header">🧠 Experimental Fields To Watch</div>
+        <div style="padding:16px">
+          <div class="pill">raw_profit_mode</div> <div class="pill">continuation_mode</div> <div class="pill">breakout_mode</div>
+          <div class="pill">memory_multiplier</div> <div class="pill">edge_guard.risk_multiplier</div> <div class="pill">ruin_pressure</div>
+          <p class="hint-mini" style="margin-top:12px">If return rises but max drawdown explodes, reject the experiment. If return rises while PF and DD remain acceptable, keep it for paper trading.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+function log(msg){ const box=$('logs'); box.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`; box.scrollTop=box.scrollHeight; }
+function bool(id){ return $(id).value === 'true'; }
+function symbols(){ return $('symbols').value.split(',').map(s=>s.trim()).filter(Boolean); }
+function fmtPct(x){ if(x===undefined||x===null||isNaN(Number(x))) return '—'; return (Number(x)*100).toFixed(2)+'%'; }
+function fmtNum(x){ if(x===undefined||x===null||isNaN(Number(x))) return '—'; return Number(x).toFixed(2); }
+function addResult(name, mode, r){
+  const tbody=document.querySelector('#results tbody');
+  const row=document.createElement('tr');
+  row.innerHTML=`<td>${name}</td><td>${mode}</td><td>${fmtNum(r.final_capital||r.capital||r.best_final_equity)}</td><td>${fmtPct(r.total_return||r.best_growth)}</td><td>${fmtPct(r.win_rate)}</td><td>${fmtNum(r.profit_factor)}</td><td>${fmtPct(r.max_drawdown)}</td><td>${r.total_trades||r.trades||'—'}</td>`;
+  tbody.prepend(row);
+  $('metrics').innerHTML=`<div class="metric">Final Capital<b>${fmtNum(r.final_capital||r.capital||r.best_final_equity)}</b></div><div class="metric">Return<b>${fmtPct(r.total_return||r.best_growth)}</b></div><div class="metric">Win Rate<b>${fmtPct(r.win_rate)}</b></div><div class="metric">Max DD<b>${fmtPct(r.max_drawdown)}</b></div>`;
+}
+async function post(url, payload){
+  log(`POST ${url}`);
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const data=await res.json();
+  if(!res.ok || data.error){ throw new Error(data.error || res.statusText); }
+  return data;
+}
+async function saveExperimentSettings(){
+  const payload={RAW_PROFIT_MODE: bool('rawProfit'), ADAPTIVE_RISK_MODE: bool('adaptiveRisk'), OPTUNA_METRIC: $('metric').value, OPTUNA_TRIALS: Number($('trials').value)};
+  try{ await post('/api/settings', payload); log('Saved experiment toggles.'); }catch(e){ log('Save failed: '+e.message); }
+}
+async function runSingle(){
+  try{
+    await saveExperimentSettings();
+    const sym=symbols()[0]||'BTC/USDT';
+    const payload={symbol:sym,timeframe:$('timeframe').value,limit:Number($('limit').value),mode:$('mode').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk'),compare_baseline:bool('compareBaseline')};
+    const data=await post('/api/lab/backtest',payload);
+    log('Single backtest complete.'); addResult(sym,'single',data.experiment||data);
+  }catch(e){ log('Single failed: '+e.message); }
+}
+async function runCompete(){
+  try{
+    await saveExperimentSettings();
+    const payload={symbols:symbols(),timeframe:$('timeframe').value,limit:Number($('limit').value),mode:$('mode').value,run_mode:'compete',raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk'),compare_baseline:bool('compareBaseline')};
+    const data=await post('/api/lab/compete',payload);
+    log('Compete backtest complete.'); addResult('multi','compete',data.experiment||data);
+  }catch(e){ log('Compete failed: '+e.message); }
+}
+async function runOptuna(){
+  try{
+    await saveExperimentSettings();
+    const payload={symbol:symbols()[0]||'BTC/USDT',timeframe:$('timeframe').value,limit:Number($('limit').value),trials:Number($('trials').value),metric:$('metric').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk')};
+    const data=await post('/api/lab/optuna',payload);
+    log('Optuna complete. Best score: '+(data.best_value??'—')); addResult('optuna','optuna',data.best_result||data);
+  }catch(e){ log('Optuna failed: '+e.message); }
+}
+function clearLab(){ $('logs').textContent='Cleared.\n'; document.querySelector('#results tbody').innerHTML=''; }
+</script>
+</body>
+</html>
