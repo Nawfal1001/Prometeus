@@ -1,4 +1,7 @@
 from pathlib import Path
+import argparse
+import subprocess
+import sys
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -9,29 +12,45 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# dashboard/app.py
-app_path = Path("dashboard/app.py")
-app = app_path.read_text()
+def run(cmd: list[str]) -> None:
+    print("$ " + " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
-route_old = '''@app.get("/optimize", response_class=HTMLResponse)
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Apply remaining PROMETHEUS honesty fix pack patches.")
+    parser.add_argument("--commit", action="store_true", help="Commit the generated changes with git after patching and validation.")
+    parser.add_argument("--push", action="store_true", help="Push after committing. Implies --commit.")
+    args = parser.parse_args()
+    if args.push:
+        args.commit = True
+
+    changed_files: set[str] = set()
+
+    # dashboard/app.py
+    app_path = Path("dashboard/app.py")
+    app_before = app_path.read_text()
+    app = app_before
+
+    route_old = '''@app.get("/optimize", response_class=HTMLResponse)
 async def optimize_page(request: Request):
     return templates.TemplateResponse("optimize.html", {"request": request})
 '''
-route_new = route_old + '''
+    route_new = route_old + '''
 @app.get("/train", response_class=HTMLResponse)
 async def train_page(request: Request):
     return templates.TemplateResponse("train.html", {"request": request})
 '''
-if '@app.get("/train"' not in app:
-    app = replace_once(app, route_old, route_new, "dashboard train route")
-else:
-    print("SKIP dashboard train route: already patched")
+    if '@app.get("/train"' not in app:
+        app = replace_once(app, route_old, route_new, "dashboard train route")
+    else:
+        print("SKIP dashboard train route: already patched")
 
-model_last_old = '''@app.get("/api/model/last")
+    model_last_old = '''@app.get("/api/model/last")
 async def model_last():
     return _state.get("model_training", {}) or _model_status.get("result") or {"status": "no_result"}
 '''
-model_last_new = '''@app.get("/api/model/last")
+    model_last_new = '''@app.get("/api/model/last")
 async def model_last():
     cached = _state.get("model_training", {}) or _model_status.get("result")
     if cached:
@@ -52,30 +71,34 @@ async def model_last():
         pass
     return {"status": "no_result"}
 '''
-app = replace_once(app, model_last_old, model_last_new, "dashboard model_last disk truth")
-app_path.write_text(app)
+    app = replace_once(app, model_last_old, model_last_new, "dashboard model_last disk truth")
+    if app != app_before:
+        app_path.write_text(app)
+        changed_files.add(str(app_path))
 
-# nav links in templates
-for path in Path("dashboard/templates").glob("*.html"):
-    html = path.read_text()
-    original = html
-    if 'href="/train"' not in html:
-        html = html.replace('<a href="/optimize">Optimize</a><a href="/settings">Settings</a>', '<a href="/optimize">Optimize</a><a href="/train">Train ML</a><a href="/settings">Settings</a>')
-        html = html.replace('    <a href="/optimize">Optimize</a>\n    <a href="/settings">Settings</a>', '    <a href="/optimize">Optimize</a>\n    <a href="/train">Train ML</a>\n    <a href="/settings">Settings</a>')
-    if html != original:
-        print(f"PATCH nav {path}")
-        path.write_text(html)
+    # nav links in templates
+    for path in Path("dashboard/templates").glob("*.html"):
+        html = path.read_text()
+        original = html
+        if 'href="/train"' not in html:
+            html = html.replace('<a href="/optimize">Optimize</a><a href="/settings">Settings</a>', '<a href="/optimize">Optimize</a><a href="/train">Train ML</a><a href="/settings">Settings</a>')
+            html = html.replace('    <a href="/optimize">Optimize</a>\n    <a href="/settings">Settings</a>', '    <a href="/optimize">Optimize</a>\n    <a href="/train">Train ML</a>\n    <a href="/settings">Settings</a>')
+        if html != original:
+            print(f"PATCH nav {path}")
+            path.write_text(html)
+            changed_files.add(str(path))
 
-# backtest/engine.py
-engine_path = Path("backtest/engine.py")
-engine = engine_path.read_text()
+    # backtest/engine.py
+    engine_path = Path("backtest/engine.py")
+    engine_before = engine_path.read_text()
+    engine = engine_before
 
-rr_old = '''        # Enforce minimum R:R
+    rr_old = '''        # Enforce minimum R:R
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
         if tp2_mult / max(sl_mult, 1e-9) < min_rr:
             return {"trade": False, "reason": "rr_too_low", "fusion_score": fusion_score, "abs_score": abs_score}
 '''
-rr_new = '''        # Real per-trade R:R: scale achievable TP2 by signal strength.
+    rr_new = '''        # Real per-trade R:R: scale achievable TP2 by signal strength.
         # Weak signals get a haircut on expected reward, so marginal setups
         # fail the min-R:R gate instead of every trade passing identically.
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
@@ -83,46 +106,74 @@ rr_new = '''        # Real per-trade R:R: scale achievable TP2 by signal strengt
         if effective_reward < min_rr:
             return {"trade": False, "reason": "rr_too_low", "fusion_score": fusion_score, "abs_score": abs_score}
 '''
-engine = replace_once(engine, rr_old, rr_new, "engine real per-trade RR")
+    engine = replace_once(engine, rr_old, rr_new, "engine real per-trade RR")
 
-sizing_old = '''        pos_size  = capital * risk_frac * leverage * min(abs_score * 1.2, 1.5)
+    sizing_old = '''        pos_size  = capital * risk_frac * leverage * min(abs_score * 1.2, 1.5)
 '''
-sizing_new = '''        # Fractional-Kelly: edge proxy from signal strength, quarter-Kelly,
+    sizing_new = '''        # Fractional-Kelly: edge proxy from signal strength, quarter-Kelly,
         # hard-capped at risk_frac. Compounds via `capital` without ruin.
         edge = max(0.0, abs_score - threshold) / max(1e-9, 1.0 - threshold)
         kelly_frac = min(0.25 * edge, 1.0)
         pos_size  = capital * risk_frac * kelly_frac * leverage
 '''
-engine = replace_once(engine, sizing_old, sizing_new, "engine fractional Kelly sizing")
+    engine = replace_once(engine, sizing_old, sizing_new, "engine fractional Kelly sizing")
 
-time_single_old = '''                    if expired and not hit_tp2 and not hit_sl:
+    time_single_old = '''                    if expired and not hit_tp2 and not hit_sl:
                         # FIX 2: TIME = flat scratch, not a loss
                         exit_px_v = close
                         raw_ret   = ((close - entry_px) / entry_px) * trade_side
                         raw_ret   = max(raw_ret, -0.0002)  # cap tiny negatives at ~0
                         exit_type = "TIME"
 '''
-time_single_new = '''                    if expired and not hit_tp2 and not hit_sl:
+    time_single_new = '''                    if expired and not hit_tp2 and not hit_sl:
                         # TIME exit books the REAL close-out return (no scratch).
                         # Honest accounting — a drifting trade is a real small loss.
                         exit_px_v = close * (1 - trade_side * SLIPPAGE)
                         raw_ret   = ((exit_px_v - entry_px) / entry_px) * trade_side
                         exit_type = "TIME"
 '''
-engine = replace_once(engine, time_single_old, time_single_new, "engine single TIME real pnl")
+    engine = replace_once(engine, time_single_old, time_single_new, "engine single TIME real pnl")
 
-time_multi_old = '''                    if expired and not hit_tp2 and not hit_sl:
+    time_multi_old = '''                    if expired and not hit_tp2 and not hit_sl:
                         exit_px_v = close
                         raw_ret   = max(((close - entry_px) / entry_px) * trade_side, -0.0002)
                         exit_type = "TIME"
 '''
-time_multi_new = '''                    if expired and not hit_tp2 and not hit_sl:
+    time_multi_new = '''                    if expired and not hit_tp2 and not hit_sl:
                         exit_px_v = close * (1 - trade_side * SLIPPAGE)
                         raw_ret   = ((exit_px_v - entry_px) / entry_px) * trade_side
                         exit_type = "TIME"
 '''
-engine = replace_once(engine, time_multi_old, time_multi_new, "engine multi TIME real pnl")
+    engine = replace_once(engine, time_multi_old, time_multi_new, "engine multi TIME real pnl")
 
-engine_path.write_text(engine)
+    if engine != engine_before:
+        engine_path.write_text(engine)
+        changed_files.add(str(engine_path))
 
-print("Remaining fix pack patching complete. Run: python -m py_compile dashboard/app.py backtest/engine.py core/scanner/multi_symbol_scanner.py core/models/feature_engine.py")
+    validation_files = [
+        "dashboard/app.py",
+        "backtest/engine.py",
+        "core/scanner/multi_symbol_scanner.py",
+        "core/models/feature_engine.py",
+    ]
+    run([sys.executable, "-m", "py_compile", *validation_files])
+
+    if not changed_files:
+        print("No generated file changes detected; everything may already be patched.")
+        return
+
+    print("Changed files:")
+    for file in sorted(changed_files):
+        print(f" - {file}")
+
+    if args.commit:
+        run(["git", "add", *sorted(changed_files)])
+        run(["git", "commit", "-m", "Apply remaining honesty fix pack"])
+        if args.push:
+            run(["git", "push"])
+
+    print("Remaining fix pack patching complete.")
+
+
+if __name__ == "__main__":
+    main()
