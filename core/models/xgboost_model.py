@@ -32,6 +32,9 @@ class XGBoostSignalModel:
         self._version = None
         self._binary_mode = False
 
+    def _neutral_prediction(self) -> dict:
+        return {"direction": 0, "confidence": 0.0, "probabilities": {}}
+
     def _prepare_training_data(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return pd.DataFrame()
@@ -59,12 +62,14 @@ class XGBoostSignalModel:
             logger.info("[XGBoost] No model found — training now")
             needs_train = True
         else:
+            if self.model is None or self._version is None:
+                self.load()
             age_hours = (datetime.now().timestamp() - MODEL_PATH.stat().st_mtime) / 3600
-            if age_hours > max_age_hours:
-                logger.info(f"[XGBoost] Model is {age_hours:.1f}h old — retraining")
+            if self.model is None or self._version != MODEL_VERSION:
+                logger.info("[XGBoost] Model missing or version mismatch — retraining")
                 needs_train = True
-            elif self._version != MODEL_VERSION:
-                logger.info("[XGBoost] Model version mismatch — retraining")
+            elif age_hours > max_age_hours:
+                logger.info(f"[XGBoost] Model is {age_hours:.1f}h old — retraining")
                 needs_train = True
         if needs_train:
             try:
@@ -143,16 +148,24 @@ class XGBoostSignalModel:
         if self.model is None:
             self.load()
         if self.model is None:
-            return {"direction": 0, "confidence": 0.0, "probabilities": {}}
+            return self._neutral_prediction()
+        if df is None or df.empty:
+            return self._neutral_prediction()
 
         df_feat = compute_features(df) if "ema_stack" not in df.columns else df
-        if df_feat.empty:
-            return {"direction": 0, "confidence": 0.0, "probabilities": {}}
+        if df_feat is None or df_feat.empty:
+            return self._neutral_prediction()
 
         available_cols = [c for c in self.feature_cols if c in df_feat.columns]
-        X = df_feat[available_cols].iloc[-1:].values
+        if not available_cols:
+            logger.warning("[XGBoost] Predict skipped: no available feature columns")
+            return self._neutral_prediction()
+
+        X = df_feat[available_cols].iloc[-1:].replace([np.inf, -np.inf], np.nan).fillna(0.0).values
         try:
             probs = self.model.predict_proba(X)[0]
+            if len(probs) < 2:
+                return self._neutral_prediction()
             short_prob = float(probs[0])
             long_prob = float(probs[1])
             direction = 1 if long_prob >= short_prob else -1
@@ -164,7 +177,7 @@ class XGBoostSignalModel:
             }
         except Exception as e:
             logger.warning(f"[XGBoost] Predict failed: {e}")
-            return {"direction": 0, "confidence": 0.0, "probabilities": {}}
+            return self._neutral_prediction()
 
     def get_entry_score(self, df: pd.DataFrame) -> float:
         result = self.predict(df)
@@ -208,6 +221,7 @@ class XGBoostSignalModel:
                 self._binary_mode = False
         else:
             logger.warning("[XGBoost] No saved model found. Train first.")
+
 
 def train_xgb_model(df):
     model = XGBoostSignalModel()
