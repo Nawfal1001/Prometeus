@@ -1,13 +1,15 @@
 # ============================================================
-#  PROMETHEUS — Optimizer (v4 — runtime-aligned search)
+#  PROMETHEUS — Optimizer (v5 — faster robust Optuna)
 # ============================================================
 
-import optuna
 import asyncio
+import inspect
+import json
+from pathlib import Path
+
+import optuna
 import pandas as pd
 from loguru import logger
-from pathlib import Path
-import json
 
 import config.settings as cfg
 from config.settings import save_user_settings
@@ -46,6 +48,14 @@ SEED_PARAMS = [
          WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.10,
          WEIGHT_LIQUIDATION=0.30, WEIGHT_ENTRY=0.35,
          REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
+    dict(FUSION_THRESHOLD=0.14, MIN_RR_RATIO=1.35,
+         ATR_SL_MULT=0.95, ATR_TP1_MULT=0.85, ATR_TP2_MULT=1.55,
+         TP1_EXIT_PCT=0.90, TP2_EXIT_PCT=0.10, MAX_TRADE_DURATION_BARS=16,
+         EMA_FAST=10, EMA_MID=30, EMA_SLOW=120, RSI_PERIOD=6,
+         MAX_RISK_PER_TRADE=0.025, MAX_TRADES_PER_DAY=10,
+         WEIGHT_REGIME=0.14, WEIGHT_SENTIMENT=0.08, WEIGHT_WHALE=0.08,
+         WEIGHT_LIQUIDATION=0.32, WEIGHT_ENTRY=0.38,
+         REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
 ]
 
 
@@ -63,6 +73,7 @@ class PrometheusOptimizer:
         self.trial_results = []
         self._trial_num = 0
         self._raw_df = df
+        self._prepared_df = None
 
     def run(self, data=None) -> dict:
         if data is not None:
@@ -75,8 +86,14 @@ class PrometheusOptimizer:
         if self.df is None or len(self.df) < 400:
             return {"error": f"Need at least 400 candles, got {len(self.df) if self.df is not None else 0}"}
 
-        sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=12)
-        pruner = (optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=20)
+        from core.models.feature_engine import compute_features
+        self._prepared_df = compute_features(self._raw_df.copy())
+        if self._prepared_df is None or self._prepared_df.empty or len(self._prepared_df) < 100:
+            return {"error": "Feature preparation failed or returned too few candles"}
+
+        startup = min(12, max(3, int(self.n_trials * 0.25)))
+        sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=startup, multivariate=True)
+        pruner = (optuna.pruners.MedianPruner(n_startup_trials=max(5, startup), n_warmup_steps=1)
                   if getattr(cfg, "OPTUNA_PRUNING", False)
                   else optuna.pruners.NopPruner())
         self.study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
@@ -87,9 +104,14 @@ class PrometheusOptimizer:
             except Exception:
                 pass
 
-        self.study.optimize(self._objective, n_trials=self.n_trials,
-                            timeout=self.timeout, callbacks=[self._trial_callback],
-                            show_progress_bar=False)
+        self.study.optimize(
+            self._objective,
+            n_trials=self.n_trials,
+            timeout=self.timeout,
+            callbacks=[self._trial_callback],
+            show_progress_bar=False,
+            gc_after_trial=True,
+        )
 
         if not self.study.trials:
             return {"error": "No optimizer trials completed"}
@@ -111,18 +133,22 @@ class PrometheusOptimizer:
         snapshot = {k: getattr(cfg, k, None) for k in _OPT_KEYS}
         try:
             self._inject_params(params)
-            from core.models.feature_engine import compute_features
-            prepared = compute_features(self._raw_df.copy())
+            prepared = self._prepared_df
             if prepared is None or prepared.empty or len(prepared) < 100:
                 return -1.0
 
             results = BacktestEngine().walk_forward(prepared)
 
             if "error" in results or results.get("total_trades", 0) < 15:
-                n = results.get("total_trades", 0)
-                return -0.5 - (15 - n) * 0.01
+                n = int(results.get("total_trades", 0) or 0)
+                score = -0.5 - (15 - n) * 0.01
+                trial.report(score, step=1)
+                return score
 
             score = self._compute_score(results)
+            trial.report(score, step=1)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
 
             self.trial_results.append({
                 "trial": trial.number,
@@ -144,6 +170,8 @@ class PrometheusOptimizer:
                 self.best_value = score
                 self.best_params = params
             return score
+        except optuna.TrialPruned:
+            raise
         except Exception as e:
             logger.debug(f"[Optimizer] Trial {trial.number} failed: {e}")
             return -1.0
@@ -153,26 +181,26 @@ class PrometheusOptimizer:
                     setattr(cfg, k, v)
 
     def _suggest_params(self, trial: optuna.Trial) -> dict:
-        w1 = trial.suggest_float("WEIGHT_REGIME", 0.10, 0.30)
-        w2 = trial.suggest_float("WEIGHT_SENTIMENT", 0.02, 0.12)
-        w3 = trial.suggest_float("WEIGHT_WHALE", 0.05, 0.18)
-        w4 = trial.suggest_float("WEIGHT_LIQUIDATION", 0.15, 0.40)
+        w1 = trial.suggest_float("WEIGHT_REGIME", 0.08, 0.30)
+        w2 = trial.suggest_float("WEIGHT_SENTIMENT", 0.02, 0.15)
+        w3 = trial.suggest_float("WEIGHT_WHALE", 0.04, 0.20)
+        w4 = trial.suggest_float("WEIGHT_LIQUIDATION", 0.12, 0.42)
         total = w1 + w2 + w3 + w4
-        w5 = max(0.20, round(1.0 - total, 3))
+        w5 = max(0.18, round(1.0 - total, 3))
         total2 = w1 + w2 + w3 + w4 + w5
         w1, w2, w3, w4, w5 = [round(w / total2, 4) for w in [w1, w2, w3, w4, w5]]
 
-        ema_fast = trial.suggest_int("EMA_FAST", 8, 25)
-        ema_mid = trial.suggest_int("EMA_MID", ema_fast + 10, 80)
-        ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 50, 250, step=10)
+        ema_fast = trial.suggest_int("EMA_FAST", 6, 25)
+        ema_mid = trial.suggest_int("EMA_MID", ema_fast + 8, 90)
+        ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 40, 260, step=10)
 
-        sl_mult = trial.suggest_float("ATR_SL_MULT", 0.8, 1.8, step=0.1)
-        tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.8, 1.8, step=0.1)
-        min_tp2 = round(max(sl_mult * 1.3, tp1_mult + 0.2), 1)
-        max_tp2 = max(min_tp2 + 0.3, 3.2)
-        tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.1)
-        rr_cap = max(1.1, min(2.4, tp2_mult / max(sl_mult, 1e-9)))
-        min_rr = trial.suggest_float("MIN_RR_RATIO", 1.1, rr_cap, step=0.1)
+        sl_mult = trial.suggest_float("ATR_SL_MULT", 0.75, 1.9, step=0.05)
+        tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.65, 1.8, step=0.05)
+        min_tp2 = round(max(sl_mult * 1.15, tp1_mult + 0.15), 2)
+        max_tp2 = max(min_tp2 + 0.25, 3.4)
+        tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.05)
+        rr_cap = max(1.05, min(2.6, tp2_mult / max(sl_mult, 1e-9)))
+        min_rr = trial.suggest_float("MIN_RR_RATIO", 1.05, rr_cap, step=0.05)
         tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
         tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
 
@@ -182,22 +210,22 @@ class PrometheusOptimizer:
             "WEIGHT_WHALE": w3,
             "WEIGHT_LIQUIDATION": w4,
             "WEIGHT_ENTRY": w5,
-            "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.13, 0.30, step=0.01),
+            "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.10, 0.32, step=0.01),
             "MIN_RR_RATIO": min_rr,
             "ATR_SL_MULT": sl_mult,
             "ATR_TP1_MULT": tp1_mult,
             "ATR_TP2_MULT": tp2_mult,
             "TP1_EXIT_PCT": tp1_exit,
             "TP2_EXIT_PCT": tp2_exit,
-            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 12, 48),
+            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 54),
             "EMA_FAST": ema_fast,
             "EMA_MID": ema_mid,
             "EMA_SLOW": ema_slow,
-            "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 4, 18),
-            "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.015, 0.04, step=0.005),
-            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 3, 7),
-            "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
-            "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.20, 0.45, step=0.05),
+            "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 3, 20),
+            "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005),
+            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 3, 12),
+            "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.12, 0.42, step=0.05),
+            "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.18, 0.48, step=0.05),
         }
 
     def _inject_params(self, params: dict):
@@ -206,72 +234,95 @@ class PrometheusOptimizer:
                 setattr(cfg, k, v)
 
     def _compute_score(self, results: dict) -> float:
-        wr = float(results.get("win_rate", 0))
-        pf = float(results.get("profit_factor", 0))
-        sh = float(results.get("sharpe_ratio", 0))
-        ret = float(results.get("total_return", 0))
-        dd = float(results.get("max_drawdown", 1))
-        n = int(results.get("total_trades", 0))
-        ter = float(results.get("time_exit_rate", 0))
+        wr = float(results.get("win_rate", 0) or 0)
+        pf = float(results.get("profit_factor", 0) or 0)
+        sh = float(results.get("sharpe_ratio", 0) or 0)
+        ret = float(results.get("total_return", 0) or 0)
+        dd = float(results.get("max_drawdown", 1) or 1)
+        n = int(results.get("total_trades", 0) or 0)
+        ter = float(results.get("time_exit_rate", 0) or 0)
+        tp1 = float(results.get("tp1_hit_rate", 0) or 0)
 
-        trade_penalty = min(1.15, max(0.45, n / 35))
-
-        if dd >= 0.50:
+        if dd >= 0.45:
             return -1.0
-        if ret <= -0.20:
+        if ret <= -0.15:
             return -0.5
 
-        time_penalty = max(0.30, 1.0 - ter * 1.8)
+        trade_penalty = min(1.20, max(0.40, n / 40))
+        time_penalty = max(0.35, 1.0 - ter * 1.6)
+        drawdown_quality = max(0.0, 1.0 - dd / 0.22)
         ruin_penalty = 1.0
-        if dd > 0.12:
-            ruin_penalty *= max(0.25, 1.0 - (dd - 0.12) * 3.5)
+        if dd > 0.10:
+            ruin_penalty *= max(0.20, 1.0 - (dd - 0.10) * 4.0)
         if n < 30:
             ruin_penalty *= max(0.35, n / 30)
 
         if self.metric == "target_150":
             initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
             target = float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150))
-            final = float(results.get("final_capital", initial))
+            final = float(results.get("final_capital", initial) or initial)
             progress = min(final / target, 1.5)
-            ret_progress = min(ret / 2.0, 1.0)
-            score = (progress * 0.40 + ret_progress * 0.25 + min(pf/3.0, 1.0) * 0.20
-                     + (1-dd) * 0.10 + wr * 0.05) * trade_penalty * time_penalty
+            ret_progress = max(0.0, min(ret / 2.0, 1.0))
+            score = (
+                progress * 0.35 +
+                ret_progress * 0.20 +
+                min(pf / 3.0, 1.0) * 0.18 +
+                drawdown_quality * 0.17 +
+                wr * 0.10
+            ) * trade_penalty * time_penalty * ruin_penalty
             if final >= target:
-                score += 0.30
+                score += 0.25
             return score
 
         if self.metric == "win_rate":
-            return wr * trade_penalty * time_penalty
+            return wr * trade_penalty * time_penalty * ruin_penalty
         if self.metric == "profit_factor":
-            return min(pf, 5.0) / 5.0 * trade_penalty * time_penalty
+            return min(pf, 5.0) / 5.0 * trade_penalty * time_penalty * ruin_penalty
         if self.metric == "sharpe":
-            return max(sh, -2.0) / 2.0 * trade_penalty * time_penalty
+            return max(min(sh, 4.0), -2.0) / 4.0 * trade_penalty * time_penalty * ruin_penalty
         if self.metric == "total_return":
-            return max(ret, -1.0) * trade_penalty * time_penalty
+            return max(min(ret, 2.0), -0.5) / 2.0 * trade_penalty * time_penalty * ruin_penalty
 
         wr_score = wr
         pf_score = min(pf, 4.0) / 4.0
         sh_score = max(min(sh, 3.0), -1.0) / 3.0
-        ret_score = max(min(ret, 1.5), -0.5) / 1.5
-        dd_score = max(0.0, 1.0 - dd / 0.25)
-        score = (wr_score * 0.25 + pf_score * 0.25 + ret_score * 0.30 + sh_score * 0.10 + dd_score * 0.10)
+        ret_score = max(min(ret, 1.8), -0.4) / 1.8
+        tp1_score = max(0.0, min(tp1, 1.0))
+
+        score = (
+            wr_score * 0.22 +
+            pf_score * 0.22 +
+            ret_score * 0.24 +
+            drawdown_quality * 0.16 +
+            sh_score * 0.10 +
+            tp1_score * 0.06
+        )
         return score * trade_penalty * time_penalty * ruin_penalty
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
-        if self.progress_callback:
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.ensure_future(self.progress_callback(
-                        trial_num=self._trial_num,
-                        total=self.n_trials,
-                        best_value=study.best_value if study.best_trial else 0,
-                        best_params=study.best_trial.params if study.best_trial else {},
-                        trial_results=self.trial_results[-1] if self.trial_results else {},
-                    ))
-            except RuntimeError:
-                pass
+        if not self.progress_callback:
+            return
+        payload = dict(
+            trial_num=self._trial_num,
+            total=self.n_trials,
+            best_value=study.best_value if study.best_trial else 0,
+            best_params=study.best_trial.params if study.best_trial else {},
+            trial_results=self.trial_results[-1] if self.trial_results else {},
+        )
+        try:
+            result = self.progress_callback(**payload)
+            if inspect.isawaitable(result):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(result)
+                except RuntimeError:
+                    try:
+                        asyncio.run(result)
+                    except RuntimeError:
+                        pass
+        except Exception as e:
+            logger.debug(f"[Optimizer] progress callback failed: {e}")
 
     def _build_result(self) -> dict:
         sorted_trials = sorted(self.trial_results, key=lambda x: x.get("score", -999), reverse=True)
