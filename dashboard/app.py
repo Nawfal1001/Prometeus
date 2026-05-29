@@ -19,10 +19,12 @@ from loguru import logger
 import config.settings as cfg
 from config.settings import save_user_settings, load_user_settings
 from optimization.optimizer import PrometheusOptimizer
+from optimization.walkforward_optimizer import WalkForwardOptimizer
 from dashboard.api_scanner import router as scanner_router
 from dashboard.api_backtest_multi import router as backtest_multi_router
 from dashboard.api_optimize_multi import router as optimize_multi_router
 from dashboard.api_lab import router as lab_router
+from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
 app = FastAPI(title="PROMETHEUS v4")
@@ -70,21 +72,9 @@ _opt_status = {
     "error": None,
     "params": {},
 }
-_model_status = {
-    "running": False,
-    "started_at": None,
-    "finished_at": None,
-    "result": None,
-    "error": None,
-    "params": {},
-}
+_model_status = {"running": False, "started_at": None, "finished_at": None, "result": None, "error": None, "params": {}}
 DEFAULT_CRYPTO_TRAIN_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "ADA/USDT"]
-_SECRET_KEYS = {
-    "BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET",
-    "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY",
-    "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY",
-    "POLYGON_KEY",
-}
+_SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET", "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY", "POLYGON_KEY"}
 
 
 def ui_log(message: str, level: str = "INFO"):
@@ -179,86 +169,108 @@ async def _run_training_job(params: dict):
         await broadcast({"type": "model_training", "status": "error", "error": str(e)})
 
 
-def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None):
-    return PrometheusOptimizer(
-        df=df,
-        metric=metric,
-        n_trials=trials,
-        timeout=timeout,
-        progress_callback=progress_callback,
-    ).run()
+def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None, data=None, mode="single"):
+    return PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout, progress_callback=progress_callback).run(data, mode=mode)
+
+
+def _run_walkforward_sync(df, train_bars, test_bars, step_bars, trials, metric, timeout):
+    return WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout).run()
 
 
 async def _run_optimization_job(params: dict):
     loop = asyncio.get_running_loop()
+    run_mode = str(params.get("run_mode", params.get("mode", "single"))).lower()
+    is_multi = run_mode in ("multi", "compare", "compete", "competition") or bool(params.get("symbols"))
+    trials = min(int(params.get("trials", cfg.OPTUNA_TRIALS)), 200)
     _opt_status.update({
-        "running": True,
-        "cancel_requested": False,
-        "started_at": datetime.utcnow().isoformat(),
-        "finished_at": None,
-        "error": None,
-        "result": None,
-        "params": params,
+        "running": True, "cancel_requested": False, "started_at": datetime.utcnow().isoformat(), "finished_at": None,
+        "error": None, "result": None, "params": params,
         "progress": {"phase": "fetching_data", "message": "Fetching market data..."},
-        "progress_pct": 0,
-        "current_step": 0,
-        "total_steps": int(params.get("trials", cfg.OPTUNA_TRIALS)),
+        "progress_pct": 0, "current_step": 0, "total_steps": trials,
     })
     try:
-        symbol = params.get("symbol", cfg.SYMBOL)
         timeframe = params.get("timeframe", cfg.TIMEFRAME)
         candles = int(params.get("candles", getattr(cfg, "OPTUNA_DATA_CANDLES", 1500)))
         metric = params.get("metric", cfg.OPTUNA_METRIC)
-        trials = min(int(params.get("trials", cfg.OPTUNA_TRIALS)), 200)
         timeout = min(int(params.get("timeout", cfg.OPTUNA_TIMEOUT_SEC)), 3600)
-        _opt_status["total_steps"] = trials
-        ui_log(f"Optimization starting | symbol={symbol} metric={metric} trials={trials}")
-        df = await _fetch_ohlcv(symbol, timeframe, candles)
-        if df is None or df.empty:
-            raise RuntimeError("No data returned from exchange")
+        wf_opt = bool(params.get("wf_opt", False))
+        train_bars = min(int(params.get("train_bars", 800)), candles)
+        test_bars = min(int(params.get("test_bars", 200)), candles)
+        step_bars = min(int(params.get("step_bars", 200)), candles)
+        max_symbols = int(getattr(cfg, "MAX_UI_SYMBOLS", 7))
 
         def progress_callback(**payload):
             trial_num = int(payload.get("trial_num") or 0)
             total = int(payload.get("total") or trials or 1)
             pct = round((trial_num / total) * 100, 2) if total else 0
-            progress = {
-                "phase": "running",
-                "trial_num": trial_num,
-                "total": total,
-                "best_value": payload.get("best_value", 0),
-                "best_params": payload.get("best_params", {}),
-                "trial_results": payload.get("trial_results", {}),
-                "progress_pct": pct,
-                "message": f"Trial {trial_num}/{total}",
-            }
-            _opt_status.update({
-                "progress": progress,
-                "progress_pct": pct,
-                "current_step": trial_num,
-                "total_steps": total,
-            })
+            progress = {"phase": "running", "trial_num": trial_num, "total": total, "best_value": payload.get("best_value", 0), "best_params": payload.get("best_params", {}), "trial_results": payload.get("trial_results", {}), "progress_pct": pct, "message": f"Trial {trial_num}/{total}"}
+            _opt_status.update({"progress": progress, "progress_pct": pct, "current_step": trial_num, "total_steps": total})
             ui_log(f"Optimizer trial {trial_num}/{total} | best={payload.get('best_value', 0)}")
             try:
                 loop.call_soon_threadsafe(asyncio.create_task, broadcast({"type": "optimization", "status": "progress", "progress": progress}))
             except Exception:
                 pass
 
-        _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
-        result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback))
+        if not is_multi:
+            symbol = params.get("symbol", cfg.SYMBOL)
+            ui_log(f"Optimization starting | mode=single symbol={symbol} metric={metric} trials={trials}")
+            df = await _fetch_ohlcv(symbol, timeframe, candles)
+            if df is None or df.empty:
+                raise RuntimeError("No data returned from exchange")
+            _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
+            result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback, mode="single"))
+        else:
+            symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
+            ui_log(f"Optimization starting | mode={run_mode} symbols={symbols} metric={metric} trials={trials}")
+            from core.exchange.factory import get_exchange
+            exchange = get_exchange()
+            data_by_symbol = {}
+            try:
+                for idx, symbol in enumerate(symbols, start=1):
+                    _opt_status.update({"progress": {"phase": "fetching_data", "message": f"Fetching {symbol} ({idx}/{len(symbols)})"}, "progress_pct": round((idx - 1) / max(len(symbols), 1) * 10, 2)})
+                    df = await get_cached_ohlcv(exchange, symbol, timeframe, candles)
+                    if df is not None and not df.empty:
+                        data_by_symbol[symbol] = df
+                    else:
+                        ui_log(f"No data returned for {symbol}", "warning")
+            finally:
+                closer = getattr(exchange, "close", None)
+                if closer:
+                    maybe = closer()
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+            if not data_by_symbol:
+                raise RuntimeError("No symbol data returned from exchange")
+            _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
+            if run_mode in ("compete", "competition"):
+                first_df = next(iter(data_by_symbol.values()))
+                result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(first_df, metric, trials, timeout, progress_callback, data=data_by_symbol, mode="compete"))
+                result.update({"mode": "competing_symbols_optimization", "optimizer_mode": "compete", "selection_logic": "scan_all_symbols_each_candle_pick_highest_candidate_score", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
+            else:
+                rows = []
+                for idx, (symbol, df) in enumerate(data_by_symbol.items(), start=1):
+                    if _opt_status.get("cancel_requested"):
+                        break
+                    ui_log(f"Optimizing symbol {idx}/{len(data_by_symbol)} | {symbol}")
+                    _opt_status.update({"progress": {"phase": "running", "trial_num": idx - 1, "total": len(data_by_symbol), "progress_pct": round((idx - 1) / max(len(data_by_symbol), 1) * 100, 2), "message": f"Optimizing {symbol}"}, "current_step": idx - 1, "total_steps": len(data_by_symbol)})
+                    if wf_opt:
+                        res = await loop.run_in_executor(executor, lambda d=df: _run_walkforward_sync(d, train_bars, test_bars, step_bars, trials, metric, timeout))
+                        res["rank_score"] = float(res.get("summary", {}).get("avg_profit_factor", 0)) * 100 + float(res.get("summary", {}).get("avg_win_rate", 0)) * 100
+                    else:
+                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, None, mode="single"))
+                        res["rank_score"] = float(res.get("best_value", -999))
+                    res["symbol"] = symbol
+                    rows.append(res)
+                ranked = sorted(rows, key=lambda r: float(r.get("rank_score", -999)), reverse=True)
+                result = {"mode": "multi_walkforward_optimization" if wf_opt else "multi_symbol_compare_optimization", "selection_logic": "optimize_each_symbol_separately_rank_best_symbol", "symbols": ranked, "best": ranked[0] if ranked else None}
+
         if _opt_status.get("cancel_requested"):
             _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "cancelled", "message": "Cancelled"}})
             return
-        _opt_status.update({
-            "running": False,
-            "finished_at": datetime.utcnow().isoformat(),
-            "progress": {"phase": "done", "trial_num": len(result.get("trial_results", [])), "total": trials, "progress_pct": 100, "message": "Done"},
-            "progress_pct": 100,
-            "current_step": len(result.get("trial_results", [])) or trials,
-            "total_steps": trials,
-            "result": result,
-        })
+        result.update({"timeframe": timeframe, "candles": candles, "trials": trials, "timeout": timeout})
+        _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "done", "trial_num": len(result.get("trial_results", [])) or trials, "total": trials, "progress_pct": 100, "message": "Done"}, "progress_pct": 100, "current_step": trials, "total_steps": trials, "result": result})
         _state["optimization"] = result
-        ui_log(f"Optimization finished | best={result.get('best_value')}")
+        ui_log(f"Optimization finished | mode={result.get('mode')} best={result.get('best_value') or result.get('best', {}).get('rank_score')}")
         await broadcast({"type": "optimization", "status": "done", "result": result})
     except Exception as e:
         logger.exception("Optimization failed")
@@ -391,8 +403,20 @@ async def run_optimization_single(request: Request):
     if _opt_status["running"]:
         return JSONResponse({"error": "Optimization already running", "status": _opt_status}, status_code=409)
     body = await request.json()
+    body["run_mode"] = body.get("run_mode") or "single"
     _opt_task = asyncio.create_task(_run_optimization_job(body))
     return {"status": "started", "message": "Optimization started. Poll /api/optimize/status."}
+
+
+@app.post("/api/optimize/multi/run")
+async def run_optimization_multi_background(request: Request):
+    global _opt_task
+    if _opt_status["running"]:
+        return JSONResponse({"error": "Optimization already running", "status": _opt_status}, status_code=409)
+    body = await request.json()
+    body["run_mode"] = body.get("run_mode", body.get("mode", "compare"))
+    _opt_task = asyncio.create_task(_run_optimization_job(body))
+    return {"status": "started", "message": "Multi optimization started. Poll /api/optimize/status."}
 
 
 @app.get("/api/optimize/status")
