@@ -25,7 +25,7 @@ class PrometheusEngine:
     def __init__(self, broadcast_fn=None):
         self.broadcast = broadcast_fn or (lambda x: None)
         self.exchange = get_exchange()
-        self.regime = RegimeDetector()
+        self._regimes = {}
         self.sentiment = SentimentEngine()
         self.whale = WhaleTracker()
         self.liquidation = LiquidationGravity()
@@ -48,6 +48,12 @@ class PrometheusEngine:
         self._4h_bias = 0
         self._consec_errors = 0
         self._backoff_seconds = 30
+
+    def regime_for(self, symbol: str):
+        key = symbol or cfg.SYMBOL
+        if key not in self._regimes:
+            self._regimes[key] = RegimeDetector()
+        return self._regimes[key]
 
     async def start(self):
         self.running = True
@@ -105,7 +111,7 @@ class PrometheusEngine:
         except Exception as e:
             logger.debug(f"[Engine] Orderbook fetch skipped for {symbol}: {e}")
 
-        regime_result = self.regime.detect(df, funding_rate=funding_rate)
+        regime_result = self.regime_for(symbol).detect(df, funding_rate=funding_rate)
         whale_result = {"layer_score": self.whale.get_layer_score()}
         sent_result = {"layer_score": self.sentiment.get_layer_score()}
         liq_result = self.liquidation.update(current_price, symbol)
