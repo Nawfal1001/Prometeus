@@ -19,6 +19,7 @@ from core.execution.order_manager import OrderManager
 from core.alerts.telegram_bot import TelegramBot
 from core.selection.candidate_selector import CandidateSelector
 from core.monitoring.decision_journal import journal
+from core.models.feature_engine import compute_features
 
 
 class PrometheusEngine:
@@ -84,6 +85,8 @@ class PrometheusEngine:
             return signal
         if not bool(getattr(cfg, "PAPER_FORCE_TRADE_ON_SIGNAL", True)):
             return signal
+        if signal.get("reason") in {"chaos_regime", "vol_spike", "dead_vol"}:
+            return signal
         min_force = float(getattr(cfg, "PAPER_FORCE_MIN_SCORE", 0.08))
         score = abs(float(signal.get("fusion_score", 0.0) or 0.0))
         if score < min_force:
@@ -96,7 +99,6 @@ class PrometheusEngine:
             "side": "long" if direction == 1 else "short",
             "reason": f"paper_forced_from_{signal.get('reason', 'weak_signal')}",
             "confidence": round(score * 100, 1),
-            "position_size": forced.get("position_size", 0.0) or 0.0,
         })
         journal.add("decision", f"paper force-trade enabled {item.get('symbol')} score={score:.3f}", symbol=item.get("symbol"), score=score, reason=forced["reason"])
         return forced
@@ -107,17 +109,27 @@ class PrometheusEngine:
         if df is None or df.empty:
             journal.autoscan(symbol, reason="empty_ohlcv")
             return None
+        try:
+            df_feat = compute_features(df.copy())
+            if df_feat is not None and not df_feat.empty and len(df_feat) > 50:
+                df = df_feat
+            else:
+                journal.add("features", f"feature computation returned too few rows for {symbol}", symbol=symbol, rows=0 if df_feat is None else len(df_feat))
+        except Exception as e:
+            logger.warning(f"[Engine] Feature computation failed for {symbol}: {e}")
+            journal.add("features", f"feature computation failed for {symbol}: {e}", symbol=symbol)
         current_price = float(df["close"].iloc[-1])
         lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
         recent = df.tail(max(lookback, 2))
         recent_high = float(recent["high"].max())
         recent_low = float(recent["low"].min())
-        atr_norm = 0.002
-        vol_zscore = 0.0
+        atr_norm = float(df.get("atr_norm", 0.002).iloc[-1]) if hasattr(df.get("atr_norm", 0.002), "iloc") else 0.002
+        vol_zscore = float(df.get("vol_zscore", 0.0).iloc[-1]) if hasattr(df.get("vol_zscore", 0.0), "iloc") else 0.0
         try:
-            atr_norm = max(0.002, min(float(df["high"].sub(df["low"]).rolling(14).mean().iloc[-1] / current_price), 0.05))
-            ret_abs = df["close"].pct_change().abs()
-            vol_zscore = float(((ret_abs.iloc[-1] - ret_abs.rolling(48).mean().iloc[-1]) / (ret_abs.rolling(48).std().iloc[-1] + 1e-9)))
+            atr_norm = max(0.002, min(float(atr_norm), 0.05))
+            if vol_zscore == 0.0:
+                ret_abs = df["close"].pct_change().abs()
+                vol_zscore = float(((ret_abs.iloc[-1] - ret_abs.rolling(48).mean().iloc[-1]) / (ret_abs.rolling(48).std().iloc[-1] + 1e-9)))
         except Exception as e:
             logger.debug(f"[Engine] ATR/vol estimate skipped for {symbol}: {e}")
 
@@ -190,7 +202,7 @@ class PrometheusEngine:
                 if not item:
                     continue
                 sig = item["signal"]
-                base_score = abs(float(sig.get("fusion_score", 0.0)))
+                base_score = abs(float(sig.get("fusion_score", 0.0) or 0.0))
                 journal.autoscan(symbol, score=base_score, trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=None, fusion_score=sig.get("fusion_score"), confidence=sig.get("confidence"), risk_amount=sig.get("risk_amount"), notional=sig.get("notional"))
                 candidates.append({**item, "score": base_score})
             except Exception as e:
