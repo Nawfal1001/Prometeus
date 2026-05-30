@@ -111,7 +111,14 @@ class AdvancedExitManager:
             return events
 
         if not trade.get("tp1_hit"):
-            hit_tp1 = (direction == 1 and high >= float(trade["tp1"])) or (direction == -1 and low <= float(trade["tp1"]))
+            sl_now = float(trade.get("trailing_sl", trade.get("stop_loss")))
+            hit_tp1_pre = (direction == 1 and high >= float(trade["tp1"])) or (direction == -1 and low <= float(trade["tp1"]))
+            hit_sl_pre = (direction == 1 and low <= sl_now) or (direction == -1 and high >= sl_now)
+            if hit_tp1_pre and hit_sl_pre and bool(getattr(cfg, "PAPER_CONSERVATIVE_SAME_BAR", True)):
+                events.append({"type": "TRAIL", "price": sl_now, "portion": remaining})
+                trade["remaining_pct"] = 0.0
+                return events
+            hit_tp1 = hit_tp1_pre
             if hit_tp1:
                 portion = min(self.tp1_exit_pct, remaining)
                 events.append({"type": "TP1", "price": float(trade["tp1"]), "portion": portion})
