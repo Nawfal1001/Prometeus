@@ -18,12 +18,19 @@ class FusionEngine:
             "entry":       cfg.WEIGHT_ENTRY,
         }
         self.last_result = {}
+        self._entry_signal = None
         _wsum = sum(self.weights.values())
         if abs(_wsum - 1.0) > 0.05:
             logger.warning(
                 f"[Fusion] Weight sum={_wsum:.3f} (expected ~1.0) — "
                 f"normalization will be applied. Check Settings > Layer Weights."
             )
+
+    def _get_entry_signal(self):
+        if self._entry_signal is None:
+            from core.layers.entry_signal import EntrySignal
+            self._entry_signal = EntrySignal()
+        return self._entry_signal
 
     def generate_signal(self, df) -> dict:
         if df is None or len(df) == 0:
@@ -67,7 +74,15 @@ class FusionEngine:
         momentum_score = np.clip(0.24 * rsi_norm + 0.14 * stoch_cross + 0.18 * macd_signal + 0.12 * macd_accel + 0.12 * cci_norm + 0.10 * np.clip(ret_1 * 100, -1, 1) + 0.06 * np.clip(ret_3 * 50, -1, 1) + 0.04 * np.clip(ret_6 * 30, -1, 1), -1, 1)
         trend_score = np.clip(0.40 * ema_stack + 0.25 * adx_direction * max(adx_strength, 0) + 0.15 * market_structure + 0.12 * gap_signal + 0.08 * candle_pattern, -1, 1)
         volume_score = np.clip(0.45 * np.tanh(vol_delta / 3) + 0.35 * np.tanh(obv_norm / 2) + 0.20 * np.clip(vol_ratio - 1.0, -1, 1), -1, 1)
-        entry_score = float(np.clip(0.50 * momentum_score + 0.35 * trend_score + 0.15 * volume_score, -1, 1))
+        inline_entry_score = float(np.clip(0.50 * momentum_score + 0.35 * trend_score + 0.15 * volume_score, -1, 1))
+        try:
+            entry_score = float(np.clip(self._get_entry_signal().evaluate(clean), -1, 1))
+            entry_source = "EntrySignal"
+        except Exception as e:
+            logger.warning(f"[Fusion] EntrySignal delegation failed, using inline score: {e}")
+            entry_score = inline_entry_score
+            entry_source = "inline_fallback"
+
         regime_score = float(np.clip(0.70 * trend_score + 0.30 * np.sign(entry_score) * max(adx_strength, 0), -1, 1))
         sentiment_score = float(np.clip(0.55 * momentum_score + 0.45 * gap_signal, -1, 1))
         whale_score = float(np.clip(volume_score, -1, 1))
@@ -102,6 +117,9 @@ class FusionEngine:
         result["score"] = result.get("fusion_score", 0.0)
         result["atr_norm"] = atr_norm
         result["vol_zscore"] = vol_zscore
+        result["entry_source"] = entry_source
+        result["inline_entry_score"] = round(inline_entry_score, 4)
+        result["ml_entry_score"] = round(entry_score, 4)
         result["recent_high"] = float(clean["high"].tail(int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))).max()) if "high" in clean.columns else current_price
         result["recent_low"] = float(clean["low"].tail(int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))).min()) if "low" in clean.columns else current_price
         self.last_result = result
@@ -113,10 +131,11 @@ class FusionEngine:
             return self._no_trade("chaos_regime")
         scores = {"regime": regime_score, "sentiment": sentiment_score, "whale": whale_score, "liquidation": liquidation_score, "entry": entry_score}
         w_total = max(sum(self.weights.values()), 1e-9)
-        fusion_score = sum(scores[k] * self.weights[k] for k in scores) / w_total
-        fusion_score = float(np.clip(fusion_score, -1.0, 1.0))
-        direction = 1 if fusion_score > 0 else -1
-        abs_score = abs(fusion_score) * session_mult
+        raw_fusion_score = sum(scores[k] * self.weights[k] for k in scores) / w_total
+        raw_fusion_score = float(np.clip(raw_fusion_score, -1.0, 1.0))
+        session_adjusted_score = float(np.clip(raw_fusion_score * session_mult, -1.0, 1.0))
+        direction = 1 if session_adjusted_score > 0 else -1
+        abs_score = abs(session_adjusted_score)
 
         htf_block_threshold = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
         if htf_bias == 1 and direction == -1 and abs(entry_score) < htf_block_threshold:
@@ -136,7 +155,9 @@ class FusionEngine:
 
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
         if abs_score < effective_threshold:
-            return self._no_trade("below_threshold")
+            result = self._no_trade("below_threshold")
+            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4)})
+            return result
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
@@ -144,7 +165,9 @@ class FusionEngine:
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
         rr_ratio = tp2_mult / max(sl_mult, 1e-9)
         if rr_ratio < min_rr:
-            return self._no_trade("rr_too_low")
+            result = self._no_trade("rr_too_low")
+            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "rr_ratio": round(rr_ratio, 2)})
+            return result
 
         position_size = self._kelly_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
         stop_loss = take_profit = None
@@ -156,7 +179,8 @@ class FusionEngine:
             "trade": True,
             "direction": direction,
             "side": "long" if direction == 1 else "short",
-            "fusion_score": round(fusion_score, 4),
+            "raw_fusion_score": round(raw_fusion_score, 4),
+            "fusion_score": round(session_adjusted_score, 4),
             "confidence": round(abs_score * 100, 1),
             "position_size": round(position_size, 2),
             "stop_loss": round(stop_loss, 2) if stop_loss else None,
@@ -165,6 +189,7 @@ class FusionEngine:
             "layer_scores": {k: round(v, 4) for k, v in scores.items()},
             "htf_bias": htf_bias,
             "session_mult": round(session_mult, 2),
+            "effective_threshold": round(effective_threshold, 4),
             "reason": "all_layers_confirmed",
         }
         self.last_result = result
