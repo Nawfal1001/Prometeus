@@ -90,8 +90,8 @@ class EntrySignal:
             if self._xgb is not None and self._xgb.model is not None:
                 ml = self._xgb.get_entry_score(row.to_frame().T.reset_index(drop=True))
                 add(ml, 1.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[Entry] XGBoost scoring skipped: {e}")
 
         if W <= 0:
             return 0.0
