@@ -57,7 +57,7 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["vol_regime"] = np.clip(df["atr_norm"] / df["atr_norm"].rolling(100).mean(), 0.5, 1.8)
 
     typical = (df["high"] + df["low"] + df["close"]) / 3
-    df["vwap"] = (typical * df["volume"]).cumsum() / df["volume"].cumsum().replace(0, np.nan)
+    df["vwap"] = _safe_vwap(df, typical)
     df["dist_vwap"] = (df["close"] - df["vwap"]) / df["vwap"].replace(0, np.nan)
 
     df["vol_ma"] = df["volume"].rolling(20).mean()
@@ -110,6 +110,36 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.ffill().bfill().fillna(0)
 
 
+def _safe_vwap(df: pd.DataFrame, typical: pd.Series) -> pd.Series:
+    volume = df["volume"].replace(0, np.nan)
+    pv = typical * volume
+
+    time_index = None
+    if isinstance(df.index, pd.DatetimeIndex):
+        time_index = df.index
+    elif "date" in df.columns:
+        time_index = pd.to_datetime(df["date"], errors="coerce")
+    elif "timestamp" in df.columns:
+        raw_ts = df["timestamp"]
+        unit = "ms" if pd.to_numeric(raw_ts, errors="coerce").dropna().median() > 10**11 else "s"
+        time_index = pd.to_datetime(raw_ts, unit=unit, errors="coerce")
+
+    if time_index is not None and not pd.isna(time_index).all():
+        session = pd.Series(time_index, index=df.index).dt.floor("D")
+        num = pv.groupby(session).cumsum()
+        den = volume.groupby(session).cumsum().replace(0, np.nan)
+        vwap = num / den
+    else:
+        window = int(getattr(cfg, "VWAP_ROLLING_WINDOW", 96))
+        num = pv.rolling(window, min_periods=20).sum()
+        den = volume.rolling(window, min_periods=20).sum().replace(0, np.nan)
+        vwap = num / den
+
+    fallback_window = int(getattr(cfg, "VWAP_FALLBACK_WINDOW", 20))
+    fallback = typical.rolling(fallback_window, min_periods=1).mean()
+    return vwap.fillna(fallback)
+
+
 def _rsi_divergence(df: pd.DataFrame, lookback: int = 14) -> pd.Series:
     out = pd.Series(0.0, index=df.index)
     if "rsi" not in df.columns or len(df) < lookback + 3:
@@ -157,7 +187,7 @@ def label_data(df, min_rr: float = 1.5):
         df["atr"] = df["close"] * float(getattr(cfg, "MIN_ATR_NORM", 0.003))
     atr = df["atr"].fillna(df["close"] * 0.003)
     sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
-    tp_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.2))
+    tp_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
     lookahead = int(getattr(cfg, "XGB_LABEL_LOOKAHEAD", 10))
     labels = []
     for i in range(len(df)):
