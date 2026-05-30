@@ -39,6 +39,7 @@ app.include_router(lab_router)
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()
 _opt_task = None
+_main_loop = None
 
 _state = {
     "status": "stopped",
@@ -78,10 +79,26 @@ DEFAULT_CRYPTO_TRAIN_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", 
 _SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET", "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY", "POLYGON_KEY"}
 
 
+def _broadcast_from_any_thread(data: dict):
+    global _main_loop
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(broadcast(data))
+        return
+    except RuntimeError:
+        pass
+    try:
+        if _main_loop and _main_loop.is_running():
+            _main_loop.call_soon_threadsafe(asyncio.create_task, broadcast(data))
+    except Exception:
+        pass
+
+
 def ui_log(message: str, level: str = "INFO"):
     item = {"time": datetime.utcnow().strftime("%H:%M:%S"), "level": level.upper(), "message": message}
     _ui_logs.append(item)
     getattr(logger, level.lower(), logger.info)(f"[UI] {message}")
+    _broadcast_from_any_thread({"type": "log", "log": item})
 
 
 async def broadcast(data: dict):
@@ -263,7 +280,9 @@ def _run_walkforward_sync(df, train_bars, test_bars, step_bars, trials, metric, 
 
 
 async def _run_optimization_job(params: dict):
+    global _main_loop
     loop = asyncio.get_running_loop()
+    _main_loop = loop
     run_mode = str(params.get("run_mode", params.get("mode", "single"))).lower()
     is_multi = run_mode in ("multi", "compare", "compete", "competition") or bool(params.get("symbols"))
     trials = min(int(params.get("trials", cfg.OPTUNA_TRIALS)), 200)
@@ -273,6 +292,7 @@ async def _run_optimization_job(params: dict):
         "progress": {"phase": "fetching_data", "message": "Fetching market data..."},
         "progress_pct": 0, "current_step": 0, "total_steps": trials,
     })
+    await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
     try:
         timeframe = params.get("timeframe", cfg.TIMEFRAME)
         candles = int(params.get("candles", getattr(cfg, "OPTUNA_DATA_CANDLES", 1500)))
@@ -291,10 +311,7 @@ async def _run_optimization_job(params: dict):
             progress = {"phase": "running", "trial_num": trial_num, "total": total, "best_value": payload.get("best_value", 0), "best_params": payload.get("best_params", {}), "trial_results": payload.get("trial_results", {}), "progress_pct": pct, "message": f"Trial {trial_num}/{total}"}
             _opt_status.update({"progress": progress, "progress_pct": pct, "current_step": trial_num, "total_steps": total})
             ui_log(f"Optimizer trial {trial_num}/{total} | best={payload.get('best_value', 0)}")
-            try:
-                loop.call_soon_threadsafe(asyncio.create_task, broadcast({"type": "optimization", "status": "progress", "progress": progress}))
-            except Exception:
-                pass
+            _broadcast_from_any_thread({"type": "optimization", "status": "progress", "progress": progress})
 
         if not is_multi:
             symbol = params.get("symbol", cfg.SYMBOL)
@@ -303,6 +320,7 @@ async def _run_optimization_job(params: dict):
             if df is None or df.empty:
                 raise RuntimeError("No data returned from exchange")
             _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
+            await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
             result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback, mode="single"))
         else:
             symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
@@ -312,7 +330,9 @@ async def _run_optimization_job(params: dict):
             data_by_symbol = {}
             try:
                 for idx, symbol in enumerate(symbols, start=1):
-                    _opt_status.update({"progress": {"phase": "fetching_data", "message": f"Fetching {symbol} ({idx}/{len(symbols)})"}, "progress_pct": round((idx - 1) / max(len(symbols), 1) * 10, 2)})
+                    progress = {"phase": "fetching_data", "message": f"Fetching {symbol} ({idx}/{len(symbols)})", "progress_pct": round((idx - 1) / max(len(symbols), 1) * 10, 2)}
+                    _opt_status.update({"progress": progress, "progress_pct": progress["progress_pct"]})
+                    await broadcast({"type": "optimization", "status": "progress", "progress": progress})
                     df = await get_cached_ohlcv(exchange, symbol, timeframe, candles)
                     if df is not None and not df.empty:
                         data_by_symbol[symbol] = df
@@ -327,17 +347,20 @@ async def _run_optimization_job(params: dict):
             if not data_by_symbol:
                 raise RuntimeError("No symbol data returned from exchange")
             _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
+            await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
             if run_mode in ("compete", "competition"):
                 first_df = next(iter(data_by_symbol.values()))
                 result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(first_df, metric, trials, timeout, progress_callback, data=data_by_symbol, mode="compete"))
-                result.update({"mode": "competing_symbols_optimization", "optimizer_mode": "compete", "selection_logic": "scan_all_symbols_each_candle_pick_highest_candidate_score", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
+                result.update({"mode": "competing_symbols_optimization", "optimizer_mode": "compete", "selection_logic": "aligned_paper_rotator_selector", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
             else:
                 rows = []
                 for idx, (symbol, df) in enumerate(data_by_symbol.items(), start=1):
                     if _opt_status.get("cancel_requested"):
                         break
                     ui_log(f"Optimizing symbol {idx}/{len(data_by_symbol)} | {symbol}")
-                    _opt_status.update({"progress": {"phase": "running", "trial_num": idx - 1, "total": len(data_by_symbol), "progress_pct": round((idx - 1) / max(len(data_by_symbol), 1) * 100, 2), "message": f"Optimizing {symbol}"}, "current_step": idx - 1, "total_steps": len(data_by_symbol)})
+                    progress = {"phase": "running", "trial_num": idx - 1, "total": len(data_by_symbol), "progress_pct": round((idx - 1) / max(len(data_by_symbol), 1) * 100, 2), "message": f"Optimizing {symbol}"}
+                    _opt_status.update({"progress": progress, "current_step": idx - 1, "total_steps": len(data_by_symbol)})
+                    await broadcast({"type": "optimization", "status": "progress", "progress": progress})
                     if wf_opt:
                         res = await loop.run_in_executor(executor, lambda d=df: _run_walkforward_sync(d, train_bars, test_bars, step_bars, trials, metric, timeout))
                         res["rank_score"] = float(res.get("summary", {}).get("avg_profit_factor", 0)) * 100 + float(res.get("summary", {}).get("avg_win_rate", 0)) * 100
@@ -351,6 +374,7 @@ async def _run_optimization_job(params: dict):
 
         if _opt_status.get("cancel_requested"):
             _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "cancelled", "message": "Cancelled"}})
+            await broadcast({"type": "optimization", "status": "cancelled", "progress": _opt_status["progress"]})
             return
         result.update({"timeframe": timeframe, "candles": candles, "trials": trials, "timeout": timeout})
         _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "done", "trial_num": len(result.get("trial_results", [])) or trials, "total": trials, "progress_pct": 100, "message": "Done"}, "progress_pct": 100, "current_step": trials, "total_steps": trials, "result": result})
@@ -360,6 +384,7 @@ async def _run_optimization_job(params: dict):
     except Exception as e:
         logger.exception("Optimization failed")
         _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "error", "message": str(e)}, "error": str(e)})
+        ui_log(f"Optimization failed | {e}", "error")
         await broadcast({"type": "optimization", "status": "error", "error": str(e)})
 
 
@@ -426,6 +451,7 @@ async def get_logs():
 @app.post("/api/logs/clear")
 async def clear_logs():
     _ui_logs.clear()
+    await broadcast({"type": "logs_cleared"})
     return {"status": "cleared"}
 
 
@@ -533,6 +559,7 @@ def api_optimize_cancel():
     if _opt_task is not None and not _opt_task.done():
         _opt_task.cancel()
     _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "cancelled", "message": "Cancelled"}})
+    _broadcast_from_any_thread({"type": "optimization", "status": "cancelled", "progress": _opt_status["progress"]})
     return {"ok": True, "status": _opt_status}
 
 
@@ -543,6 +570,7 @@ async def apply_optimization_params(request: Request):
         return JSONResponse({"error": "No params provided"}, status_code=400)
     save_user_settings(params)
     reload_runtime_settings()
+    ui_log(f"Applied optimized params | count={len(params)}")
     return {"status": "applied", "count": len(params), "params": params, "keys": list(params.keys())}
 
 
