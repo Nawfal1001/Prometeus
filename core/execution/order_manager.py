@@ -91,6 +91,12 @@ class OrderManager:
             return {"status": "skipped", "reason": signal.get("reason")}
         if self.paper and self.open_trades:
             return {"status": "blocked", "reason": "one_active_trade_limit"}
+        if not self.paper and any(not t.get("is_live") for t in self.open_trades.values()):
+            return {"status": "blocked", "reason": "paper_trade_open_during_live"}
+        if not self.paper:
+            live_open = [t for t in self.open_trades.values() if t.get("is_live") and t.get("symbol") == (signal.get("symbol") or cfg.SYMBOL)]
+            if live_open:
+                return {"status": "blocked", "reason": "live_position_already_open"}
 
         paper_forced = self._is_paper_forced(signal)
         atr_norm = float(signal.get("atr_norm", signal.get("atr", 0.002)) or 0.002)
@@ -116,7 +122,7 @@ class OrderManager:
 
         if self.paper:
             return await self._paper_execute(signal, current_price, bar_time=bar_time)
-        return await self._live_execute(signal, current_price)
+        return await self._live_execute(signal, current_price, bar_time=bar_time)
 
     def _build_exit_levels(self, signal: dict, price: float, direction: int):
         atr_norm = float(signal.get("atr_norm", signal.get("atr", 0.002)) or 0.002)
@@ -182,24 +188,84 @@ class OrderManager:
         logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {entry_price:.4f} (close={price:.4f}, slip={slippage*100:.3f}%) | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.4f} TP2={levels.tp2:.4f} SL={levels.stop_loss:.4f}")
         return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": entry_price, "notional": notional, "qty": qty, "risk_amount": risk_amount, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
 
-    async def _live_execute(self, signal: dict, price: float) -> dict:
+    async def _live_execute(self, signal: dict, price: float, bar_time=None) -> dict:
         if not self.exchange:
             logger.error("[Orders] No exchange for live trading")
             return {"status": "error", "reason": "no_exchange"}
         direction = 1 if signal["side"] == "long" else -1
         notional, qty, risk_amount, base_margin = self._sizing_from_signal(signal, price)
+        symbol = signal.get("symbol") or cfg.SYMBOL
         levels = self._build_exit_levels(signal, price, direction)
+
         result = await self.exchange.place_order(
-            symbol=signal.get("symbol") or cfg.SYMBOL,
+            symbol=symbol,
             side="buy" if direction == 1 else "sell",
             order_type="market",
             size=qty,
             stop_loss=levels.stop_loss,
-            take_profit=levels.tp2,
             leverage=cfg.LEVERAGE,
         )
-        logger.info(f"[Live] Order placed | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} margin=${base_margin:.2f} | result={result}")
-        return {**(result or {}), "notional": notional, "qty": qty, "risk_amount": risk_amount, "base_margin": base_margin, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
+        if not result or result.get("status") in ("error", "skipped_spot_short", None):
+            logger.error(f"[Live] Order failed | result={result}")
+            return {"status": "error", "reason": (result or {}).get("status", "exchange_rejected"), "exchange_result": result}
+
+        filled_price = float(result.get("filled_price") or price)
+        if filled_price <= 0:
+            filled_price = price
+
+        self._trade_counter += 1
+        trade_id = f"LIVE-{self._trade_counter:04d}"
+        levels = self._build_exit_levels(signal, filled_price, direction)
+        trade = {
+            "id": trade_id,
+            "symbol": symbol,
+            "side": signal["side"],
+            "direction": direction,
+            "entry_price": filled_price,
+            "entry_close_price": price,
+            "entry_bar_time": str(bar_time) if bar_time is not None else None,
+            "last_seen_bar_time": str(bar_time) if bar_time is not None else None,
+            "current_price": filled_price,
+            "entry_score": float(abs(signal.get("fusion_score", 0.0) or 0.0)),
+            "best_unrealized_pnl": 0.0,
+            "stale_bars": 0,
+            "size": notional,
+            "size_remaining": notional,
+            "notional": notional,
+            "notional_remaining": notional,
+            "qty": qty,
+            "qty_remaining": qty,
+            "base_margin": base_margin,
+            "risk_amount": risk_amount,
+            "remaining_pct": 1.0,
+            "stop_loss": levels.stop_loss,
+            "take_profit": levels.tp2,
+            "tp1": levels.tp1,
+            "tp2": levels.tp2,
+            "tp1_hit": False,
+            "tp2_hit": False,
+            "trailing_sl": levels.stop_loss,
+            "peak_price": filled_price,
+            "trough_price": filled_price,
+            "atr_abs": levels.atr_abs,
+            "status": "open",
+            "open_time": time.time(),
+            "entry_bar": 0,
+            "bars_open": 0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "unrealized_pnl_pct": 0.0,
+            "distance_to_tp_pct": None,
+            "distance_to_sl_pct": None,
+            "signal": signal,
+            "is_live": True,
+            "exchange_entry_order_id": result.get("order_id"),
+            "fees_paid": 0.0,
+        }
+        self.open_trades[trade_id] = trade
+        self._save_trades()
+        logger.info(f"[Live] Opened {symbol} {signal['side'].upper()} @ {filled_price:.4f} (req={price:.4f}) | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.4f} TP2={levels.tp2:.4f} SL={levels.stop_loss:.4f} | order_id={result.get('order_id')}")
+        return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": filled_price, "notional": notional, "qty": qty, "risk_amount": risk_amount, "base_margin": base_margin, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2, "exchange_order_id": result.get("order_id")}
 
     def _update_unrealized_pnl(self, trade: dict, current_price: float):
         entry = float(trade["entry_price"])
@@ -231,14 +297,32 @@ class OrderManager:
         except Exception as e:
             logger.debug(f"[Paper] memory update skipped: {e}")
 
-    def _realize_paper_exit(self, trade_id: str, trade: dict, event: dict):
+    async def _submit_live_exit(self, trade: dict, portion_qty: float) -> dict:
+        if not self.exchange:
+            return {"status": "error", "reason": "no_exchange"}
+        direction = int(trade["direction"])
+        close_side = "sell" if direction == 1 else "buy"
+        symbol = trade.get("symbol") or cfg.SYMBOL
+        try:
+            return await self.exchange.place_order(symbol=symbol, side=close_side, order_type="market", size=portion_qty, leverage=cfg.LEVERAGE)
+        except Exception as e:
+            logger.error(f"[Live] Exit order failed | {trade.get('id')} | {e}")
+            return {"status": "error", "reason": str(e)}
+
+    def _realize_exit(self, trade_id: str, trade: dict, event: dict, live_fill: dict = None):
         direction = int(trade["direction"])
         entry = float(trade["entry_price"])
         portion = float(event["portion"])
         raw_exit_price = float(event["price"])
-        slippage = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+        is_live = bool(trade.get("is_live"))
+        if is_live and live_fill and float(live_fill.get("filled_price") or 0) > 0:
+            exit_price = float(live_fill["filled_price"])
+            slippage_used = 0.0
+        else:
+            slippage = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+            exit_price = raw_exit_price * (1 - direction * slippage)
+            slippage_used = slippage
         taker_fee = float(getattr(cfg, "PAPER_TAKER_FEE", 0.0005))
-        exit_price = raw_exit_price * (1 - direction * slippage)
         notional = float(trade.get("notional", trade.get("size", 0.0))) * portion
         qty = float(trade.get("qty", 0.0)) * portion
         pct_move = (exit_price - entry) / entry * direction
@@ -251,17 +335,22 @@ class OrderManager:
         trade["remaining_pct"] = max(0.0, float(trade.get("remaining_pct", 1.0)) - portion)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
         trade["fees_paid"] = round(float(trade.get("fees_paid", 0.0)) + fees, 6)
-        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion, "notional": notional, "qty": qty, "gross_pnl": round(gross_pnl, 4), "fees": round(fees, 6)})
+        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion, "notional": notional, "qty": qty, "gross_pnl": round(gross_pnl, 4), "fees": round(fees, 6), "is_live": is_live})
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
-        logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | gross={gross_pnl:+.4f} fees={fees:.4f} net={pnl:+.4f}")
+        tag = "Live" if is_live else "Paper"
+        logger.info(f"[{tag}] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | gross={gross_pnl:+.4f} fees={fees:.4f} net={pnl:+.4f}")
 
     async def force_close_trade(self, trade_id: str, price: float, reason: str = "FORCED"):
         trade = self.open_trades.get(trade_id)
         if not trade or trade.get("status") != "open":
             return {"status": "skipped", "reason": "trade_not_open"}
         event = {"type": reason, "price": price, "portion": float(trade.get("remaining_pct", 1.0) or 1.0)}
-        self._realize_paper_exit(trade_id, trade, event)
+        live_fill = None
+        if trade.get("is_live"):
+            portion_qty = float(trade.get("qty_remaining", trade.get("qty", 0.0)))
+            live_fill = await self._submit_live_exit(trade, portion_qty)
+        self._realize_exit(trade_id, trade, event, live_fill=live_fill)
         trade["status"] = "closed"
         trade["exit_price"] = price
         trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
@@ -295,8 +384,14 @@ class OrderManager:
             trade["bars_open"] = int(trade.get("bars_open", 0)) + 1
             self._update_unrealized_pnl(trade, current_price)
             events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)))
+            is_live = bool(trade.get("is_live"))
             for event in events:
-                self._realize_paper_exit(trade_id, trade, event)
+                live_fill = None
+                if is_live:
+                    portion_qty = float(trade.get("qty", 0.0)) * float(event.get("portion", 0.0))
+                    if portion_qty > 0:
+                        live_fill = await self._submit_live_exit(trade, portion_qty)
+                self._realize_exit(trade_id, trade, event, live_fill=live_fill)
             if float(trade.get("remaining_pct", 1.0)) <= 1e-9 or float(trade.get("notional_remaining", trade.get("size_remaining", 0.0))) <= 1e-9:
                 trade["status"] = "closed"
                 trade["exit_price"] = current_price
@@ -304,7 +399,8 @@ class OrderManager:
                 trade["unrealized_pnl"] = trade["pnl"]
                 trade["exit_type"] = events[-1]["type"] if events else "CLOSED"
                 self._update_memory_on_close(trade)
-                logger.info(f"[Paper] Closed | {trade_id} | total_pnl={trade['pnl']:+.4f}")
+                tag = "Live" if is_live else "Paper"
+                logger.info(f"[{tag}] Closed | {trade_id} | total_pnl={trade['pnl']:+.4f}")
                 del self.open_trades[trade_id]
             changed = True
         if changed:
