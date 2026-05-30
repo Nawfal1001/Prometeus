@@ -11,6 +11,7 @@ from loguru import logger
 import config.settings as cfg
 from config.settings import save_user_settings
 from backtest.engine import BacktestEngine
+from backtest.aligned_engine import AlignedMultiSymbolBacktestEngine
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -18,40 +19,20 @@ RESULTS_PATH = Path(__file__).parent.parent / "data" / "quality_signal_optuna_re
 RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 QUALITY_KEYS = [
-    "FUSION_THRESHOLD",
-    "ROTATOR_MIN_SCORE",
-    "MIN_RR_RATIO",
-    "MIN_ADX",
-    "MIN_ATR_NORM",
-    "MAX_VOL_ZSCORE",
-    "REGIME_BLOCK_THRESHOLD",
-    "HTF_BLOCK_THRESHOLD",
-    "MIN_SESSION_MULT",
-    "ATR_SL_MULT",
-    "ATR_TP1_MULT",
-    "ATR_TP2_MULT",
-    "TP1_EXIT_PCT",
-    "TP2_EXIT_PCT",
-    "MAX_TRADE_DURATION_BARS",
-    "BREAKEVEN_BUFFER_PCT",
-    "EARLY_EXIT_ENABLED",
-    "EARLY_EXIT_MIN_BARS",
-    "EARLY_EXIT_MAX_NEGATIVE_PNL_PCT",
-    "EARLY_EXIT_STALE_BARS",
-    "EARLY_EXIT_REPLACEMENT_ADVANTAGE",
-    "EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT",
-    "MEMORY_ENABLED",
-    "MEMORY_WEIGHT",
-    "MEMORY_MIN_TRADES",
+    "FUSION_THRESHOLD", "ROTATOR_MIN_SCORE", "MIN_RR_RATIO", "MIN_ADX", "MIN_ATR_NORM", "MAX_VOL_ZSCORE",
+    "REGIME_BLOCK_THRESHOLD", "HTF_BLOCK_THRESHOLD", "MIN_SESSION_MULT",
+    "ATR_SL_MULT", "ATR_TP1_MULT", "ATR_TP2_MULT", "TP1_EXIT_PCT", "TP2_EXIT_PCT",
+    "MAX_TRADE_DURATION_BARS", "BREAKEVEN_BUFFER_PCT",
+    "EARLY_EXIT_ENABLED", "EARLY_EXIT_MIN_BARS", "EARLY_EXIT_MAX_NEGATIVE_PNL_PCT",
+    "EARLY_EXIT_STALE_BARS", "EARLY_EXIT_REPLACEMENT_ADVANTAGE", "EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT",
+    "MEMORY_ENABLED", "MEMORY_WEIGHT", "MEMORY_MIN_TRADES",
 ]
 
 
 class QualitySignalOptimizer:
     """Optuna optimizer focused on cleaner signal quality, not pure return.
 
-    This optimizer intentionally avoids changing symbols, exchange, trading mode,
-    API keys, leverage, and live/paper controls. It tunes filters, exits, and
-    signal strictness.
+    Supports single-symbol and multi-symbol/rotator-style data.
     """
 
     def __init__(self, df=None, n_trials=None, timeout=None, progress_callback=None):
@@ -64,17 +45,42 @@ class QualitySignalOptimizer:
         self.best_value = -999.0
         self.trial_results = []
         self._prepared_df = None
+        self._multi_raw_data = None
+        self._multi_prepared_data = None
+        self._mode = "single"
         self._trial_num = 0
 
-    def run(self) -> dict:
+    def run(self, data=None, mode: str | None = None) -> dict:
+        from core.models.feature_engine import compute_features
+
+        if data is not None:
+            valid = {s: d for s, d in data.items() if d is not None and not d.empty}
+            if valid:
+                self._multi_raw_data = valid
+                self.df = next(iter(valid.values()))
+                self._mode = "compete" if (mode or "compete") in ("compete", "competition", "rotator") else "multi"
+        else:
+            self._mode = mode or "single"
+
         if self.df is None or len(self.df) < 400:
             return {"error": f"Need at least 400 candles, got {len(self.df) if self.df is not None else 0}"}
 
-        from core.models.feature_engine import compute_features
-
-        self._prepared_df = compute_features(self.df.copy())
-        if self._prepared_df is None or self._prepared_df.empty or len(self._prepared_df) < 100:
-            return {"error": "Feature preparation failed or returned too few candles"}
+        if self._multi_raw_data and self._mode in ("multi", "compete", "competition", "rotator"):
+            self._multi_prepared_data = {}
+            for symbol, raw in self._multi_raw_data.items():
+                try:
+                    prepared = compute_features(raw.copy())
+                    if prepared is not None and not prepared.empty and len(prepared) >= 100:
+                        self._multi_prepared_data[symbol] = prepared
+                except Exception as e:
+                    logger.debug(f"[QualitySignalOptimizer] feature prep failed for {symbol}: {e}")
+            if not self._multi_prepared_data:
+                return {"error": "No multi-symbol data could be prepared"}
+            self._prepared_df = next(iter(self._multi_prepared_data.values()))
+        else:
+            self._prepared_df = compute_features(self.df.copy())
+            if self._prepared_df is None or self._prepared_df.empty or len(self._prepared_df) < 100:
+                return {"error": "Feature preparation failed or returned too few candles"}
 
         startup = min(12, max(3, int(self.n_trials * 0.25)))
         sampler = optuna.samplers.TPESampler(seed=77, n_startup_trials=startup, multivariate=True)
@@ -90,7 +96,7 @@ class QualitySignalOptimizer:
         self.best_value = float(best.value)
         result = self._build_result()
         self._save_results(result)
-        logger.info(f"[QualitySignalOptimizer] Done | best={self.best_value:.4f} trials={len(self.study.trials)}")
+        logger.info(f"[QualitySignalOptimizer] Done | mode={self._mode} best={self.best_value:.4f} trials={len(self.study.trials)}")
         return result
 
     def apply_best(self):
@@ -114,11 +120,8 @@ class QualitySignalOptimizer:
             "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.12, 0.50, step=0.02),
             "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.18, 0.60, step=0.02),
             "MIN_SESSION_MULT": trial.suggest_float("MIN_SESSION_MULT", 0.55, 1.15, step=0.05),
-            "ATR_SL_MULT": sl_mult,
-            "ATR_TP1_MULT": tp1_mult,
-            "ATR_TP2_MULT": tp2_mult,
-            "TP1_EXIT_PCT": tp1_exit,
-            "TP2_EXIT_PCT": round(1.0 - tp1_exit, 2),
+            "ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult,
+            "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": round(1.0 - tp1_exit, 2),
             "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 10, 72),
             "BREAKEVEN_BUFFER_PCT": trial.suggest_float("BREAKEVEN_BUFFER_PCT", 0.0000, 0.0015, step=0.0001),
             "EARLY_EXIT_ENABLED": trial.suggest_categorical("EARLY_EXIT_ENABLED", [True, False]),
@@ -140,13 +143,18 @@ class QualitySignalOptimizer:
                 if hasattr(cfg, k):
                     setattr(cfg, k, v)
 
-            results = BacktestEngine().walk_forward(self._prepared_df)
+            if self._multi_prepared_data and self._mode in ("multi", "compete", "competition", "rotator"):
+                results = AlignedMultiSymbolBacktestEngine(use_memory=False).run_competing_symbols(self._multi_prepared_data, prepared=True)
+            else:
+                results = BacktestEngine().walk_forward(self._prepared_df)
+
             if "error" in results:
                 return -1.0
 
             n = int(results.get("total_trades", 0) or 0)
-            if n < 20:
-                return -0.60 - (20 - n) * 0.02
+            min_trades = 25 if self._multi_prepared_data else 20
+            if n < min_trades:
+                return -0.60 - (min_trades - n) * 0.02
 
             score = self._quality_score(results)
             trial.report(score, step=1)
@@ -163,6 +171,8 @@ class QualitySignalOptimizer:
                 "final_capital": results.get("final_capital"),
                 "tp1_hit_rate": results.get("tp1_hit_rate"),
                 "time_exit_rate": results.get("time_exit_rate"),
+                "symbols_traded": results.get("symbols_traded"),
+                "symbols_loaded": results.get("symbols_loaded"),
             }
             self.trial_results.append({"trial": trial.number, "score": round(score, 4), "params": params, "metrics": metrics})
             if score > self.best_value:
@@ -187,6 +197,7 @@ class QualitySignalOptimizer:
         n = int(results.get("total_trades", 0) or 0)
         tp1 = float(results.get("tp1_hit_rate", 0) or 0)
         ter = float(results.get("time_exit_rate", 0) or 0)
+        symbols_traded = results.get("symbols_traded") or {}
 
         if dd > 0.20:
             return -0.75
@@ -202,6 +213,10 @@ class QualitySignalOptimizer:
         ret_score = min(max(ret / 0.60, 0.0), 1.0)
         tp_score = min(max(tp1, 0.0), 1.0)
         time_penalty = max(0.40, 1.0 - ter * 1.35)
+        diversity_bonus = 0.0
+        if symbols_traded:
+            active = sum(1 for v in symbols_traded.values() if int((v or {}).get("trades", 0) or 0) > 0)
+            diversity_bonus = min(0.08, active * 0.015)
 
         score = (
             pf_score * 0.28
@@ -210,7 +225,7 @@ class QualitySignalOptimizer:
             + trade_score * 0.12
             + ret_score * 0.10
             + tp_score * 0.08
-        ) * time_penalty
+        ) * time_penalty + diversity_bonus
         return float(score)
 
     def _trial_callback(self, study, trial):
@@ -230,12 +245,13 @@ class QualitySignalOptimizer:
 
     def _build_result(self) -> dict:
         return {
-            "mode": "signal_quality",
+            "mode": "signal_quality_" + self._mode,
             "best_value": self.best_value,
             "best_params": self.best_params,
             "trial_results": self.trial_results[-50:],
             "metric": "signal_quality",
             "trials": len(self.study.trials) if self.study else 0,
+            "symbols_loaded": list((self._multi_prepared_data or {}).keys()),
         }
 
     def _save_results(self, result: dict):
