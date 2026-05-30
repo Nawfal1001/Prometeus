@@ -5,6 +5,7 @@
 import numpy as np
 from loguru import logger
 import config.settings as cfg
+from core.risk.position_sizer import size_from_atr_risk
 
 WEIGHT_SUM_TOLERANCE = 0.02
 PROXY_LAYER_WEIGHT_FACTOR = 0.50
@@ -181,11 +182,21 @@ class FusionEngine:
             result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "rr_ratio": round(rr_ratio, 2), "independence_score": independence["score"], "layer_sources": independence["sources"], "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()}, "source_warning": independence["warning"]})
             return result
 
-        position_size = self._confidence_scaled_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
+        confidence_mult = self._confidence_multiplier(abs_score, threshold=effective_threshold)
+        atr_floor = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
+        atr_for_exits = max(float(atr_norm or atr_floor), atr_floor)
+        sizing = size_from_atr_risk(
+            capital=float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL),
+            risk_fraction=float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05)),
+            leverage=float(getattr(cfg, "LEVERAGE", 3)),
+            atr_norm=atr_for_exits,
+            sl_mult=sl_mult,
+            confidence_mult=confidence_mult,
+            price=current_price,
+            min_atr_norm=atr_floor,
+        )
         stop_loss = take_profit = None
         if current_price > 0:
-            atr_floor = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
-            atr_for_exits = max(float(atr_norm or atr_floor), atr_floor)
             stop_loss = current_price * (1 - direction * atr_for_exits * sl_mult)
             take_profit = current_price * (1 + direction * atr_for_exits * tp2_mult)
         result = {
@@ -195,7 +206,13 @@ class FusionEngine:
             "raw_fusion_score": round(raw_fusion_score, 4),
             "fusion_score": round(session_adjusted_score, 4),
             "confidence": round(abs_score * 100, 1),
-            "position_size": round(position_size, 2),
+            "position_size": round(sizing.notional, 2),
+            "notional": round(sizing.notional, 6),
+            "qty": round(sizing.qty, 10),
+            "base_margin": round(sizing.base_margin, 6),
+            "risk_amount": round(sizing.risk_amount, 6),
+            "stop_distance_pct": round(sizing.stop_distance_pct, 8),
+            "confidence_mult": round(confidence_mult, 4),
             "stop_loss": round(stop_loss, 2) if stop_loss else None,
             "take_profit": round(take_profit, 2) if take_profit else None,
             "rr_ratio": round(rr_ratio, 2),
@@ -234,22 +251,30 @@ class FusionEngine:
 
         return effective, {"score": independence_score, "sources": sources, "warning": warning}
 
-    def _confidence_scaled_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
-        capital = float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL)
+    def _confidence_multiplier(self, confidence: float, threshold: float = None) -> float:
         threshold = float(threshold if threshold is not None else getattr(cfg, "FUSION_THRESHOLD", 0.17))
-        risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
-        leverage = float(getattr(cfg, "LEVERAGE", 3))
-        strength = max(0.0, (confidence - threshold) / max(1e-9, 1.0 - threshold))
+        strength = max(0.0, (float(confidence) - threshold) / max(1e-9, 1.0 - threshold))
         confidence_mult = 0.35 + 1.15 / (1.0 + np.exp(-8.0 * (strength - 0.35)))
-        confidence_mult = float(np.clip(confidence_mult, 0.35, 1.50))
-        return capital * risk_frac * leverage * confidence_mult
+        return float(np.clip(confidence_mult, 0.35, 1.50))
+
+    def _confidence_scaled_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
+        confidence_mult = self._confidence_multiplier(confidence, threshold=threshold)
+        return size_from_atr_risk(
+            capital=float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL),
+            risk_fraction=float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05)),
+            leverage=float(getattr(cfg, "LEVERAGE", 3)),
+            atr_norm=float(getattr(cfg, "MIN_ATR_NORM", 0.001)),
+            sl_mult=float(getattr(cfg, "ATR_SL_MULT", 1.2)),
+            confidence_mult=confidence_mult,
+            min_atr_norm=float(getattr(cfg, "MIN_ATR_NORM", 0.001)),
+        ).notional
 
     def _kelly_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
         # Backward-compatible alias. This is confidence-scaled sizing, not Kelly criterion.
         return self._confidence_scaled_size(confidence, current_capital=current_capital, threshold=threshold)
 
     def _no_trade(self, reason: str) -> dict:
-        return {"trade": False, "direction": 0, "side": None, "fusion_score": 0.0, "score": 0.0, "confidence": 0.0, "position_size": 0.0, "rr": None, "risk_reward": None, "reason": reason}
+        return {"trade": False, "direction": 0, "side": None, "fusion_score": 0.0, "score": 0.0, "confidence": 0.0, "position_size": 0.0, "notional": 0.0, "qty": 0.0, "base_margin": 0.0, "risk_amount": 0.0, "rr": None, "risk_reward": None, "reason": reason}
 
     def reload_weights(self):
         self.weights = {"regime": cfg.WEIGHT_REGIME, "sentiment": cfg.WEIGHT_SENTIMENT, "whale": cfg.WEIGHT_WHALE, "liquidation": cfg.WEIGHT_LIQUIDATION, "entry": cfg.WEIGHT_ENTRY}
