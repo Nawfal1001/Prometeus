@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from loguru import logger
 from core.risk.risk_manager import RiskManager
+from core.risk.position_sizer import size_from_atr_risk
 from core.execution.exit_manager import AdvancedExitManager
 import config.settings as cfg
 
@@ -51,6 +52,37 @@ class OrderManager:
         except Exception as e:
             logger.warning(f"[Orders] Load failed, starting fresh: {e}")
 
+    def _sizing_from_signal(self, signal: dict, price: float):
+        notional = float(signal.get("notional", signal.get("position_size", 0.0)) or 0.0)
+        qty = float(signal.get("qty", 0.0) or 0.0)
+        if notional > 0:
+            if qty <= 0 and price > 0:
+                qty = notional / price
+            return notional, qty, float(signal.get("risk_amount", 0.0) or 0.0), float(signal.get("base_margin", 0.0) or 0.0)
+
+        atr_norm = float(signal.get("atr_norm", signal.get("atr", 0.002)) or 0.002)
+        sl_mult = float(signal.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.2)))
+        confidence_mult = float(signal.get("confidence_mult", 1.0) or 1.0)
+        sizing = size_from_atr_risk(
+            capital=float(self.risk.capital),
+            risk_fraction=float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05)),
+            leverage=float(getattr(cfg, "LEVERAGE", 3)),
+            atr_norm=atr_norm,
+            sl_mult=sl_mult,
+            confidence_mult=confidence_mult,
+            price=price,
+            min_atr_norm=float(getattr(cfg, "MIN_ATR_NORM", 0.001)),
+        )
+        signal.update({
+            "notional": sizing.notional,
+            "qty": sizing.qty,
+            "base_margin": sizing.base_margin,
+            "risk_amount": sizing.risk_amount,
+            "stop_distance_pct": sizing.stop_distance_pct,
+            "position_size": sizing.notional,
+        })
+        return sizing.notional, sizing.qty, sizing.risk_amount, sizing.base_margin
+
     async def execute_signal(self, signal: dict, current_price: float) -> dict:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
@@ -66,10 +98,10 @@ class OrderManager:
         threshold_mult = self.risk.threshold_multiplier()
         effective_thr = cfg.FUSION_THRESHOLD * threshold_mult
         if abs(signal.get("fusion_score", 0)) < effective_thr:
-            logger.info(f"[Orders] Trade blocked by live WR feedback (mult={threshold_mult:.2f})")
-            return {"status": "blocked", "reason": "live_wr_feedback"}
+            logger.info(f"[Orders] Trade blocked by live feedback (mult={threshold_mult:.2f})")
+            return {"status": "blocked", "reason": "live_feedback"}
 
-        allowed, reason = self.risk.can_trade()
+        allowed, reason = self.risk.can_trade(open_trades=self.open_trades, signal=signal)
         if not allowed:
             logger.warning(f"[Orders] Trade blocked: {reason}")
             return {"status": "blocked", "reason": reason}
@@ -88,7 +120,7 @@ class OrderManager:
         self._trade_counter += 1
         trade_id = f"PAPER-{self._trade_counter:04d}"
         direction = 1 if signal["side"] == "long" else -1
-        size = float(signal["position_size"])
+        notional, qty, risk_amount, base_margin = self._sizing_from_signal(signal, price)
         symbol = signal.get("symbol") or cfg.SYMBOL
         levels = self._build_exit_levels(signal, price, direction)
 
@@ -102,8 +134,14 @@ class OrderManager:
             "entry_score": float(abs(signal.get("fusion_score", 0.0) or 0.0)),
             "best_unrealized_pnl": 0.0,
             "stale_bars": 0,
-            "size": size,
-            "size_remaining": size,
+            "size": notional,
+            "size_remaining": notional,
+            "notional": notional,
+            "notional_remaining": notional,
+            "qty": qty,
+            "qty_remaining": qty,
+            "base_margin": base_margin,
+            "risk_amount": risk_amount,
             "remaining_pct": 1.0,
             "stop_loss": levels.stop_loss,
             "take_profit": levels.tp2,
@@ -128,37 +166,37 @@ class OrderManager:
         }
         self.open_trades[trade_id] = trade
         self._save_trades()
-        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {price:.2f} | size=${size:.2f} | id={trade_id} | TP1={levels.tp1:.2f} TP2={levels.tp2:.2f} SL={levels.stop_loss:.2f}")
-        return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": price, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
+        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {price:.2f} | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.2f} TP2={levels.tp2:.2f} SL={levels.stop_loss:.2f}")
+        return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": price, "notional": notional, "qty": qty, "risk_amount": risk_amount, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
 
     async def _live_execute(self, signal: dict, price: float) -> dict:
         if not self.exchange:
             logger.error("[Orders] No exchange for live trading")
             return {"status": "error", "reason": "no_exchange"}
         direction = 1 if signal["side"] == "long" else -1
+        notional, qty, risk_amount, base_margin = self._sizing_from_signal(signal, price)
         levels = self._build_exit_levels(signal, price, direction)
         result = await self.exchange.place_order(
             symbol=signal.get("symbol") or cfg.SYMBOL,
             side="buy" if direction == 1 else "sell",
             order_type="market",
-            size=signal["position_size"] / price,
+            size=qty,
             stop_loss=levels.stop_loss,
             take_profit=levels.tp2,
             leverage=cfg.LEVERAGE,
         )
-        logger.info(f"[Live] Order placed with shared exit levels: {result}")
-        return {**(result or {}), "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
+        logger.info(f"[Live] Order placed | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} margin=${base_margin:.2f} | result={result}")
+        return {**(result or {}), "notional": notional, "qty": qty, "risk_amount": risk_amount, "base_margin": base_margin, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
 
     def _update_unrealized_pnl(self, trade: dict, current_price: float):
         entry = float(trade["entry_price"])
-        size = float(trade.get("size_remaining", trade["size"]))
+        notional_remaining = float(trade.get("notional_remaining", trade.get("size_remaining", trade.get("size", 0.0))))
         direction = trade["direction"]
-        leverage = float(getattr(cfg, "LEVERAGE", 3))
         price_change_pct = (current_price - entry) / entry * direction
-        pnl = size * price_change_pct * leverage
+        pnl = notional_remaining * price_change_pct
         trade["current_price"] = current_price
         trade["unrealized_pnl"] = round(pnl, 4)
-        trade["unrealized_pnl_pct"] = round(price_change_pct * leverage * 100, 3)
+        trade["unrealized_pnl_pct"] = round((pnl / max(float(trade.get("base_margin", 0.0)) or float(trade.get("notional", 0.0)), 1e-9)) * 100, 3)
         if pnl > float(trade.get("best_unrealized_pnl", -999999)):
             trade["best_unrealized_pnl"] = round(pnl, 4)
             trade["stale_bars"] = 0
@@ -183,18 +221,21 @@ class OrderManager:
     def _realize_paper_exit(self, trade_id: str, trade: dict, event: dict):
         direction = int(trade["direction"])
         entry = float(trade["entry_price"])
-        leverage = float(getattr(cfg, "LEVERAGE", 3))
         portion = float(event["portion"])
         exit_price = float(event["price"])
-        size = float(trade["size"]) * portion
+        notional = float(trade.get("notional", trade.get("size", 0.0))) * portion
+        qty = float(trade.get("qty", 0.0)) * portion
         pct_move = (exit_price - entry) / entry * direction
-        pnl = size * pct_move * leverage
-        trade["size_remaining"] = max(0.0, float(trade.get("size_remaining", trade["size"])) - size)
+        pnl = notional * pct_move
+        trade["notional_remaining"] = max(0.0, float(trade.get("notional_remaining", trade.get("size_remaining", trade.get("size", 0.0)))) - notional)
+        trade["qty_remaining"] = max(0.0, float(trade.get("qty_remaining", trade.get("qty", 0.0))) - qty)
+        trade["size_remaining"] = trade["notional_remaining"]
+        trade["remaining_pct"] = max(0.0, float(trade.get("remaining_pct", 1.0)) - portion)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
-        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion})
+        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion, "notional": notional, "qty": qty})
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
-        logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | pnl={pnl:+.4f}")
+        logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | pnl={pnl:+.4f}")
 
     async def force_close_trade(self, trade_id: str, price: float, reason: str = "FORCED"):
         trade = self.open_trades.get(trade_id)
@@ -228,7 +269,7 @@ class OrderManager:
             events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)))
             for event in events:
                 self._realize_paper_exit(trade_id, trade, event)
-            if float(trade.get("remaining_pct", 1.0)) <= 1e-9 or float(trade.get("size_remaining", 0.0)) <= 1e-9:
+            if float(trade.get("remaining_pct", 1.0)) <= 1e-9 or float(trade.get("notional_remaining", trade.get("size_remaining", 0.0))) <= 1e-9:
                 trade["status"] = "closed"
                 trade["exit_price"] = current_price
                 trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
