@@ -25,7 +25,7 @@ class PrometheusEngine:
     def __init__(self, broadcast_fn=None):
         self.broadcast = broadcast_fn or (lambda x: None)
         self.exchange = get_exchange()
-        self._regimes = {}
+        self.regime = RegimeDetector()
         self.sentiment = SentimentEngine()
         self.whale = WhaleTracker()
         self.liquidation = LiquidationGravity()
@@ -46,15 +46,8 @@ class PrometheusEngine:
         self._rotator_ranked = []
         self._xgb_trained_on_start = False
         self._4h_bias = 0
-        self._4h_bias_by_symbol = {}
         self._consec_errors = 0
         self._backoff_seconds = 30
-
-    def regime_for(self, symbol: str):
-        key = symbol or cfg.SYMBOL
-        if key not in self._regimes:
-            self._regimes[key] = RegimeDetector()
-        return self._regimes[key]
 
     async def start(self):
         self.running = True
@@ -112,8 +105,7 @@ class PrometheusEngine:
         except Exception as e:
             logger.debug(f"[Engine] Orderbook fetch skipped for {symbol}: {e}")
 
-        htf_bias = int(self._4h_bias_by_symbol.get(symbol, self._4h_bias))
-        regime_result = self.regime_for(symbol).detect(df, funding_rate=funding_rate, htf_bias=htf_bias)
+        regime_result = self.regime.detect(df, funding_rate=funding_rate)
         whale_result = {"layer_score": self.whale.get_layer_score()}
         sent_result = {"layer_score": self.sentiment.get_layer_score()}
         liq_result = self.liquidation.update(current_price, symbol)
@@ -131,10 +123,11 @@ class PrometheusEngine:
             regime_bias=regime_result.get("bias", 0),
             current_price=current_price,
             liquidation_target=liq_result.get("nearest_target", {}).get("price") if liq_result.get("nearest_target") else None,
-            htf_bias=htf_bias,
+            htf_bias=self._4h_bias,
             session_mult=self._session_multiplier(),
             threshold_mult=self.orders.risk.threshold_multiplier(),
             current_capital=self.orders.risk.capital,
+            atr_norm=atr_norm,
         )
         signal.update({
             "symbol": symbol,
@@ -179,9 +172,7 @@ class PrometheusEngine:
             logger.info(f"[Rotator] ranking updated | {summary}")
         return ranked
 
-    async def _manage_open_trades_rotator(self, ranked=None):
-        ranked = ranked or self._rotator_ranked
-
+    async def _manage_open_trades_rotator(self):
         for trade in list(self.orders.get_open_trades()):
             symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
             df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=80)
@@ -192,79 +183,12 @@ class PrometheusEngine:
             recent = df.tail(max(lookback, 2))
             await self.orders.check_paper_exits(price, high=float(recent["high"].max()), low=float(recent["low"].min()), symbol=symbol)
 
-            await self._maybe_early_rotate(trade, price, ranked)
-
-    async def _maybe_early_rotate(self, trade, price, ranked):
-        if not bool(getattr(cfg, "EARLY_EXIT_ENABLED", True)):
-            return
-        if not ranked:
-            return
-
-        trade_id = trade.get("id")
-        still_open = any(t.get("id") == trade_id for t in self.orders.get_open_trades())
-        if not still_open:
-            return
-
-        bars_open = int(trade.get("bars_open", 0))
-        if bars_open < int(getattr(cfg, "EARLY_EXIT_MIN_BARS", 3)):
-            return
-
-        stale_bars = int(trade.get("stale_bars", 0))
-        if stale_bars < int(getattr(cfg, "EARLY_EXIT_STALE_BARS", 2)):
-            return
-
-        pnl_pct = float(trade.get("unrealized_pnl_pct", 0.0) or 0.0)
-        if pnl_pct > float(getattr(cfg, "EARLY_EXIT_MAX_NEGATIVE_PNL_PCT", -1.2)):
-            return
-
-        near_tp = float(trade.get("distance_to_tp_pct") or 999.0)
-        if near_tp <= float(getattr(cfg, "EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT", 0.35)):
-            return
-
-        current_symbol = trade.get("symbol")
-        current_score = self._current_rotator_score(current_symbol, trade)
-        replacement = self._best_replacement_candidate(current_symbol, ranked)
-        if not replacement:
-            return
-
-        advantage = float(getattr(cfg, "EARLY_EXIT_REPLACEMENT_ADVANTAGE", 0.20))
-        replacement_score = float(replacement.get("final_score", 0.0) or 0.0)
-        if replacement_score < current_score + advantage:
-            return
-
-        result = await self.orders.force_close_trade(trade_id, price, reason="ROTATION_EXIT")
-        if result.get("status") == "closed":
-            logger.info(
-                f"[Rotator] early rotation exit | closed={current_symbol} "
-                f"pnl={result.get('pnl')} replacement={replacement.get('symbol')} "
-                f"current_score={current_score:.3f} replacement_score={replacement_score:.3f}"
-            )
-
-    def _current_rotator_score(self, symbol, trade):
-        for item in self._rotator_ranked:
-            if item.get("symbol") == symbol:
-                return float(item.get("final_score", 0.0) or 0.0)
-        return float(trade.get("entry_score", 0.0) or 0.0)
-
-    def _best_replacement_candidate(self, current_symbol, ranked):
-        top_n = int(getattr(cfg, "ROTATOR_TRADE_ONLY_TOP_N", 3))
-        min_score = float(getattr(cfg, "ROTATOR_MIN_SCORE", 0.55))
-        for item in ranked[:top_n]:
-            if item.get("symbol") == current_symbol:
-                continue
-            if not item.get("signal", {}).get("trade"):
-                continue
-            if float(item.get("final_score", 0.0) or 0.0) < min_score:
-                continue
-            return item
-        return None
-
     async def _candle_loop(self):
         while self.running:
             try:
                 if self._rotator_enabled():
                     ranked = await self._autoscan()
-                    await self._manage_open_trades_rotator(ranked)
+                    await self._manage_open_trades_rotator()
                     if self.orders.get_open_trades():
                         await asyncio.sleep(15)
                         continue
@@ -372,28 +296,23 @@ class PrometheusEngine:
             await asyncio.sleep(300)
 
     async def _update_4h_bias(self):
-        for symbol in self._symbols():
-            try:
-                df_4h = await self.exchange.get_ohlcv(symbol, "4h", limit=80)
-                if df_4h is None or df_4h.empty or len(df_4h) < 50:
-                    self._4h_bias_by_symbol[symbol] = 0
-                    continue
-                ema20 = df_4h["close"].ewm(span=20).mean().iloc[-1]
-                ema50 = df_4h["close"].ewm(span=50).mean().iloc[-1]
-                last = float(df_4h["close"].iloc[-1])
-                if last > ema20 > ema50:
-                    bias = 1
-                elif last < ema20 < ema50:
-                    bias = -1
-                else:
-                    bias = 0
-                self._4h_bias_by_symbol[symbol] = bias
-                if symbol == cfg.SYMBOL:
-                    self._4h_bias = bias
-            except Exception as e:
-                logger.warning(f"[Engine] 4H bias update failed for {symbol}: {e}")
-                self._4h_bias_by_symbol[symbol] = 0
-        self._4h_bias = int(self._4h_bias_by_symbol.get(cfg.SYMBOL, self._4h_bias))
+        try:
+            df_4h = await self.exchange.get_ohlcv(self._symbols()[0], "4h", limit=60)
+            if df_4h.empty or len(df_4h) < 20:
+                self._4h_bias = 0
+                return
+            ema20 = df_4h["close"].ewm(span=20).mean().iloc[-1]
+            ema50 = df_4h["close"].ewm(span=50).mean().iloc[-1]
+            last = float(df_4h["close"].iloc[-1])
+            if last > ema20 > ema50:
+                self._4h_bias = 1
+            elif last < ema20 < ema50:
+                self._4h_bias = -1
+            else:
+                self._4h_bias = 0
+        except Exception as e:
+            logger.warning(f"[Engine] 4H bias update failed: {e}")
+            self._4h_bias = 0
 
     def _session_multiplier(self) -> float:
         hour = datetime.utcnow().hour
