@@ -25,10 +25,6 @@ from dashboard.api_backtest_multi import router as backtest_multi_router
 from dashboard.api_optimize_multi import router as optimize_multi_router
 from dashboard.api_lab import router as lab_router
 from core.cache.market_cache import get_cached_ohlcv
-try:
-    from core.monitoring.decision_journal import journal
-except Exception:
-    journal = None
 
 BASE_DIR = Path(__file__).parent
 ROOT_DIR = BASE_DIR.parent
@@ -57,8 +53,6 @@ _state = {
     "stats": {},
     "open_trades": [],
     "trade_log": [],
-    "decision_log": [],
-    "rotator_ranked": [],
     "backtest": {},
     "optimization": {},
     "model_training": {},
@@ -85,15 +79,6 @@ DEFAULT_CRYPTO_TRAIN_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", 
 _SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET", "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY", "POLYGON_KEY"}
 
 
-def _sync_decision_log():
-    if journal is not None:
-        try:
-            _state["decision_log"] = journal.list(200)
-        except Exception:
-            pass
-    return _state
-
-
 def _broadcast_from_any_thread(data: dict):
     global _main_loop
     try:
@@ -112,20 +97,11 @@ def _broadcast_from_any_thread(data: dict):
 def ui_log(message: str, level: str = "INFO"):
     item = {"time": datetime.utcnow().strftime("%H:%M:%S"), "level": level.upper(), "message": message}
     _ui_logs.append(item)
-    if journal is not None:
-        try:
-            journal.add("ui", message, level=level.upper())
-        except Exception:
-            pass
     getattr(logger, level.lower(), logger.info)(f"[UI] {message}")
     _broadcast_from_any_thread({"type": "log", "log": item})
 
 
 async def broadcast(data: dict):
-    if data.get("type") == "state" and isinstance(data.get("data"), dict):
-        _state.update(data["data"])
-        _sync_decision_log()
-        data = {"type": "state", "data": _state}
     dead = []
     for ws in _ws_clients:
         try:
@@ -469,28 +445,7 @@ async def api_health_full():
 
 @app.get("/api/state")
 async def get_state():
-    return JSONResponse(_sync_decision_log())
-
-
-@app.get("/state")
-async def get_state_alias():
-    return JSONResponse(_sync_decision_log())
-
-
-@app.get("/api/decision-log")
-async def get_decision_log(limit: int = 200):
-    if journal is None:
-        return {"decision_log": []}
-    return {"decision_log": journal.list(limit)}
-
-
-@app.post("/api/decision-log/clear")
-async def clear_decision_log():
-    if journal is not None and hasattr(journal, "_events"):
-        journal._events.clear()
-    _state["decision_log"] = []
-    await broadcast({"type": "state", "data": _state})
-    return {"status": "cleared"}
+    return JSONResponse(_state)
 
 
 @app.get("/api/logs")
@@ -629,7 +584,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     _ws_clients.append(websocket)
     try:
-        await websocket.send_json({"type": "state", "data": _sync_decision_log()})
+        await websocket.send_json({"type": "state", "data": _state})
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
