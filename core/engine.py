@@ -229,10 +229,9 @@ class PrometheusEngine:
             df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=120)
             if df is None or df.empty:
                 continue
-            price = float(df["close"].iloc[-1])
-            lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
-            recent = df.tail(max(lookback, 2))
-            await self.orders.check_paper_exits(price, high=float(recent["high"].max()), low=float(recent["low"].min()), symbol=symbol)
+            last = df.iloc[-1]
+            price = float(last["close"])
+            await self.orders.check_paper_exits(price, high=float(last["high"]), low=float(last["low"]), symbol=symbol, bar_time=df.index[-1])
 
     async def _candle_loop(self):
         while self.running:
@@ -254,7 +253,8 @@ class PrometheusEngine:
                         if float(item.get("final_score", item.get("score", 0.0)) or 0.0) < min_score:
                             journal.add("decision", f"skip {item['symbol']} below rotator min score", symbol=item["symbol"], score=item.get("final_score"), min_score=min_score)
                             continue
-                        result = await self.orders.execute_signal(sig, item["price"])
+                        bar_time = item["df"].index[-1] if item.get("df") is not None and len(item["df"]) else None
+                        result = await self.orders.execute_signal(sig, item["price"], bar_time=bar_time)
                         journal.order(item["symbol"], result.get("status"), reason=result.get("reason"), result=result, price=item["price"], score=item.get("final_score"))
                         if result.get("status") == "filled":
                             logger.info(f"[Rotator] opened {sig.get('side')} {item['symbol']} score={item.get('final_score', 0):.3f}")
@@ -278,15 +278,17 @@ class PrometheusEngine:
                 self._backoff_seconds = 30
                 signal = self._force_paper_trade_signal(item["signal"], item)
                 logger.info(f"[Engine] New candle | price={item['price']:.2f} | time={latest_time}")
+                bar_high = float(item["df"]["high"].iloc[-1])
+                bar_low = float(item["df"]["low"].iloc[-1])
                 if signal["trade"]:
-                    result = await self.orders.execute_signal(signal, item["price"])
+                    result = await self.orders.execute_signal(signal, item["price"], bar_time=latest_time)
                     journal.order(cfg.SYMBOL, result.get("status"), reason=result.get("reason"), result=result, price=item["price"])
                     if result.get("status") == "filled":
                         self.telegram.signal_alert(signal, item["price"])
                         self.fusion.reload_weights()
                 else:
                     journal.add("decision", f"no trade {cfg.SYMBOL} reason={signal.get('reason')}", symbol=cfg.SYMBOL, reason=signal.get("reason"), signal=signal)
-                await self.orders.check_paper_exits(item["price"], high=signal["recent_high"], low=signal["recent_low"], symbol=cfg.SYMBOL)
+                await self.orders.check_paper_exits(item["price"], high=bar_high, low=bar_low, symbol=cfg.SYMBOL, bar_time=latest_time)
                 await self._broadcast_state(item["price"], signal, item["layer_scores"], item["regime"])
             except Exception as e:
                 self._consec_errors += 1

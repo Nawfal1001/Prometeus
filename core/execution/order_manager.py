@@ -86,7 +86,7 @@ class OrderManager:
         })
         return sizing.notional, sizing.qty, sizing.risk_amount, sizing.base_margin
 
-    async def execute_signal(self, signal: dict, current_price: float) -> dict:
+    async def execute_signal(self, signal: dict, current_price: float, bar_time=None) -> dict:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
         if self.paper and self.open_trades:
@@ -115,7 +115,7 @@ class OrderManager:
             return {"status": "blocked", "reason": reason}
 
         if self.paper:
-            return await self._paper_execute(signal, current_price)
+            return await self._paper_execute(signal, current_price, bar_time=bar_time)
         return await self._live_execute(signal, current_price)
 
     def _build_exit_levels(self, signal: dict, price: float, direction: int):
@@ -124,21 +124,26 @@ class OrderManager:
         recent_low = float(signal.get("recent_low", signal.get("low", price)))
         return self.exit_mgr.build_levels(entry_price=price, direction=direction, atr_norm=atr_norm, recent_high=recent_high, recent_low=recent_low)
 
-    async def _paper_execute(self, signal: dict, price: float) -> dict:
+    async def _paper_execute(self, signal: dict, price: float, bar_time=None) -> dict:
         self._trade_counter += 1
         trade_id = f"PAPER-{self._trade_counter:04d}"
         direction = 1 if signal["side"] == "long" else -1
-        notional, qty, risk_amount, base_margin = self._sizing_from_signal(signal, price)
+        slippage = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+        entry_price = price * (1 + direction * slippage)
+        notional, qty, risk_amount, base_margin = self._sizing_from_signal(signal, entry_price)
         symbol = signal.get("symbol") or cfg.SYMBOL
-        levels = self._build_exit_levels(signal, price, direction)
+        levels = self._build_exit_levels(signal, entry_price, direction)
 
         trade = {
             "id": trade_id,
             "symbol": symbol,
             "side": signal["side"],
             "direction": direction,
-            "entry_price": price,
-            "current_price": price,
+            "entry_price": entry_price,
+            "entry_close_price": price,
+            "entry_bar_time": str(bar_time) if bar_time is not None else None,
+            "last_seen_bar_time": str(bar_time) if bar_time is not None else None,
+            "current_price": entry_price,
             "entry_score": float(abs(signal.get("fusion_score", 0.0) or 0.0)),
             "best_unrealized_pnl": 0.0,
             "stale_bars": 0,
@@ -174,8 +179,8 @@ class OrderManager:
         }
         self.open_trades[trade_id] = trade
         self._save_trades()
-        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {price:.2f} | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.2f} TP2={levels.tp2:.2f} SL={levels.stop_loss:.2f}")
-        return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": price, "notional": notional, "qty": qty, "risk_amount": risk_amount, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
+        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {entry_price:.4f} (close={price:.4f}, slip={slippage*100:.3f}%) | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.4f} TP2={levels.tp2:.4f} SL={levels.stop_loss:.4f}")
+        return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": entry_price, "notional": notional, "qty": qty, "risk_amount": risk_amount, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
 
     async def _live_execute(self, signal: dict, price: float) -> dict:
         if not self.exchange:
@@ -230,20 +235,26 @@ class OrderManager:
         direction = int(trade["direction"])
         entry = float(trade["entry_price"])
         portion = float(event["portion"])
-        exit_price = float(event["price"])
+        raw_exit_price = float(event["price"])
+        slippage = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+        taker_fee = float(getattr(cfg, "PAPER_TAKER_FEE", 0.0005))
+        exit_price = raw_exit_price * (1 - direction * slippage)
         notional = float(trade.get("notional", trade.get("size", 0.0))) * portion
         qty = float(trade.get("qty", 0.0)) * portion
         pct_move = (exit_price - entry) / entry * direction
-        pnl = notional * pct_move
+        gross_pnl = notional * pct_move
+        fees = notional * taker_fee * 2.0
+        pnl = gross_pnl - fees
         trade["notional_remaining"] = max(0.0, float(trade.get("notional_remaining", trade.get("size_remaining", trade.get("size", 0.0)))) - notional)
         trade["qty_remaining"] = max(0.0, float(trade.get("qty_remaining", trade.get("qty", 0.0))) - qty)
         trade["size_remaining"] = trade["notional_remaining"]
         trade["remaining_pct"] = max(0.0, float(trade.get("remaining_pct", 1.0)) - portion)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
-        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion, "notional": notional, "qty": qty})
+        trade["fees_paid"] = round(float(trade.get("fees_paid", 0.0)) + fees, 6)
+        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion, "notional": notional, "qty": qty, "gross_pnl": round(gross_pnl, 4), "fees": round(fees, 6)})
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
-        logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | pnl={pnl:+.4f}")
+        logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | gross={gross_pnl:+.4f} fees={fees:.4f} net={pnl:+.4f}")
 
     async def force_close_trade(self, trade_id: str, price: float, reason: str = "FORCED"):
         trade = self.open_trades.get(trade_id)
@@ -262,16 +273,25 @@ class OrderManager:
         logger.info(f"[Paper] Force closed | {trade_id} | reason={reason} | total_pnl={trade['pnl']:+.4f}")
         return {"status": "closed", "trade_id": trade_id, "pnl": trade["pnl"], "reason": reason}
 
-    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None):
+    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None, bar_time=None):
         changed = False
         high = float(high if high is not None else current_price)
         low = float(low if low is not None else current_price)
+        bar_time_str = str(bar_time) if bar_time is not None else None
         for trade_id, trade in list(self.open_trades.items()):
             if trade["status"] != "open":
                 continue
             trade_symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
             if symbol and trade_symbol != symbol:
                 continue
+            if bar_time_str is not None and trade.get("entry_bar_time") == bar_time_str:
+                self._update_unrealized_pnl(trade, current_price)
+                continue
+            if bar_time_str is not None:
+                if trade.get("last_seen_bar_time") == bar_time_str:
+                    self._update_unrealized_pnl(trade, current_price)
+                    continue
+                trade["last_seen_bar_time"] = bar_time_str
             trade["bars_open"] = int(trade.get("bars_open", 0)) + 1
             self._update_unrealized_pnl(trade, current_price)
             events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)))
