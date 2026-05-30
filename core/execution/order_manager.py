@@ -22,6 +22,7 @@ class OrderManager:
         self.risk = RiskManager()
         self.exit_mgr = AdvancedExitManager()
         self.fusion = None
+        self.memory = None
         self.open_trades = {}
         self._trade_counter = 0
         self._load_trades()
@@ -53,6 +54,8 @@ class OrderManager:
     async def execute_signal(self, signal: dict, current_price: float) -> dict:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
+        if self.paper and self.open_trades:
+            return {"status": "blocked", "reason": "one_active_trade_limit"}
 
         atr_norm = float(signal.get("atr_norm", signal.get("atr", 0.002)) or 0.002)
         vol_z = float(signal.get("vol_zscore", 0) or 0)
@@ -86,14 +89,19 @@ class OrderManager:
         trade_id = f"PAPER-{self._trade_counter:04d}"
         direction = 1 if signal["side"] == "long" else -1
         size = float(signal["position_size"])
+        symbol = signal.get("symbol") or cfg.SYMBOL
         levels = self._build_exit_levels(signal, price, direction)
 
         trade = {
             "id": trade_id,
+            "symbol": symbol,
             "side": signal["side"],
             "direction": direction,
             "entry_price": price,
             "current_price": price,
+            "entry_score": float(abs(signal.get("fusion_score", 0.0) or 0.0)),
+            "best_unrealized_pnl": 0.0,
+            "stale_bars": 0,
             "size": size,
             "size_remaining": size,
             "remaining_pct": 1.0,
@@ -120,8 +128,8 @@ class OrderManager:
         }
         self.open_trades[trade_id] = trade
         self._save_trades()
-        logger.info(f"[Paper] Opened {signal['side'].upper()} @ {price:.2f} | size=${size:.2f} | id={trade_id} | TP1={levels.tp1:.2f} TP2={levels.tp2:.2f} SL={levels.stop_loss:.2f}")
-        return {"status": "filled", "trade_id": trade_id, "price": price, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
+        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {price:.2f} | size=${size:.2f} | id={trade_id} | TP1={levels.tp1:.2f} TP2={levels.tp2:.2f} SL={levels.stop_loss:.2f}")
+        return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": price, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
 
     async def _live_execute(self, signal: dict, price: float) -> dict:
         if not self.exchange:
@@ -130,7 +138,7 @@ class OrderManager:
         direction = 1 if signal["side"] == "long" else -1
         levels = self._build_exit_levels(signal, price, direction)
         result = await self.exchange.place_order(
-            symbol=cfg.SYMBOL,
+            symbol=signal.get("symbol") or cfg.SYMBOL,
             side="buy" if direction == 1 else "sell",
             order_type="market",
             size=signal["position_size"] / price,
@@ -151,12 +159,26 @@ class OrderManager:
         trade["current_price"] = current_price
         trade["unrealized_pnl"] = round(pnl, 4)
         trade["unrealized_pnl_pct"] = round(price_change_pct * leverage * 100, 3)
+        if pnl > float(trade.get("best_unrealized_pnl", -999999)):
+            trade["best_unrealized_pnl"] = round(pnl, 4)
+            trade["stale_bars"] = 0
+        else:
+            trade["stale_bars"] = int(trade.get("stale_bars", 0)) + 1
         tp = trade.get("tp2") or trade.get("take_profit")
         sl = trade.get("trailing_sl") or trade.get("stop_loss")
         if tp:
             trade["distance_to_tp_pct"] = round(abs((tp - current_price) / current_price) * 100, 3)
         if sl:
             trade["distance_to_sl_pct"] = round(abs((current_price - sl) / current_price) * 100, 3)
+
+    def _update_memory_on_close(self, trade: dict):
+        if self.memory is None:
+            return
+        try:
+            pnl = float(trade.get("pnl", trade.get("realized_pnl", 0.0)) or 0.0)
+            self.memory.update(trade.get("symbol") or cfg.SYMBOL, trade.get("side", "long"), pnl, {"exit_type": trade.get("exit_type"), "bars_open": trade.get("bars_open")})
+        except Exception as e:
+            logger.debug(f"[Paper] memory update skipped: {e}")
 
     def _realize_paper_exit(self, trade_id: str, trade: dict, event: dict):
         direction = int(trade["direction"])
@@ -169,17 +191,37 @@ class OrderManager:
         pnl = size * pct_move * leverage
         trade["size_remaining"] = max(0.0, float(trade.get("size_remaining", trade["size"])) - size)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
-        self.risk.record_trade(pnl, {**trade["signal"], "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion})
+        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion})
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
         logger.info(f"[Paper] {event['type']} exit | {trade_id} | portion={portion:.2f} | pnl={pnl:+.4f}")
 
-    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None):
+    async def force_close_trade(self, trade_id: str, price: float, reason: str = "FORCED"):
+        trade = self.open_trades.get(trade_id)
+        if not trade or trade.get("status") != "open":
+            return {"status": "skipped", "reason": "trade_not_open"}
+        event = {"type": reason, "price": price, "portion": float(trade.get("remaining_pct", 1.0) or 1.0)}
+        self._realize_paper_exit(trade_id, trade, event)
+        trade["status"] = "closed"
+        trade["exit_price"] = price
+        trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
+        trade["unrealized_pnl"] = trade["pnl"]
+        trade["exit_type"] = reason
+        self._update_memory_on_close(trade)
+        del self.open_trades[trade_id]
+        self._save_trades()
+        logger.info(f"[Paper] Force closed | {trade_id} | reason={reason} | total_pnl={trade['pnl']:+.4f}")
+        return {"status": "closed", "trade_id": trade_id, "pnl": trade["pnl"], "reason": reason}
+
+    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None):
         changed = False
         high = float(high if high is not None else current_price)
         low = float(low if low is not None else current_price)
         for trade_id, trade in list(self.open_trades.items()):
             if trade["status"] != "open":
+                continue
+            trade_symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
+            if symbol and trade_symbol != symbol:
                 continue
             trade["bars_open"] = int(trade.get("bars_open", 0)) + 1
             self._update_unrealized_pnl(trade, current_price)
@@ -192,6 +234,7 @@ class OrderManager:
                 trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
                 trade["unrealized_pnl"] = trade["pnl"]
                 trade["exit_type"] = events[-1]["type"] if events else "CLOSED"
+                self._update_memory_on_close(trade)
                 logger.info(f"[Paper] Closed | {trade_id} | total_pnl={trade['pnl']:+.4f}")
                 del self.open_trades[trade_id]
             changed = True
