@@ -319,10 +319,12 @@ class OrderManager:
             exit_price = float(live_fill["filled_price"])
             slippage_used = 0.0
         else:
-            slippage = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+            slippage_key = "LIVE_SLIPPAGE_ESTIMATE" if is_live else "PAPER_SLIPPAGE"
+            slippage = float(getattr(cfg, slippage_key, 0.0003))
             exit_price = raw_exit_price * (1 - direction * slippage)
             slippage_used = slippage
-        taker_fee = float(getattr(cfg, "PAPER_TAKER_FEE", 0.0005))
+        fee_key = "LIVE_TAKER_FEE" if is_live else "PAPER_TAKER_FEE"
+        taker_fee = float(getattr(cfg, fee_key, 0.0005))
         notional = float(trade.get("notional", trade.get("size", 0.0))) * portion
         qty = float(trade.get("qty", 0.0)) * portion
         pct_move = (exit_price - entry) / entry * direction
