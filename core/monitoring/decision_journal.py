@@ -4,27 +4,64 @@
 
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
+import json
+
+
+JOURNAL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "decision_journal.jsonl"
+JOURNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
 class DecisionJournal:
-    """Small in-memory journal for dashboard/debug visibility.
+    """Dashboard/debug journal with disk persistence.
 
-    It is intentionally lightweight: no database, no blocking I/O, and safe to
-    call from autoscan, signal generation, order execution, and exit handling.
+    Keeps a short in-memory ring for fast dashboard reads and appends every
+    event to data/decision_journal.jsonl so logs survive refreshes/restarts.
     """
 
-    def __init__(self, maxlen: int = 300):
+    def __init__(self, maxlen: int = 500):
         self._events = deque(maxlen=maxlen)
+        self._load_recent()
+
+    def _safe(self, value: Any):
+        try:
+            json.dumps(value, default=str)
+            return value
+        except Exception:
+            return str(value)
+
+    def _load_recent(self):
+        try:
+            if not JOURNAL_FILE.exists():
+                return
+            lines = JOURNAL_FILE.read_text(encoding="utf-8").splitlines()[-self._events.maxlen:]
+            for line in lines:
+                try:
+                    event = json.loads(line)
+                    if isinstance(event, dict):
+                        self._events.append(event)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _persist(self, event: Dict[str, Any]):
+        try:
+            with JOURNAL_FILE.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, default=str) + "\n")
+        except Exception:
+            pass
 
     def add(self, event_type: str, message: str, **data: Any) -> Dict[str, Any]:
         event = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "type": str(event_type),
             "message": str(message),
-            "data": data,
+            "data": {k: self._safe(v) for k, v in data.items()},
         }
         self._events.append(event)
+        self._persist(event)
         return event
 
     def autoscan(self, symbol: str, score: float = 0.0, trade: bool = False, side: str = None, reason: str = None, **data: Any):
