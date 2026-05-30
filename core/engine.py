@@ -55,6 +55,14 @@ class PrometheusEngine:
         self.running = True
         mode = "rotator" if self._rotator_enabled() else "single"
         logger.info(f"[Engine] PROMETHEUS starting | mode={cfg.TRADING_MODE}/{mode} | symbol={cfg.SYMBOL} | tf={cfg.TIMEFRAME}")
+        try:
+            real_fee = await self.exchange.get_taker_fee(cfg.SYMBOL)
+            if real_fee and real_fee > 0:
+                self.orders.real_taker_fee = float(real_fee)
+                logger.info(f"[Engine] Real taker fee from {cfg.EXCHANGE} for {cfg.SYMBOL}: {real_fee*100:.4f}%")
+                journal.add("engine", f"real taker fee {cfg.SYMBOL}={real_fee*100:.4f}%", taker_fee=real_fee, symbol=cfg.SYMBOL)
+        except Exception as e:
+            logger.warning(f"[Engine] Could not fetch real taker fee: {e}")
         journal.add("engine", f"start mode={cfg.TRADING_MODE}/{mode} exchange={cfg.EXCHANGE} symbol={cfg.SYMBOL} tf={cfg.TIMEFRAME}", mode=cfg.TRADING_MODE, rotator=mode, exchange=cfg.EXCHANGE, symbol=cfg.SYMBOL, timeframe=cfg.TIMEFRAME)
         await asyncio.gather(self._candle_loop(), self._slow_data_loop())
 
@@ -135,6 +143,7 @@ class PrometheusEngine:
 
         funding_rate = await self._get_funding(symbol)
         df.loc[df.index[-1], "funding_rate"] = funding_rate
+        orderbook = None
         try:
             ob = await self.exchange.get_orderbook(symbol, depth=20)
             bids = ob.get("bids", [])
@@ -143,6 +152,7 @@ class PrometheusEngine:
                 bid_vol = sum(float(b[1]) for b in bids[:10])
                 ask_vol = sum(float(a[1]) for a in asks[:10])
                 df.loc[df.index[-1], "ob_imbalance"] = (bid_vol - ask_vol) / (bid_vol + ask_vol + 1e-9)
+                orderbook = ob
         except Exception as e:
             logger.debug(f"[Engine] Orderbook fetch skipped for {symbol}: {e}")
 
@@ -186,6 +196,8 @@ class PrometheusEngine:
             "entry": entry_score,
             "fusion": signal.get("fusion_score", 0),
         }
+        if orderbook is not None:
+            signal["orderbook_top"] = {"bids": orderbook.get("bids", [])[:10], "asks": orderbook.get("asks", [])[:10]}
         journal.signal(symbol, signal, price=current_price, layer_scores=layer_scores, regime=regime_result.get("regime"), htf_bias=self._4h_bias, atr_norm=atr_norm, vol_zscore=vol_zscore)
         return {"symbol": symbol, "df": df, "price": current_price, "signal": signal, "layer_scores": layer_scores, "regime": regime_result}
 

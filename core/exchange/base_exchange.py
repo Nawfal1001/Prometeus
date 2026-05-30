@@ -104,6 +104,11 @@ class BaseExchange(ABC):
         """Set leverage for a symbol."""
         pass
 
+    async def get_taker_fee(self, symbol: str) -> float:
+        """Real taker fee rate for this account+symbol (e.g. 0.0005 for 5 bps).
+        Override in subclasses; default returns 0 so callers know it's unknown."""
+        return 0.0
+
     # ── Utilities ─────────────────────────────────────────────
 
     def get_name(self) -> str:

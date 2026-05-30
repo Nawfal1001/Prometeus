@@ -26,7 +26,44 @@ class OrderManager:
         self.memory = None
         self.open_trades = {}
         self._trade_counter = 0
+        self.real_taker_fee = None
         self._load_trades()
+
+    def _resolve_taker_fee(self, is_live: bool) -> float:
+        if self.real_taker_fee and self.real_taker_fee > 0:
+            return float(self.real_taker_fee)
+        fee_key = "LIVE_TAKER_FEE" if is_live else "PAPER_TAKER_FEE"
+        return float(getattr(cfg, fee_key, 0.0005))
+
+    @staticmethod
+    def _orderbook_slippage(ob_top: dict, side: str, qty: float):
+        if not ob_top:
+            return None
+        levels = ob_top.get("asks" if side == "buy" else "bids") or []
+        if not levels or qty <= 0:
+            return None
+        try:
+            top_price = float(levels[0][0])
+        except Exception:
+            return None
+        filled = 0.0
+        vwap_num = 0.0
+        for lvl in levels:
+            try:
+                price, vol = float(lvl[0]), float(lvl[1])
+            except Exception:
+                continue
+            take = min(vol, qty - filled)
+            if take <= 0:
+                break
+            vwap_num += take * price
+            filled += take
+            if filled >= qty:
+                break
+        if filled <= 0:
+            return None
+        vwap = vwap_num / filled
+        return abs(vwap - top_price) / max(top_price, 1e-9)
 
     def _save_trades(self):
         try:
@@ -134,7 +171,12 @@ class OrderManager:
         self._trade_counter += 1
         trade_id = f"PAPER-{self._trade_counter:04d}"
         direction = 1 if signal["side"] == "long" else -1
-        slippage = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+        side = "buy" if direction == 1 else "sell"
+        configured_slip = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+        ob_top = signal.get("orderbook_top")
+        provisional_qty = float(signal.get("qty", 0.0) or 0.0)
+        ob_slip = self._orderbook_slippage(ob_top, side, provisional_qty) if provisional_qty > 0 else None
+        slippage = float(ob_slip) if ob_slip is not None else configured_slip
         entry_price = price * (1 + direction * slippage)
         notional, qty, risk_amount, base_margin = self._sizing_from_signal(signal, entry_price)
         symbol = signal.get("symbol") or cfg.SYMBOL
@@ -182,10 +224,12 @@ class OrderManager:
             "distance_to_tp_pct": None,
             "distance_to_sl_pct": None,
             "signal": signal,
+            "ob_slip_used": slippage,
+            "ob_slip_source": "orderbook" if ob_slip is not None else "config",
         }
         self.open_trades[trade_id] = trade
         self._save_trades()
-        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {entry_price:.4f} (close={price:.4f}, slip={slippage*100:.3f}%) | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.4f} TP2={levels.tp2:.4f} SL={levels.stop_loss:.4f}")
+        logger.info(f"[Paper] Opened {symbol} {signal['side'].upper()} @ {entry_price:.4f} (close={price:.4f}, slip={slippage*100:.4f}% from {trade['ob_slip_source']}) | notional=${notional:.2f} qty={qty:.8f} risk=${risk_amount:.2f} | id={trade_id} | TP1={levels.tp1:.4f} TP2={levels.tp2:.4f} SL={levels.stop_loss:.4f}")
         return {"status": "filled", "trade_id": trade_id, "symbol": symbol, "price": entry_price, "notional": notional, "qty": qty, "risk_amount": risk_amount, "stop_loss": levels.stop_loss, "tp1": levels.tp1, "tp2": levels.tp2}
 
     async def _live_execute(self, signal: dict, price: float, bar_time=None) -> dict:
@@ -322,12 +366,15 @@ class OrderManager:
             exit_price = float(live_fill["filled_price"])
             slippage_used = 0.0
         else:
-            slippage_key = "LIVE_SLIPPAGE_ESTIMATE" if is_live else "PAPER_SLIPPAGE"
-            slippage = float(getattr(cfg, slippage_key, 0.0003))
+            stored_slip = trade.get("ob_slip_used")
+            if stored_slip is not None and not is_live:
+                slippage = float(stored_slip)
+            else:
+                slippage_key = "LIVE_SLIPPAGE_ESTIMATE" if is_live else "PAPER_SLIPPAGE"
+                slippage = float(getattr(cfg, slippage_key, 0.0003))
             exit_price = raw_exit_price * (1 - direction * slippage)
             slippage_used = slippage
-        fee_key = "LIVE_TAKER_FEE" if is_live else "PAPER_TAKER_FEE"
-        taker_fee = float(getattr(cfg, fee_key, 0.0005))
+        taker_fee = self._resolve_taker_fee(is_live)
         notional = float(trade.get("notional", trade.get("size", 0.0))) * portion
         qty = float(trade.get("qty", 0.0)) * portion
         pct_move = (exit_price - entry) / entry * direction
