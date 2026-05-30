@@ -85,12 +85,15 @@ class RegimeDetector:
                 scores.append(0)
 
         bar_id = len(df) - 1
-        if len(df) >= 48:
-            returns      = df["close"].pct_change()
-            recent_vol   = returns.rolling(10).std().iloc[-1]
-            baseline_vol = returns.rolling(48).std().iloc[-1]
-            baseline_std = returns.rolling(48).std().std()
-            vol_z = (recent_vol - baseline_vol) / max(baseline_std, 1e-9)
+        if len(df) >= 148:
+            returns = df["close"].pct_change()
+            rolling_vol = returns.rolling(48).std()
+            recent_vol = returns.rolling(10).std().iloc[-1]
+            baseline_vol = rolling_vol.iloc[-1]
+            baseline_std = rolling_vol.rolling(100).std().iloc[-1]
+            if not np.isfinite(baseline_std) or baseline_std <= 0:
+                baseline_std = rolling_vol.iloc[-100:].std()
+            vol_z = (recent_vol - baseline_vol) / max(float(baseline_std), 1e-9)
             abs_threshold = float(getattr(cfg, "REGIME_CHAOS_VOLATILITY", 0.05))
             is_chaos = (
                 recent_vol > abs_threshold
