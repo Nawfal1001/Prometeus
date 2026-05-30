@@ -6,6 +6,8 @@ import numpy as np
 from loguru import logger
 import config.settings as cfg
 
+WEIGHT_SUM_TOLERANCE = 0.02
+
 
 class FusionEngine:
 
@@ -20,7 +22,7 @@ class FusionEngine:
         self.last_result = {}
         self._entry_signal = None
         _wsum = sum(self.weights.values())
-        if abs(_wsum - 1.0) > 0.05:
+        if abs(_wsum - 1.0) > WEIGHT_SUM_TOLERANCE:
             logger.warning(
                 f"[Fusion] Weight sum={_wsum:.3f} (expected ~1.0) — "
                 f"normalization will be applied. Check Settings > Layer Weights."
@@ -67,7 +69,7 @@ class FusionEngine:
         vol_ratio = val("vol_ratio", 1.0)
         vol_delta = val("vol_delta", 0.0)
         obv_norm = val("obv_norm", 0.0)
-        atr_norm = val("atr_norm", 0.0)
+        atr_norm = val("atr_norm", getattr(cfg, "MIN_ATR_NORM", 0.001))
         vol_regime = val("vol_regime", 1.0)
         vol_zscore = val("vol_zscore", 0.0)
 
@@ -108,6 +110,7 @@ class FusionEngine:
             htf_bias=htf_bias,
             session_mult=1.0,
             threshold_mult=threshold_mult,
+            atr_norm=atr_norm,
         )
 
         rr_ratio = result.get("rr_ratio")
@@ -125,7 +128,7 @@ class FusionEngine:
         self.last_result = result
         return result
 
-    def fuse(self, regime_score: float, sentiment_score: float, whale_score: float, liquidation_score: float, entry_score: float, regime_bias: int = 0, current_price: float = 0.0, liquidation_target: float = None, htf_bias: int = 0, session_mult: float = 1.0, threshold_mult: float = 1.0, current_capital: float = None) -> dict:
+    def fuse(self, regime_score: float, sentiment_score: float, whale_score: float, liquidation_score: float, entry_score: float, regime_bias: int = 0, current_price: float = 0.0, liquidation_target: float = None, htf_bias: int = 0, session_mult: float = 1.0, threshold_mult: float = 1.0, current_capital: float = None, atr_norm: float = None) -> dict:
         if regime_bias is None:
             logger.warning("[Fusion] CHAOS regime → NO TRADE")
             return self._no_trade("chaos_regime")
@@ -161,7 +164,7 @@ class FusionEngine:
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
-        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.2))
+        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
         rr_ratio = tp2_mult / max(sl_mult, 1e-9)
         if rr_ratio < min_rr:
@@ -169,12 +172,13 @@ class FusionEngine:
             result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "rr_ratio": round(rr_ratio, 2)})
             return result
 
-        position_size = self._kelly_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
+        position_size = self._confidence_scaled_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
         stop_loss = take_profit = None
         if current_price > 0:
-            atr_norm = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
-            stop_loss = current_price * (1 - direction * atr_norm * sl_mult)
-            take_profit = current_price * (1 + direction * atr_norm * tp2_mult)
+            atr_floor = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
+            atr_for_exits = max(float(atr_norm or atr_floor), atr_floor)
+            stop_loss = current_price * (1 - direction * atr_for_exits * sl_mult)
+            take_profit = current_price * (1 + direction * atr_for_exits * tp2_mult)
         result = {
             "trade": True,
             "direction": direction,
@@ -195,7 +199,7 @@ class FusionEngine:
         self.last_result = result
         return result
 
-    def _kelly_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
+    def _confidence_scaled_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
         capital = float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL)
         threshold = float(threshold if threshold is not None else getattr(cfg, "FUSION_THRESHOLD", 0.17))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
@@ -205,15 +209,20 @@ class FusionEngine:
         confidence_mult = float(np.clip(confidence_mult, 0.35, 1.50))
         return capital * risk_frac * leverage * confidence_mult
 
+    def _kelly_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
+        # Backward-compatible alias. This is confidence-scaled sizing, not Kelly criterion.
+        return self._confidence_scaled_size(confidence, current_capital=current_capital, threshold=threshold)
+
     def _no_trade(self, reason: str) -> dict:
         return {"trade": False, "direction": 0, "side": None, "fusion_score": 0.0, "score": 0.0, "confidence": 0.0, "position_size": 0.0, "rr": None, "risk_reward": None, "reason": reason}
 
     def reload_weights(self):
         self.weights = {"regime": cfg.WEIGHT_REGIME, "sentiment": cfg.WEIGHT_SENTIMENT, "whale": cfg.WEIGHT_WHALE, "liquidation": cfg.WEIGHT_LIQUIDATION, "entry": cfg.WEIGHT_ENTRY}
         total = sum(self.weights.values())
-        if abs(total - 1.0) > 0.02:
+        if abs(total - 1.0) > WEIGHT_SUM_TOLERANCE:
             logger.warning(f"[Fusion] Weight sum drift detected: sum={total:.4f} weights={self.weights}")
         logger.info(f"[Fusion] Weights reloaded: {self.weights} sum={total:.4f}")
+
 
 def _fusion_update_live_capital(self, capital: float):
     try:
