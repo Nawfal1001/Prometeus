@@ -252,11 +252,13 @@ class LiveRobustnessOptimizer:
             pass
 
     def _build_result(self) -> dict:
+        top_10 = sorted(self.trial_results, key=lambda x: x.get("score", -999), reverse=True)[:10]
         return {
             "mode": "live_robustness_" + self._mode,
             "best_value": self.best_value,
             "best_params": self.best_params,
             "trial_results": self.trial_results[-50:],
+            "top_10": top_10,
             "metric": "live_robustness",
             "trials": len(self.study.trials) if self.study else 0,
             "symbols_loaded": list((self._multi_prepared_data or {}).keys()),

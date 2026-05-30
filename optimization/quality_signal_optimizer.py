@@ -244,11 +244,13 @@ class QualitySignalOptimizer:
             pass
 
     def _build_result(self) -> dict:
+        top_10 = sorted(self.trial_results, key=lambda x: x.get("score", -999), reverse=True)[:10]
         return {
             "mode": "signal_quality_" + self._mode,
             "best_value": self.best_value,
             "best_params": self.best_params,
             "trial_results": self.trial_results[-50:],
+            "top_10": top_10,
             "metric": "signal_quality",
             "trials": len(self.study.trials) if self.study else 0,
             "symbols_loaded": list((self._multi_prepared_data or {}).keys()),
