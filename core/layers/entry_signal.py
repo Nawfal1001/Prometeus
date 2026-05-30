@@ -27,12 +27,6 @@ class EntrySignal:
             self._xgb = None
 
     def evaluate(self, row) -> float:
-        """
-        Canonical live entry scorer.
-        Accepts either a single feature row or a full feature dataframe.
-        The live engine passes a dataframe; using the last row here prevents
-        pandas Series conversion errors from silently zeroing the entry layer.
-        """
         if hasattr(row, "columns") and hasattr(row, "iloc"):
             if len(row) == 0:
                 return 0.0
@@ -95,9 +89,19 @@ class EntrySignal:
 
         if W <= 0:
             return 0.0
+
         avg = float(np.sum(scores) / max(1e-9, W))
+        avg = float(np.clip(avg, -1, 1))
+
         vol_regime = float(row.get("vol_regime", 1.0) or 1.0)
-        return float(np.clip(avg * vol_regime, -1, 1))
+
+        if vol_regime > 1.0:
+            boost = 1.0 + (vol_regime - 1.0) * 0.5
+            score = avg * boost
+        else:
+            score = avg * vol_regime
+
+        return float(np.clip(score, -1, 1))
 
 
 entry_signal = EntrySignal()
