@@ -157,10 +157,14 @@ class AlpacaExchange(BaseExchange):
                 "order_id":    str(order.id),
                 "status":      str(order.status),
                 "filled_price": float(order.filled_avg_price or 0),
+                "filled_qty": float(getattr(order, "filled_qty", 0) or 0),
+                "cost": float((getattr(order, "filled_qty", 0) or 0)) * float(order.filled_avg_price or 0),
+                "fee_cost": 0.0,
+                "fee_currency": "USD",
             }
         except Exception as e:
             logger.error(f"[Alpaca] place_order: {e}")
-            return {"order_id": None, "status": "error", "filled_price": 0}
+            return {"order_id": None, "status": "error", "filled_price": 0, "fee_cost": 0.0, "fee_currency": None}
 
     async def cancel_order(self, symbol, order_id):
         try:

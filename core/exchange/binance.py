@@ -199,14 +199,29 @@ class BinanceExchange(BaseExchange):
                     return {"order_id": None, "status": "skipped_spot_short", "filled_price": 0}
 
             order = await self._client.create_order(symbol, order_type, side, size, price, params)
+            fee_cost = 0.0
+            fee_currency = None
+            fee = order.get("fee") or {}
+            if fee.get("cost") is not None:
+                fee_cost = float(fee.get("cost") or 0)
+                fee_currency = fee.get("currency")
+            else:
+                for f in (order.get("fees") or []):
+                    if f.get("cost") is not None:
+                        fee_cost += float(f.get("cost") or 0)
+                        fee_currency = fee_currency or f.get("currency")
             return {
                 "order_id":    order["id"],
                 "status":      order["status"],
                 "filled_price": order.get("average") or order.get("price", 0),
+                "filled_qty": float(order.get("filled") or 0),
+                "cost": float(order.get("cost") or 0),
+                "fee_cost": fee_cost,
+                "fee_currency": fee_currency,
             }
         except Exception as e:
             logger.error(f"[Binance] place_order: {e}")
-            return {"order_id": None, "status": "error", "filled_price": 0}
+            return {"order_id": None, "status": "error", "filled_price": 0, "fee_cost": 0.0, "fee_currency": None}
 
     async def cancel_order(self, symbol, order_id):
         try:
