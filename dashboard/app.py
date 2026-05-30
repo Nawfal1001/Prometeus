@@ -21,6 +21,7 @@ from config.settings import save_user_settings, load_user_settings
 from optimization.optimizer import PrometheusOptimizer
 from optimization.walkforward_optimizer import WalkForwardOptimizer
 from optimization.quality_signal_optimizer import QualitySignalOptimizer
+from optimization.live_robustness_optimizer import LiveRobustnessOptimizer
 from dashboard.api_scanner import router as scanner_router
 from dashboard.api_backtest_multi import router as backtest_multi_router
 from dashboard.api_optimize_multi import router as optimize_multi_router
@@ -280,8 +281,12 @@ def _run_walkforward_sync(df, train_bars, test_bars, step_bars, trials, metric, 
     return WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout).run()
 
 
-def _run_quality_optimizer_sync(df, trials, timeout, progress_callback=None):
-    return QualitySignalOptimizer(df=df, n_trials=trials, timeout=timeout, progress_callback=progress_callback).run()
+def _run_quality_optimizer_sync(df, trials, timeout, progress_callback=None, data=None, mode="single"):
+    return QualitySignalOptimizer(df=df, n_trials=trials, timeout=timeout, progress_callback=progress_callback).run(data=data, mode=mode)
+
+
+def _run_live_robustness_optimizer_sync(df, trials, timeout, progress_callback=None, data=None, mode="single"):
+    return LiveRobustnessOptimizer(df=df, n_trials=trials, timeout=timeout, progress_callback=progress_callback).run(data=data, mode=mode)
 
 
 async def _run_quality_optimization_job(params: dict):
@@ -337,6 +342,90 @@ async def _run_quality_optimization_job(params: dict):
         logger.exception("Signal quality optimization failed")
         _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "error", "message": str(e)}, "error": str(e)})
         ui_log(f"Signal quality optimization failed | {e}", "error")
+        await broadcast({"type": "optimization", "status": "error", "error": str(e)})
+
+
+async def _run_live_robustness_optimization_job(params: dict):
+    global _main_loop
+    loop = asyncio.get_running_loop()
+    _main_loop = loop
+    run_mode = str(params.get("run_mode", params.get("mode", "compete"))).lower()
+    is_multi = run_mode in ("multi", "compare", "compete", "competition", "rotator") or bool(params.get("symbols"))
+    trials = min(int(params.get("trials", cfg.OPTUNA_TRIALS)), 200)
+    _opt_status.update({
+        "running": True, "cancel_requested": False, "started_at": datetime.utcnow().isoformat(), "finished_at": None,
+        "error": None, "result": None, "params": params,
+        "progress": {"phase": "fetching_data", "message": "Fetching market data for live robustness optimizer..."},
+        "progress_pct": 0, "current_step": 0, "total_steps": trials,
+    })
+    await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
+    try:
+        timeframe = params.get("timeframe", cfg.TIMEFRAME)
+        candles = int(params.get("candles", getattr(cfg, "OPTUNA_DATA_CANDLES", 1500)))
+        timeout = min(int(params.get("timeout", cfg.OPTUNA_TIMEOUT_SEC)), 3600)
+        max_symbols = int(getattr(cfg, "MAX_UI_SYMBOLS", 9))
+
+        def progress_callback(**payload):
+            trial_num = int(payload.get("trial_num") or 0)
+            total = int(payload.get("total") or trials or 1)
+            pct = round((trial_num / total) * 100, 2) if total else 0
+            progress = {"phase": "running", "trial_num": trial_num, "total": total, "best_value": payload.get("best_value", 0), "best_params": payload.get("best_params", {}), "trial_results": payload.get("trial_results", {}), "progress_pct": pct, "message": f"Live robustness trial {trial_num}/{total}"}
+            _opt_status.update({"progress": progress, "progress_pct": pct, "current_step": trial_num, "total_steps": total})
+            ui_log(f"Live robustness trial {trial_num}/{total} | best={payload.get('best_value', 0)}")
+            _broadcast_from_any_thread({"type": "optimization", "status": "progress", "progress": progress})
+
+        if not is_multi:
+            symbol = params.get("symbol", cfg.SYMBOL)
+            ui_log(f"Live robustness optimization starting | mode=single symbol={symbol} tf={timeframe} trials={trials}")
+            df = await _fetch_ohlcv(symbol, timeframe, candles)
+            if df is None or df.empty:
+                raise RuntimeError("No data returned from exchange")
+            result = await loop.run_in_executor(executor, lambda: _run_live_robustness_optimizer_sync(df, trials, timeout, progress_callback, mode="single"))
+        else:
+            symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
+            ui_log(f"Live robustness optimization starting | mode={run_mode} symbols={symbols} tf={timeframe} trials={trials}")
+            from core.exchange.factory import get_exchange
+            exchange = get_exchange()
+            data_by_symbol = {}
+            try:
+                for idx, symbol in enumerate(symbols, start=1):
+                    progress = {"phase": "fetching_data", "message": f"Fetching {symbol} ({idx}/{len(symbols)})", "progress_pct": round((idx - 1) / max(len(symbols), 1) * 10, 2)}
+                    _opt_status.update({"progress": progress, "progress_pct": progress["progress_pct"]})
+                    await broadcast({"type": "optimization", "status": "progress", "progress": progress})
+                    df = await get_cached_ohlcv(exchange, symbol, timeframe, candles)
+                    if df is not None and not df.empty:
+                        data_by_symbol[symbol] = df
+                    else:
+                        ui_log(f"No data returned for {symbol}", "warning")
+            finally:
+                closer = getattr(exchange, "close", None)
+                if closer:
+                    maybe = closer()
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+            if not data_by_symbol:
+                raise RuntimeError("No symbol data returned from exchange")
+            result = await loop.run_in_executor(executor, lambda: _run_live_robustness_optimizer_sync(next(iter(data_by_symbol.values())), trials, timeout, progress_callback, data=data_by_symbol, mode="compete"))
+            result.update({"optimizer_mode": "compete", "selection_logic": "live_paper_rotator_robustness", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
+
+        if _opt_status.get("cancel_requested"):
+            _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "cancelled", "message": "Cancelled"}})
+            await broadcast({"type": "optimization", "status": "cancelled", "progress": _opt_status["progress"]})
+            return
+
+        result.update({"timeframe": timeframe, "candles": candles, "trials": trials, "timeout": timeout})
+        if params.get("auto_apply") and result.get("best_params"):
+            save_user_settings(result["best_params"])
+            reload_runtime_settings()
+            result["auto_applied"] = True
+        _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "done", "trial_num": trials, "total": trials, "progress_pct": 100, "message": "Live robustness optimization done"}, "progress_pct": 100, "current_step": trials, "total_steps": trials, "result": result})
+        _state["optimization"] = result
+        ui_log(f"Live robustness optimization finished | best={result.get('best_value')}")
+        await broadcast({"type": "optimization", "status": "done", "result": result})
+    except Exception as e:
+        logger.exception("Live robustness optimization failed")
+        _opt_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "progress": {"phase": "error", "message": str(e)}, "error": str(e)})
+        ui_log(f"Live robustness optimization failed | {e}", "error")
         await broadcast({"type": "optimization", "status": "error", "error": str(e)})
 
 
@@ -472,6 +561,11 @@ async def backtest_page(request: Request):
 @app.get("/optimize", response_class=HTMLResponse)
 async def optimize_page(request: Request):
     return templates.TemplateResponse("optimize.html", {"request": request})
+
+
+@app.get("/robust-optimize", response_class=HTMLResponse)
+async def robust_optimize_page(request: Request):
+    return templates.TemplateResponse("robust_optimize.html", {"request": request})
 
 
 @app.get("/lab", response_class=HTMLResponse)
@@ -612,6 +706,18 @@ async def run_quality_optimization_background(request: Request):
     body["run_mode"] = "signal_quality"
     _opt_task = asyncio.create_task(_run_quality_optimization_job(body))
     return {"status": "started", "message": "Signal quality optimization started. Poll /api/optimize/status."}
+
+
+@app.post("/api/optimize/robust/run")
+async def run_live_robustness_optimization_background(request: Request):
+    global _opt_task
+    if _opt_status["running"]:
+        return JSONResponse({"error": "Optimization already running", "status": _opt_status}, status_code=409)
+    body = await request.json()
+    body["run_mode"] = body.get("run_mode") or "compete"
+    body["metric"] = "live_robustness"
+    _opt_task = asyncio.create_task(_run_live_robustness_optimization_job(body))
+    return {"status": "started", "message": "Live robustness optimization started. Poll /api/optimize/status."}
 
 
 @app.get("/api/optimize/status")
