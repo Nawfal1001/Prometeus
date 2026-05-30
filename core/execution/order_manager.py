@@ -212,6 +212,7 @@ class OrderManager:
         filled_price = float(result.get("filled_price") or price)
         if filled_price <= 0:
             filled_price = price
+        entry_fee = float(result.get("fee_cost") or 0.0)
 
         self._trade_counter += 1
         trade_id = f"LIVE-{self._trade_counter:04d}"
@@ -260,6 +261,8 @@ class OrderManager:
             "signal": signal,
             "is_live": True,
             "exchange_entry_order_id": result.get("order_id"),
+            "entry_fee": entry_fee,
+            "fee_currency": result.get("fee_currency"),
             "fees_paid": 0.0,
         }
         self.open_trades[trade_id] = trade
@@ -329,7 +332,15 @@ class OrderManager:
         qty = float(trade.get("qty", 0.0)) * portion
         pct_move = (exit_price - entry) / entry * direction
         gross_pnl = notional * pct_move
-        fees = notional * taker_fee * 2.0
+
+        entry_fee_portion = float(trade.get("entry_fee", 0.0)) * portion if is_live else notional * taker_fee
+        if is_live and live_fill is not None and float(live_fill.get("fee_cost") or 0) > 0:
+            exit_fee = float(live_fill["fee_cost"])
+        else:
+            exit_fee = notional * taker_fee
+        if is_live and float(trade.get("entry_fee", 0.0)) <= 0:
+            entry_fee_portion = notional * taker_fee
+        fees = entry_fee_portion + exit_fee
         pnl = gross_pnl - fees
         trade["notional_remaining"] = max(0.0, float(trade.get("notional_remaining", trade.get("size_remaining", trade.get("size", 0.0)))) - notional)
         trade["qty_remaining"] = max(0.0, float(trade.get("qty_remaining", trade.get("qty", 0.0))) - qty)
