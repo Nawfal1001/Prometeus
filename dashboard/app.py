@@ -276,7 +276,7 @@ def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None, dat
 
 
 def _run_walkforward_sync(df, train_bars, test_bars, step_bars, trials, metric, timeout):
-    return WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout).run()
+    return WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout).run()
 
 
 async def _run_optimization_job(params: dict):
