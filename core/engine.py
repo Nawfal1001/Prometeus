@@ -401,7 +401,24 @@ class PrometheusEngine:
             return 0.0
 
     async def _broadcast_state(self, price, signal, layer_scores, regime):
-        state_update = {"type": "state", "data": {"status": cfg.TRADING_MODE, "market_type": cfg.MARKET_TYPE, "exchange": cfg.EXCHANGE, "last_price": price, "regime": regime.get("regime"), "fear_greed": regime.get("fear_greed"), "funding_rate": regime.get("funding_rate"), "htf_bias": self._4h_bias, "last_signal": signal if signal.get("trade") else signal, "rotator_ranked": [{"symbol": r.get("symbol"), "score": r.get("final_score"), "raw_score": r.get("score"), "trade": r.get("signal", {}).get("trade"), "side": r.get("signal", {}).get("side"), "reason": r.get("signal", {}).get("reason"), "confidence": r.get("signal", {}).get("confidence"), "notional": r.get("signal", {}).get("notional"), "risk_amount": r.get("signal", {}).get("risk_amount")} for r in self._rotator_ranked[:10]], "layer_scores": layer_scores, "stats": self.orders.get_stats(), "open_trades": self.orders.get_open_trades(), "trade_log": self.orders.risk.trade_history[-50:], "decision_log": journal.list(160)}}
+        rotator_payload = []
+        for r in self._rotator_ranked[:10]:
+            sig = r.get("signal", {}) or {}
+            rotator_payload.append({
+                "symbol": r.get("symbol"),
+                "score": r.get("final_score"),
+                "raw_score": r.get("score"),
+                "trade": sig.get("trade"),
+                "side": sig.get("side"),
+                "reason": sig.get("reason"),
+                "confidence": sig.get("confidence"),
+                "fusion_score": sig.get("fusion_score"),
+                "rr_ratio": sig.get("rr_ratio"),
+                "price": r.get("price"),
+                "notional": sig.get("notional"),
+                "risk_amount": sig.get("risk_amount"),
+            })
+        state_update = {"type": "state", "data": {"status": cfg.TRADING_MODE, "market_type": cfg.MARKET_TYPE, "exchange": cfg.EXCHANGE, "last_price": price, "regime": regime.get("regime"), "fear_greed": regime.get("fear_greed"), "funding_rate": regime.get("funding_rate"), "htf_bias": self._4h_bias, "last_signal": signal if signal.get("trade") else signal, "rotator_ranked": rotator_payload, "layer_scores": layer_scores, "stats": self.orders.get_stats(), "open_trades": self.orders.get_open_trades(), "trade_log": self.orders.risk.trade_history[-50:], "decision_log": journal.list(160)}}
         try:
             await self.broadcast(state_update)
         except Exception:

@@ -572,7 +572,8 @@ async def optimize_page(request: Request):
 @app.get("/log-trade", response_class=HTMLResponse)
 async def log_trade_page(request: Request):
     return templates.TemplateResponse("log_trade.html", {"request": request})
-    
+
+
 @app.get("/robust-optimize", response_class=HTMLResponse)
 async def robust_optimize_page(request: Request):
     return templates.TemplateResponse("robust_optimize.html", {"request": request})
@@ -591,11 +592,6 @@ async def train_page(request: Request):
 @app.get("/health-dashboard", response_class=HTMLResponse)
 async def health_dashboard(request: Request):
     return templates.TemplateResponse("health.html", {"request": request})
-
-
-@app.get("/log-trade", response_class=HTMLResponse)
-async def log_trade_page(request: Request):
-    return templates.TemplateResponse("log_trade.html", {"request": request})
 
 
 @app.get("/health")
