@@ -8,9 +8,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
+CONFIG_DIR = BASE_DIR / "config"
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = Path(os.getenv("PROMETHEUS_SETTINGS_FILE", DATA_DIR / "user_settings.json"))
+OPTIMIZED_PARAMS_FILE = Path(os.getenv("PROMETHEUS_OPTIMIZED_PARAMS_FILE", CONFIG_DIR / "optimized_params.json"))
 
 
 def _env(key, default=None):
@@ -25,15 +27,23 @@ def _first_env(*keys, default=""):
     return default
 
 
-def load_user_settings() -> dict:
-    if SETTINGS_FILE.exists():
+def _load_json_file(path: Path) -> dict:
+    if path.exists():
         try:
-            with open(SETTINGS_FILE, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
                 return data if isinstance(data, dict) else {}
         except Exception:
             return {}
     return {}
+
+
+def load_optimized_params() -> dict:
+    return _load_json_file(OPTIMIZED_PARAMS_FILE)
+
+
+def load_user_settings() -> dict:
+    return _load_json_file(SETTINGS_FILE)
 
 
 def save_user_settings(data: dict):
@@ -50,15 +60,26 @@ def save_user_settings(data: dict):
 
 
 def get(key, default=None):
+    env_value = _env(key, None)
+    if env_value not in (None, ""):
+        return env_value
     user = load_user_settings()
-    return user[key] if key in user else _env(key, default)
+    if key in user:
+        return user[key]
+    optimized = load_optimized_params()
+    if key in optimized:
+        return optimized[key]
+    return default
 
 
 def get_secret(key, *aliases, default=""):
+    env_value = _first_env(key, *aliases, default="")
+    if env_value not in (None, ""):
+        return env_value
     user = load_user_settings()
     if key in user and user[key] not in (None, ""):
         return user[key]
-    return _first_env(key, *aliases, default=default)
+    return default
 
 
 def get_bool(key, default="false"):
@@ -79,12 +100,19 @@ def get_float(key, default):
         return float(default)
 
 
+def get_list(key, default=""):
+    value = get(key, default)
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [x.strip() for x in str(value or "").split(",") if x.strip()]
+
+
 def reload_from_sources():
     global EXCHANGE, MARKET_TYPE, TRADING_MODE, MARGIN_MODE
     global BINANCE_API_KEY, BINANCE_SECRET, BINANCE_TESTNET
     global BYBIT_API_KEY, BYBIT_SECRET, BYBIT_TESTNET
     global ALPACA_API_KEY, ALPACA_SECRET, ALPACA_PAPER
-    global SYMBOL, TIMEFRAME, LEVERAGE, INITIAL_CAPITAL, MAX_RISK_PER_TRADE
+    global SYMBOL, SYMBOLS, PAPER_SYMBOLS, TIMEFRAME, LEVERAGE, INITIAL_CAPITAL, MAX_RISK_PER_TRADE
     global MAX_DAILY_DRAWDOWN, MAX_TRADES_PER_DAY, FUSION_THRESHOLD, MIN_RR_RATIO
     global STOP_LOSS_PCT, TAKE_PROFIT_PCT
     global ATR_SL_MULT, ATR_TP1_MULT, ATR_TP2_MULT, TP1_EXIT_PCT, TP2_EXIT_PCT
@@ -103,7 +131,9 @@ def reload_from_sources():
     global LIQUIDATION_GRAVITY_MIN, LIQUIDATION_PROXIMITY_PCT
     global OPTUNA_TRIALS, OPTUNA_TIMEOUT_SEC, OPTUNA_METRIC, OPTUNA_DATA_CANDLES
     global OPTUNA_TIMEFRAME, OPTUNA_PRUNING, OPTUNA_DIRECTION, OPTUNA_TARGET_CAPITAL
-    global RAW_PROFIT_MODE, ADAPTIVE_RISK_MODE
+    global RAW_PROFIT_MODE, ADAPTIVE_RISK_MODE, AUTO_SYMBOL_SELECTION
+    global AUTOSCAN_INTERVAL_SEC, AUTOSCAN_TOP_N, ROTATOR_MIN_SCORE, ROTATOR_TRADE_ONLY_TOP_N, TRADE_ON_CANDLE_CLOSE
+    global MEMORY_ENABLED, MEMORY_WEIGHT, MEMORY_MIN_TRADES, MEMORY_FILE, MEMORY_PERSIST
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
     global ALERT_ON_SIGNAL, ALERT_ON_TRADE, ALERT_ON_DAILY_SUMMARY, ALERT_ON_OPTIMIZATION
     global PORT, LOG_LEVEL
@@ -124,6 +154,8 @@ def reload_from_sources():
     ALPACA_PAPER = get_bool("ALPACA_PAPER", "true")
 
     SYMBOL = get("SYMBOL", "BTC/USDT")
+    SYMBOLS = get_list("SYMBOLS", SYMBOL)
+    PAPER_SYMBOLS = get_list("PAPER_SYMBOLS", ",".join(SYMBOLS or [SYMBOL]))
     TIMEFRAME = get("TIMEFRAME", "30m")
     LEVERAGE = get_int("LEVERAGE", 3)
     INITIAL_CAPITAL = get_float("INITIAL_CAPITAL", 50)
@@ -207,6 +239,17 @@ def reload_from_sources():
     RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "true")
     ADAPTIVE_RISK_MODE = get_bool("ADAPTIVE_RISK_MODE", "true")
     AUTO_SYMBOL_SELECTION = get_bool("AUTO_SYMBOL_SELECTION", "false")
+    AUTOSCAN_INTERVAL_SEC = get_int("AUTOSCAN_INTERVAL_SEC", 900)
+    AUTOSCAN_TOP_N = get_int("AUTOSCAN_TOP_N", 5)
+    ROTATOR_MIN_SCORE = get_float("ROTATOR_MIN_SCORE", 0.50)
+    ROTATOR_TRADE_ONLY_TOP_N = get_int("ROTATOR_TRADE_ONLY_TOP_N", 3)
+    TRADE_ON_CANDLE_CLOSE = get_bool("TRADE_ON_CANDLE_CLOSE", "true")
+
+    MEMORY_ENABLED = get_bool("MEMORY_ENABLED", "true")
+    MEMORY_WEIGHT = get_float("MEMORY_WEIGHT", 0.15)
+    MEMORY_MIN_TRADES = get_int("MEMORY_MIN_TRADES", 3)
+    MEMORY_FILE = get("MEMORY_FILE", str(DATA_DIR / "symbol_memory.json"))
+    MEMORY_PERSIST = get_bool("MEMORY_PERSIST", "true")
 
     TELEGRAM_BOT_TOKEN = get_secret("TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID = get_secret("TELEGRAM_CHAT_ID")
