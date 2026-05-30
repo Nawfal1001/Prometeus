@@ -173,7 +173,7 @@ def reload_from_sources():
 
     ATR_SL_MULT = get_float("ATR_SL_MULT", 1.2)
     ATR_TP1_MULT = get_float("ATR_TP1_MULT", 1.2)
-    ATR_TP2_MULT = get_float("ATR_TP2_MULT", 2.2)
+    ATR_TP2_MULT = get_float("ATR_TP2_MULT", 2.4)
     TP1_EXIT_PCT = get_float("TP1_EXIT_PCT", 0.65)
     TP2_EXIT_PCT = get_float("TP2_EXIT_PCT", 0.35)
     MAX_TRADE_DURATION_BARS = get_int("MAX_TRADE_DURATION_BARS", 28)
