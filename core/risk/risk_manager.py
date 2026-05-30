@@ -29,7 +29,7 @@ class RiskManager:
             self._consec_losses = 0
             logger.info("[Risk] New trading day - counters reset")
 
-    def can_trade(self) -> tuple:
+    def can_trade(self, open_trades=None, signal=None) -> tuple:
         self._reset_if_new_day()
 
         if self.daily_trades >= cfg.MAX_TRADES_PER_DAY:
