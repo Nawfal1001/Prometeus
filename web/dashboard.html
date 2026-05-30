@@ -5,206 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Prometheus Dashboard</title>
   <style>
-    :root {
-      --bg: #071018;
-      --panel: #101b26;
-      --panel2: #0c1620;
-      --text: #e8f1f8;
-      --muted: #8fa4b8;
-      --green: #25d695;
-      --red: #ff5c7a;
-      --yellow: #ffd166;
-      --blue: #5ab0ff;
-      --border: rgba(255,255,255,.08);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif; background: radial-gradient(circle at top, #102234, var(--bg)); color: var(--text); }
-    header { padding: 18px 22px; border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; gap:12px; align-items:center; }
-    h1 { margin: 0; font-size: 22px; letter-spacing:.4px; }
-    .status { color: var(--muted); font-size: 13px; }
-    main { padding: 18px; display: grid; gap: 16px; }
-    .grid { display:grid; gap:16px; }
-    .grid.kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-    .grid.two { grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr); }
-    @media(max-width: 850px) { .grid.two { grid-template-columns: 1fr; } }
-    .card { background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015)); border:1px solid var(--border); border-radius:18px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.22); }
-    .kpi .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
-    .kpi .value { font-size:28px; font-weight:750; margin-top:6px; }
-    .kpi .sub { color:var(--muted); font-size:12px; margin-top:3px; }
-    h2 { margin:0 0 12px; font-size:16px; }
-    table { width:100%; border-collapse: collapse; }
-    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--border); font-size:13px; }
-    th { color:var(--muted); font-weight:600; }
-    .pill { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; background:rgba(255,255,255,.06); font-size:12px; }
-    .long { color:var(--green); }
-    .short { color:var(--red); }
-    .muted { color:var(--muted); }
-    .bar { height:8px; background:rgba(255,255,255,.08); border-radius:99px; overflow:hidden; min-width:80px; }
-    .bar > i { display:block; height:100%; background:linear-gradient(90deg,var(--red),var(--yellow),var(--green)); width:0%; }
-    .angles { display:grid; grid-template-columns:repeat(auto-fit,minmax(125px,1fr)); gap:12px; }
-    .angle { background:var(--panel2); border:1px solid var(--border); border-radius:14px; padding:12px; }
-    .angle .name { color:var(--muted); font-size:12px; }
-    .angle .score { font-size:22px; margin-top:4px; font-weight:700; }
-    .angle .src { color:var(--muted); font-size:11px; margin-top:2px; }
-    textarea { width:100%; min-height:110px; background:#050b10; color:var(--text); border:1px solid var(--border); border-radius:12px; padding:10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    button { background:var(--blue); color:#00101f; border:0; padding:9px 12px; border-radius:10px; font-weight:700; cursor:pointer; }
-    .warn { color:var(--yellow); font-size:12px; margin-top:8px; }
+    :root { --bg:#071018; --panel:#101b26; --panel2:#0c1620; --text:#e8f1f8; --muted:#8fa4b8; --green:#25d695; --red:#ff5c7a; --yellow:#ffd166; --blue:#5ab0ff; --border:rgba(255,255,255,.08); }
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:radial-gradient(circle at top,#102234,var(--bg));color:var(--text)}
+    header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;align-items:center} h1{margin:0;font-size:22px}.status,.muted{color:var(--muted)} main{padding:18px;display:grid;gap:16px}.grid{display:grid;gap:16px}.grid.kpis{grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}.grid.two{grid-template-columns:minmax(300px,1fr) minmax(300px,1fr)}@media(max-width:850px){.grid.two{grid-template-columns:1fr}}
+    .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.015));border:1px solid var(--border);border-radius:18px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.22)}.kpi .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.kpi .value{font-size:28px;font-weight:750;margin-top:6px}.kpi .sub{color:var(--muted);font-size:12px;margin-top:3px}h2{margin:0 0 12px;font-size:16px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border);font-size:13px}th{color:var(--muted);font-weight:600}.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.06);font-size:12px}.long{color:var(--green)}.short{color:var(--red)}.yellow{color:var(--yellow)}.bar{height:8px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden;min-width:80px}.bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--red),var(--yellow),var(--green));width:0%}.angles{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:12px}.angle{background:var(--panel2);border:1px solid var(--border);border-radius:14px;padding:12px}.angle .name{color:var(--muted);font-size:12px}.angle .score{font-size:22px;margin-top:4px;font-weight:700}.angle .src{color:var(--muted);font-size:11px;margin-top:2px}textarea{width:100%;min-height:110px;background:#050b10;color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}button{background:var(--blue);color:#00101f;border:0;padding:9px 12px;border-radius:10px;font-weight:700;cursor:pointer}.warn{color:var(--yellow);font-size:12px;margin-top:8px}.logbox{max-height:420px;overflow:auto;background:#050b10;border:1px solid var(--border);border-radius:14px;padding:10px}.logrow{display:grid;grid-template-columns:92px 86px 1fr;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px}.logrow:last-child{border-bottom:0}.logtype{font-weight:700;text-transform:uppercase}.logdata{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;margin-top:3px;white-space:pre-wrap}.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}.filter{background:rgba(255,255,255,.06);color:var(--text)}.filter.active{background:var(--blue);color:#00101f}.small{font-size:12px;color:var(--muted)}
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Prometheus Trading Dashboard</h1>
-      <div class="status" id="conn">Connecting…</div>
-    </div>
-    <div class="pill" id="mode">mode: —</div>
-  </header>
+  <header><div><h1>Prometheus Trading Dashboard</h1><div class="status" id="conn">Connecting…</div></div><div class="pill" id="mode">mode: —</div></header>
   <main>
-    <section class="grid kpis">
-      <div class="card kpi"><div class="label">Capital</div><div class="value" id="capital">—</div><div class="sub" id="ret">return —</div></div>
-      <div class="card kpi"><div class="label">Total trades</div><div class="value" id="totalTrades">—</div><div class="sub" id="dailyTrades">daily —</div></div>
-      <div class="card kpi"><div class="label">Win rate</div><div class="value" id="winRate">—</div><div class="sub" id="recentWr">recent —</div></div>
-      <div class="card kpi"><div class="label">Drawdown</div><div class="value" id="dd">—</div><div class="sub" id="thresholdMult">threshold —</div></div>
-      <div class="card kpi"><div class="label">Open trades</div><div class="value" id="openCount">—</div><div class="sub" id="dailyPnl">daily pnl —</div></div>
-    </section>
-
-    <section class="grid two">
-      <div class="card">
-        <h2>Auto-symbol results</h2>
-        <table>
-          <thead><tr><th>Symbol</th><th>Score</th><th>Side</th><th>Trade</th><th>Angle</th></tr></thead>
-          <tbody id="ranked"><tr><td colspan="5" class="muted">No ranking yet</td></tr></tbody>
-        </table>
-      </div>
-      <div class="card">
-        <h2>Signal angles / layer scores</h2>
-        <div class="angles" id="angles"></div>
-        <div class="warn" id="sourceWarn"></div>
-      </div>
-    </section>
-
-    <section class="grid two">
-      <div class="card">
-        <h2>Open trades</h2>
-        <table>
-          <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>PnL</th><th>Risk</th><th>Bars</th></tr></thead>
-          <tbody id="trades"><tr><td colspan="6" class="muted">No open trades</td></tr></tbody>
-        </table>
-      </div>
-      <div class="card">
-        <h2>Last signal / risk parameters</h2>
-        <table><tbody id="params"></tbody></table>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Manual state JSON fallback</h2>
-      <p class="muted">Paste a backend state payload here if websocket/http state is not routed yet.</p>
-      <textarea id="jsonInput" placeholder='{"type":"state","data":{...}}'></textarea>
-      <br><br><button onclick="loadManual()">Render JSON</button>
-    </section>
+    <section class="grid kpis"><div class="card kpi"><div class="label">Capital</div><div class="value" id="capital">—</div><div class="sub" id="ret">return —</div></div><div class="card kpi"><div class="label">Total trades</div><div class="value" id="totalTrades">—</div><div class="sub" id="dailyTrades">daily —</div></div><div class="card kpi"><div class="label">Win rate</div><div class="value" id="winRate">—</div><div class="sub" id="recentWr">recent —</div></div><div class="card kpi"><div class="label">Drawdown</div><div class="value" id="dd">—</div><div class="sub" id="thresholdMult">threshold —</div></div><div class="card kpi"><div class="label">Open trades</div><div class="value" id="openCount">—</div><div class="sub" id="dailyPnl">daily pnl —</div></div></section>
+    <section class="grid two"><div class="card"><h2>Auto-symbol results</h2><table><thead><tr><th>Symbol</th><th>Score</th><th>Side</th><th>Trade</th><th>Reason</th><th>Angle</th></tr></thead><tbody id="ranked"><tr><td colspan="6" class="muted">No ranking yet</td></tr></tbody></table></div><div class="card"><h2>Signal angles / layer scores</h2><div class="angles" id="angles"></div><div class="warn" id="sourceWarn"></div></div></section>
+    <section class="grid two"><div class="card"><h2>Open trades</h2><table><thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>PnL</th><th>Risk</th><th>Bars</th></tr></thead><tbody id="trades"><tr><td colspan="6" class="muted">No open trades</td></tr></tbody></table></div><div class="card"><h2>Last signal / risk parameters</h2><table><tbody id="params"></tbody></table></div></section>
+    <section class="grid two"><div class="card"><h2>Live decision stream</h2><div class="filters"><button class="filter active" data-filter="all">All</button><button class="filter" data-filter="autoscan">Autoscan</button><button class="filter" data-filter="signal">Signals</button><button class="filter" data-filter="order">Orders</button><button class="filter" data-filter="error">Errors</button></div><div class="logbox" id="decisionLog"><div class="muted">No decisions yet</div></div></div><div class="card"><h2>Recent trade history</h2><table><thead><tr><th>ID</th><th>Side</th><th>Exit</th><th>PnL</th><th>Capital</th></tr></thead><tbody id="tradeLog"><tr><td colspan="5" class="muted">No closed trades</td></tr></tbody></table><p class="small">On Render, persistence requires a mounted disk path such as /var/data/prometheus.</p></div></section>
+    <section class="card"><h2>Manual state JSON fallback</h2><p class="muted">Paste a backend state payload here if websocket/http state is not routed yet.</p><textarea id="jsonInput" placeholder='{"type":"state","data":{...}}'></textarea><br><br><button onclick="loadManual()">Render JSON</button></section>
   </main>
-
 <script>
-const $ = id => document.getElementById(id);
-const fmtMoney = v => isFinite(+v) ? '$' + (+v).toFixed(2) : '—';
-const fmtPct = v => isFinite(+v) ? ((+v) * 100).toFixed(2) + '%' : '—';
-const fmtNum = (v,d=3) => isFinite(+v) ? (+v).toFixed(d) : '—';
-
-let lastState = null;
-function unwrap(payload) { return payload && payload.data ? payload.data : payload; }
-function sideClass(side) { return String(side||'').toLowerCase()==='short' ? 'short' : 'long'; }
-function scoreWidth(score) { return Math.max(0, Math.min(100, Math.abs(+score || 0) * 100)); }
-function angleDeg(score) { return Math.round(Math.max(-1, Math.min(1, +score || 0)) * 90); }
-
-function render(payload) {
-  const s = unwrap(payload) || {};
-  lastState = s;
-  const stats = s.stats || {};
-  const sig = s.last_signal || {};
-  const ranked = s.rotator_ranked || [];
-  const layers = s.layer_scores || sig.layer_scores || {};
-  const trades = s.open_trades || [];
-
-  $('mode').textContent = `mode: ${stats.mode || s.mode || 'paper/live'}`;
-  $('capital').textContent = fmtMoney(stats.capital);
-  $('ret').textContent = 'return ' + fmtPct(stats.total_return);
-  $('totalTrades').textContent = stats.total_trades ?? '—';
-  $('dailyTrades').textContent = 'daily ' + (stats.daily_trades ?? '—');
-  $('winRate').textContent = fmtPct(stats.win_rate);
-  $('recentWr').textContent = 'recent ' + fmtPct(stats.recent_win_rate);
-  $('dd').textContent = fmtPct(stats.max_drawdown);
-  $('thresholdMult').textContent = 'threshold x' + fmtNum(stats.threshold_multiplier, 2);
-  $('openCount').textContent = trades.length;
-  $('dailyPnl').textContent = 'daily pnl ' + fmtMoney(stats.daily_pnl);
-
-  $('ranked').innerHTML = ranked.length ? ranked.map(r => {
-    const score = +(r.score ?? r.final_score ?? 0);
-    const trade = r.trade ? 'yes' : 'no';
-    const side = r.side || r.signal?.side || '—';
-    return `<tr><td>${r.symbol||'—'}</td><td>${fmtNum(score,3)}</td><td class="${sideClass(side)}">${side}</td><td>${trade}</td><td><span class="pill">${angleDeg(score)}°</span><div class="bar"><i style="width:${scoreWidth(score)}%"></i></div></td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="muted">No ranking yet</td></tr>';
-
-  $('angles').innerHTML = Object.keys(layers).length ? Object.entries(layers).map(([k,v]) => {
-    const src = sig.layer_sources?.[k] || '';
-    return `<div class="angle"><div class="name">${k}</div><div class="score ${(+v)>=0?'long':'short'}">${angleDeg(v)}°</div><div class="bar"><i style="width:${scoreWidth(v)}%"></i></div><div class="src">${src}</div></div>`;
-  }).join('') : '<div class="muted">No layer scores yet</div>';
-  $('sourceWarn').textContent = sig.source_warning || '';
-
-  $('trades').innerHTML = trades.length ? trades.map(t => {
-    const pnl = +(t.unrealized_pnl ?? t.pnl ?? t.realized_pnl ?? 0);
-    return `<tr><td>${t.symbol||'—'}</td><td class="${sideClass(t.side)}">${t.side||'—'}</td><td>${fmtNum(t.entry_price,4)}</td><td class="${pnl>=0?'long':'short'}">${fmtMoney(pnl)}</td><td>${fmtMoney(t.risk_amount)}</td><td>${t.bars_open ?? '—'}</td></tr>`;
-  }).join('') : '<tr><td colspan="6" class="muted">No open trades</td></tr>';
-
-  const params = {
-    symbol: sig.symbol,
-    side: sig.side,
-    fusion_score: sig.fusion_score,
-    confidence: sig.confidence,
-    notional: sig.notional,
-    qty: sig.qty,
-    base_margin: sig.base_margin,
-    risk_amount: sig.risk_amount,
-    stop_distance_pct: sig.stop_distance_pct,
-    stop_loss: sig.stop_loss,
-    take_profit: sig.take_profit,
-    rr_ratio: sig.rr_ratio,
-    independence_score: sig.independence_score,
-    effective_threshold: sig.effective_threshold,
-    session_mult: sig.session_mult,
-    htf_bias: sig.htf_bias,
-  };
-  $('params').innerHTML = Object.entries(params).map(([k,v]) => `<tr><th>${k}</th><td>${v ?? '—'}</td></tr>`).join('');
-}
-
-async function pollState() {
-  try {
-    const res = await fetch('/state', {cache:'no-store'});
-    if (res.ok) {
-      render(await res.json());
-      $('conn').textContent = 'Connected via /state polling';
-    }
-  } catch(e) {}
-}
-function connectWs() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const candidates = [`${proto}://${location.host}/ws`, `${proto}://${location.host}/ws/state`, `${proto}://${location.host}/api/ws`];
-  let i = 0;
-  function next() {
-    if (i >= candidates.length) { $('conn').textContent = 'No websocket found, polling /state'; setInterval(pollState, 3000); pollState(); return; }
-    const ws = new WebSocket(candidates[i++]);
-    ws.onopen = () => $('conn').textContent = 'Connected via websocket';
-    ws.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch(e) {} };
-    ws.onerror = () => ws.close();
-    ws.onclose = () => { if (!lastState) next(); };
-  }
-  next();
-}
-function loadManual() {
-  try { render(JSON.parse($('jsonInput').value)); $('conn').textContent = 'Rendered manual JSON'; }
-  catch(e) { alert('Invalid JSON: ' + e.message); }
-}
-connectWs();
+const $=id=>document.getElementById(id);const fmtMoney=v=>isFinite(+v)?'$'+(+v).toFixed(2):'—';const fmtPct=v=>isFinite(+v)?((+v)*100).toFixed(2)+'%':'—';const fmtNum=(v,d=3)=>isFinite(+v)?(+v).toFixed(d):'—';let lastState=null,activeFilter='all';function unwrap(p){return p&&p.data?p.data:p}function sideClass(s){return String(s||'').toLowerCase()==='short'?'short':'long'}function scoreWidth(s){return Math.max(0,Math.min(100,Math.abs(+s||0)*100))}function angleDeg(s){return Math.round(Math.max(-1,Math.min(1,+s||0))*90)}function ts(t){try{return new Date(t).toLocaleTimeString()}catch(e){return '—'}}function esc(x){return String(x??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function render(payload){const s=unwrap(payload)||{};lastState=s;const stats=s.stats||{},sig=s.last_signal||{},ranked=s.rotator_ranked||[],layers=s.layer_scores||sig.layer_scores||{},trades=s.open_trades||[],decision=s.decision_log||[],tradeLog=s.trade_log||[];$('mode').textContent=`mode: ${stats.mode||s.mode||'paper/live'}`;$('capital').textContent=fmtMoney(stats.capital);$('ret').textContent='return '+fmtPct(stats.total_return);$('totalTrades').textContent=stats.total_trades??'—';$('dailyTrades').textContent='daily '+(stats.daily_trades??'—');$('winRate').textContent=fmtPct(stats.win_rate);$('recentWr').textContent='recent '+fmtPct(stats.recent_win_rate);$('dd').textContent=fmtPct(stats.max_drawdown);$('thresholdMult').textContent='threshold x'+fmtNum(stats.threshold_multiplier,2);$('openCount').textContent=trades.length;$('dailyPnl').textContent='daily pnl '+fmtMoney(stats.daily_pnl);
+$('ranked').innerHTML=ranked.length?ranked.map(r=>{const score=+(r.score??r.final_score??0),trade=r.trade?'yes':'no',side=r.side||r.signal?.side||'—';return `<tr><td>${esc(r.symbol||'—')}</td><td>${fmtNum(score,3)}</td><td class="${sideClass(side)}">${esc(side)}</td><td>${trade}</td><td class="muted">${esc(r.reason||'—')}</td><td><span class="pill">${angleDeg(score)}°</span><div class="bar"><i style="width:${scoreWidth(score)}%"></i></div></td></tr>`}).join(''):'<tr><td colspan="6" class="muted">No ranking yet</td></tr>';
+$('angles').innerHTML=Object.keys(layers).length?Object.entries(layers).map(([k,v])=>{const src=sig.layer_sources?.[k]||'';return `<div class="angle"><div class="name">${esc(k)}</div><div class="score ${(+v)>=0?'long':'short'}">${angleDeg(v)}°</div><div class="bar"><i style="width:${scoreWidth(v)}%"></i></div><div class="src">${esc(src)}</div></div>`}).join(''):'<div class="muted">No layer scores yet</div>';$('sourceWarn').textContent=sig.source_warning||'';
+$('trades').innerHTML=trades.length?trades.map(t=>{const pnl=+(t.unrealized_pnl??t.pnl??t.realized_pnl??0);return `<tr><td>${esc(t.symbol||'—')}</td><td class="${sideClass(t.side)}">${esc(t.side||'—')}</td><td>${fmtNum(t.entry_price,4)}</td><td class="${pnl>=0?'long':'short'}">${fmtMoney(pnl)}</td><td>${fmtMoney(t.risk_amount)}</td><td>${t.bars_open??'—'}</td></tr>`}).join(''):'<tr><td colspan="6" class="muted">No open trades</td></tr>';
+const params={symbol:sig.symbol,side:sig.side,reason:sig.reason,fusion_score:sig.fusion_score,confidence:sig.confidence,notional:sig.notional,qty:sig.qty,base_margin:sig.base_margin,risk_amount:sig.risk_amount,stop_distance_pct:sig.stop_distance_pct,stop_loss:sig.stop_loss,take_profit:sig.take_profit,rr_ratio:sig.rr_ratio,independence_score:sig.independence_score,effective_threshold:sig.effective_threshold,session_mult:sig.session_mult,htf_bias:sig.htf_bias};$('params').innerHTML=Object.entries(params).map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v??'—')}</td></tr>`).join('');
+const filtered=decision.filter(e=>activeFilter==='all'||String(e.type||'').includes(activeFilter)).slice(-120).reverse();$('decisionLog').innerHTML=filtered.length?filtered.map(e=>{const typ=String(e.type||'');const cls=typ.includes('error')?'short':typ.includes('order')?'yellow':typ.includes('signal')?'long':'';const data=e.data?JSON.stringify(e.data,null,0):'';return `<div class="logrow"><div class="muted">${ts(e.ts)}</div><div class="logtype ${cls}">${esc(typ)}</div><div><div>${esc(e.message)}</div><div class="logdata">${esc(data)}</div></div></div>`}).join(''):'<div class="muted">No decisions yet</div>';
+$('tradeLog').innerHTML=tradeLog.length?tradeLog.slice(-40).reverse().map(t=>`<tr><td>${esc(t.id||'—')}</td><td class="${sideClass(t.side)}">${esc(t.side||'—')}</td><td>${esc(t.exit_type||'—')}</td><td class="${(+t.pnl)>=0?'long':'short'}">${fmtMoney(t.pnl)}</td><td>${fmtMoney(t.capital)}</td></tr>`).join(''):'<tr><td colspan="5" class="muted">No closed trades</td></tr>'}
+async function pollState(){try{const r=await fetch('/state',{cache:'no-store'});if(r.ok){render(await r.json());$('conn').textContent='Connected via /state polling'}}catch(e){}}function connectWs(){const proto=location.protocol==='https:'?'wss':'ws';const candidates=[`${proto}://${location.host}/ws`,`${proto}://${location.host}/ws/state`,`${proto}://${location.host}/api/ws`];let i=0;function next(){if(i>=candidates.length){$('conn').textContent='No websocket found, polling /state';setInterval(pollState,3000);pollState();return}const ws=new WebSocket(candidates[i++]);ws.onopen=()=>$('conn').textContent='Connected via websocket';ws.onmessage=ev=>{try{render(JSON.parse(ev.data))}catch(e){}};ws.onerror=()=>ws.close();ws.onclose=()=>{if(!lastState)next()}}next()}function loadManual(){try{render(JSON.parse($('jsonInput').value));$('conn').textContent='Rendered manual JSON'}catch(e){alert('Invalid JSON: '+e.message)}}document.querySelectorAll('.filter').forEach(b=>b.onclick=()=>{document.querySelectorAll('.filter').forEach(x=>x.classList.remove('active'));b.classList.add('active');activeFilter=b.dataset.filter;if(lastState)render(lastState)});connectWs();
 </script>
 </body>
 </html>
