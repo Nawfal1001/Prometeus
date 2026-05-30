@@ -123,6 +123,17 @@ class KucoinExchange(BaseExchange):
             logger.warning(f"[KuCoin] get_ticker failed: {e}")
             return {}
 
+    async def get_taker_fee(self, symbol: str) -> float:
+        try:
+            await self._client.load_markets()
+            symbol = self._normalize_symbol(symbol)
+            market = self._client.markets.get(symbol) if self._client.markets else None
+            if market and market.get("taker") is not None:
+                return float(market["taker"])
+        except Exception as e:
+            logger.warning(f"[KuCoin] get_taker_fee failed for {symbol}: {e}")
+        return 0.0
+
     async def get_funding_rate(self, symbol: str) -> float:
         if self.market_type not in ("futures", "future", "swap"):
             return 0.0

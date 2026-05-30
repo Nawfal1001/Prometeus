@@ -126,6 +126,21 @@ class BinanceExchange(BaseExchange):
             logger.error(f"[Binance] get_ticker: {e}")
             return {}
 
+    async def get_taker_fee(self, symbol):
+        try:
+            await self._client.load_markets()
+            symbol = self._normalize_symbol(symbol)
+            market = self._client.markets.get(symbol) if self._client.markets else None
+            if market and market.get("taker") is not None:
+                return float(market["taker"])
+            if hasattr(self._client, "fetch_trading_fee"):
+                fee = await self._client.fetch_trading_fee(symbol)
+                if fee and fee.get("taker") is not None:
+                    return float(fee["taker"])
+        except Exception as e:
+            logger.warning(f"[Binance] get_taker_fee failed for {symbol}: {e}")
+        return 0.0
+
     async def get_funding_rate(self, symbol):
         if self.market_type != "futures":
             return 0.0
