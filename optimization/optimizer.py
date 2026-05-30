@@ -8,12 +8,12 @@ import json
 from pathlib import Path
 
 import optuna
-import pandas as pd
 from loguru import logger
 
 import config.settings as cfg
 from config.settings import save_user_settings
-from backtest.engine import BacktestEngine, MultiSymbolBacktestEngine
+from backtest.engine import BacktestEngine
+from backtest.aligned_engine import AlignedMultiSymbolBacktestEngine
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -134,7 +134,7 @@ class PrometheusOptimizer:
         try:
             self._inject_params(params)
             if self._mode in ("compete", "competition") and self._multi_prepared_data:
-                results = MultiSymbolBacktestEngine().run_competing_symbols(self._multi_prepared_data, prepared=True)
+                results = AlignedMultiSymbolBacktestEngine(use_memory=False).run_competing_symbols(self._multi_prepared_data, prepared=True)
             else:
                 prepared = self._prepared_df
                 if prepared is None or prepared.empty or len(prepared) < 100:
