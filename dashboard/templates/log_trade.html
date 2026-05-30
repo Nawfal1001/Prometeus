@@ -3,12 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Prometheus Log Trade</title>
+<title>PROMETHEUS — Trade Logs</title>
+<link rel="stylesheet" href="/static/css/style.css">
 <style>
-body{margin:0;background:#071018;color:#e8f1f8;font-family:system-ui}main{padding:18px;display:grid;gap:16px}.card{border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:16px;background:#101b26}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid rgba(255,255,255,.08);font-size:13px;text-align:left}.muted{color:#8fa4b8}.long{color:#25d695}.short{color:#ff5c7a}.yellow{color:#ffd166}.logbox{max-height:520px;overflow:auto;background:#050b10;border-radius:12px;padding:10px}.logrow{display:grid;grid-template-columns:92px 90px 1fr;gap:8px;padding:7px;border-bottom:1px solid rgba(255,255,255,.06);font-size:12px}.pill{padding:4px 8px;border-radius:99px;background:rgba(255,255,255,.08)}button{margin:4px;padding:8px 10px;border:0;border-radius:9px;background:#5ab0ff;font-weight:700}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.kpi{background:#0c1620;border-radius:12px;padding:12px}.kpi b{font-size:24px}.small{font-size:12px}input{width:100%;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#071018;color:#e8f1f8;margin:6px 0}
+main{padding:18px;display:grid;gap:16px}.card{border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:16px;background:#101b26}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid rgba(255,255,255,.08);font-size:13px;text-align:left}.muted{color:#8fa4b8}.long{color:#25d695}.short{color:#ff5c7a}.yellow{color:#ffd166}.logbox{max-height:520px;overflow:auto;background:#050b10;border-radius:12px;padding:10px}.logrow{display:grid;grid-template-columns:92px 90px 1fr;gap:8px;padding:7px;border-bottom:1px solid rgba(255,255,255,.06);font-size:12px}.pill{padding:4px 8px;border-radius:99px;background:rgba(255,255,255,.08)}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.kpi{background:#0c1620;border-radius:12px;padding:12px}.kpi b{font-size:24px}.small{font-size:12px}input{width:100%;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:#071018;color:#e8f1f8;margin:6px 0}
 </style>
 </head>
 <body>
+<nav class="navbar"><div class="nav-brand">⚡ PROMETHEUS</div><div class="nav-links"><a href="/">Dashboard</a><a href="/scan">Scanner</a><a href="/backtest">Backtest</a><a href="/optimize">Optimize</a><a href="/robust-optimize">Robust</a><a href="/lab">Lab</a><a href="/train">Train ML</a><a href="/log-trade" class="active">Trade Logs</a><a href="/health-dashboard">Health</a><a href="/settings">Settings</a></div></nav>
 <main>
 <h1>Prometheus — Log Trade</h1>
 <div id="conn" class="muted">connecting…</div>

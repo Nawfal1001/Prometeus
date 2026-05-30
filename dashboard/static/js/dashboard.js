@@ -1,17 +1,41 @@
 // ── PROMETHEUS v3 Dashboard JS ───────────────────────────────
 
-const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (msg.type === "state")  applyState(msg.data);
-  if (msg.type === "status") applyStatus(msg.status, msg.error);
-  if (msg.type === "tick")   applyTick(msg.data);
-};
-ws.onerror = () => console.warn("Dashboard WebSocket connection error");
+let ws = null;
+let _wsReconnectTimer = null;
+let _wsBackoff = 1000;
+
+function connectWS() {
+  const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  try { ws = new WebSocket(`${wsProtocol}//${location.host}/ws`); }
+  catch (e) { scheduleReconnect(); return; }
+  ws.onopen = () => { _wsBackoff = 1000; };
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "state")  applyState(msg.data);
+      if (msg.type === "status") applyStatus(msg.status, msg.error);
+      if (msg.type === "tick")   applyTick(msg.data);
+    } catch (_) {}
+  };
+  ws.onerror = () => { try { ws.close(); } catch (_) {} };
+  ws.onclose = () => scheduleReconnect();
+}
+
+function scheduleReconnect() {
+  if (_wsReconnectTimer) return;
+  _wsReconnectTimer = setTimeout(() => {
+    _wsReconnectTimer = null;
+    _wsBackoff = Math.min(_wsBackoff * 2, 15000);
+    connectWS();
+  }, _wsBackoff);
+}
+
+connectWS();
+setInterval(() => { fetch("/api/state").then(r => r.json()).then(applyState).catch(() => {}); }, 10000);
 
 function applyState(state) {
-  applyStatus(state.status || "stopped");
+  if (!state || typeof state !== "object") return;
+  if (state.status !== undefined) applyStatus(state.status);
   if (state.stats)        applyStats(state.stats);
   if (state.last_signal)  applySignal(state.last_signal);
   if (state.layer_scores) applyLayers(state.layer_scores);

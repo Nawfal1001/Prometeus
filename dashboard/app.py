@@ -104,6 +104,13 @@ def ui_log(message: str, level: str = "INFO"):
 
 
 async def broadcast(data: dict):
+    if isinstance(data, dict):
+        msg_type = data.get("type")
+        if msg_type == "state" and isinstance(data.get("data"), dict):
+            for k, v in data["data"].items():
+                _state[k] = v
+        elif msg_type == "status" and data.get("status"):
+            _state["status"] = data["status"]
     dead = []
     for ws in _ws_clients:
         try:
@@ -584,6 +591,11 @@ async def train_page(request: Request):
 @app.get("/health-dashboard", response_class=HTMLResponse)
 async def health_dashboard(request: Request):
     return templates.TemplateResponse("health.html", {"request": request})
+
+
+@app.get("/log-trade", response_class=HTMLResponse)
+async def log_trade_page(request: Request):
+    return templates.TemplateResponse("log_trade.html", {"request": request})
 
 
 @app.get("/health")
