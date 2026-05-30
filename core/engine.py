@@ -46,6 +46,7 @@ class PrometheusEngine:
         self._rotator_ranked = []
         self._xgb_trained_on_start = False
         self._4h_bias = 0
+        self._4h_bias_by_symbol = {}
         self._consec_errors = 0
         self._backoff_seconds = 30
 
@@ -111,7 +112,8 @@ class PrometheusEngine:
         except Exception as e:
             logger.debug(f"[Engine] Orderbook fetch skipped for {symbol}: {e}")
 
-        regime_result = self.regime_for(symbol).detect(df, funding_rate=funding_rate)
+        htf_bias = int(self._4h_bias_by_symbol.get(symbol, self._4h_bias))
+        regime_result = self.regime_for(symbol).detect(df, funding_rate=funding_rate, htf_bias=htf_bias)
         whale_result = {"layer_score": self.whale.get_layer_score()}
         sent_result = {"layer_score": self.sentiment.get_layer_score()}
         liq_result = self.liquidation.update(current_price, symbol)
@@ -129,7 +131,7 @@ class PrometheusEngine:
             regime_bias=regime_result.get("bias", 0),
             current_price=current_price,
             liquidation_target=liq_result.get("nearest_target", {}).get("price") if liq_result.get("nearest_target") else None,
-            htf_bias=self._4h_bias,
+            htf_bias=htf_bias,
             session_mult=self._session_multiplier(),
             threshold_mult=self.orders.risk.threshold_multiplier(),
             current_capital=self.orders.risk.capital,
@@ -370,23 +372,28 @@ class PrometheusEngine:
             await asyncio.sleep(300)
 
     async def _update_4h_bias(self):
-        try:
-            df_4h = await self.exchange.get_ohlcv(self._symbols()[0], "4h", limit=60)
-            if df_4h.empty or len(df_4h) < 20:
-                self._4h_bias = 0
-                return
-            ema20 = df_4h["close"].ewm(span=20).mean().iloc[-1]
-            ema50 = df_4h["close"].ewm(span=50).mean().iloc[-1]
-            last = float(df_4h["close"].iloc[-1])
-            if last > ema20 > ema50:
-                self._4h_bias = 1
-            elif last < ema20 < ema50:
-                self._4h_bias = -1
-            else:
-                self._4h_bias = 0
-        except Exception as e:
-            logger.warning(f"[Engine] 4H bias update failed: {e}")
-            self._4h_bias = 0
+        for symbol in self._symbols():
+            try:
+                df_4h = await self.exchange.get_ohlcv(symbol, "4h", limit=80)
+                if df_4h is None or df_4h.empty or len(df_4h) < 50:
+                    self._4h_bias_by_symbol[symbol] = 0
+                    continue
+                ema20 = df_4h["close"].ewm(span=20).mean().iloc[-1]
+                ema50 = df_4h["close"].ewm(span=50).mean().iloc[-1]
+                last = float(df_4h["close"].iloc[-1])
+                if last > ema20 > ema50:
+                    bias = 1
+                elif last < ema20 < ema50:
+                    bias = -1
+                else:
+                    bias = 0
+                self._4h_bias_by_symbol[symbol] = bias
+                if symbol == cfg.SYMBOL:
+                    self._4h_bias = bias
+            except Exception as e:
+                logger.warning(f"[Engine] 4H bias update failed for {symbol}: {e}")
+                self._4h_bias_by_symbol[symbol] = 0
+        self._4h_bias = int(self._4h_bias_by_symbol.get(cfg.SYMBOL, self._4h_bias))
 
     def _session_multiplier(self) -> float:
         hour = datetime.utcnow().hour
