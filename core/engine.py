@@ -67,18 +67,43 @@ class PrometheusEngine:
 
     def _symbols(self):
         symbols = list(getattr(cfg, "PAPER_SYMBOLS", []) or [])
-        return symbols or [cfg.SYMBOL]
+        max_symbols = int(getattr(cfg, "ROTATOR_MAX_SYMBOLS", 5))
+        return (symbols or [cfg.SYMBOL])[:max_symbols]
 
     def _normalize_layer_score(self, value, key: str = "layer_score") -> float:
         try:
             if isinstance(value, dict):
-                return float(value.get(key, value.get("score", 0.0)) or 0.0)
-            return float(value or 0.0)
+                v = value.get(key, value.get("score", 0.0))
+                return float(v) if v is not None else 0.0
+            return float(value) if value is not None else 0.0
         except Exception:
             return 0.0
 
+    def _force_paper_trade_signal(self, signal: dict, item: dict) -> dict:
+        if cfg.TRADING_MODE != "paper" or signal.get("trade"):
+            return signal
+        if not bool(getattr(cfg, "PAPER_FORCE_TRADE_ON_SIGNAL", True)):
+            return signal
+        min_force = float(getattr(cfg, "PAPER_FORCE_MIN_SCORE", 0.08))
+        score = abs(float(signal.get("fusion_score", 0.0) or 0.0))
+        if score < min_force:
+            return signal
+        forced = dict(signal)
+        direction = 1 if float(signal.get("fusion_score", 0.0) or 0.0) >= 0 else -1
+        forced.update({
+            "trade": True,
+            "direction": direction,
+            "side": "long" if direction == 1 else "short",
+            "reason": f"paper_forced_from_{signal.get('reason', 'weak_signal')}",
+            "confidence": round(score * 100, 1),
+            "position_size": forced.get("position_size", 0.0) or 0.0,
+        })
+        journal.add("decision", f"paper force-trade enabled {item.get('symbol')} score={score:.3f}", symbol=item.get("symbol"), score=score, reason=forced["reason"])
+        return forced
+
     async def _symbol_signal(self, symbol: str):
-        df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=500)
+        limit = int(getattr(cfg, "LIVE_OHLCV_LIMIT", 600))
+        df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=limit)
         if df is None or df.empty:
             journal.autoscan(symbol, reason="empty_ohlcv")
             return None
@@ -119,7 +144,7 @@ class PrometheusEngine:
         sentiment_score = self._normalize_layer_score(sent_result)
         liquidation_score = self._normalize_layer_score(liq_result)
         signal = self.fusion.fuse(
-            regime_score=float(regime_result.get("score", 0.0)),
+            regime_score=float(regime_result.get("score", 0.0) or 0.0),
             sentiment_score=sentiment_score,
             whale_score=whale_score,
             liquidation_score=liquidation_score,
@@ -142,7 +167,7 @@ class PrometheusEngine:
             "recent_low": recent_low,
         })
         layer_scores = {
-            "regime": float(regime_result.get("score", 0.0)),
+            "regime": float(regime_result.get("score", 0.0) or 0.0),
             "sentiment": sentiment_score,
             "whale": whale_score,
             "liquidation": liquidation_score,
@@ -165,7 +190,7 @@ class PrometheusEngine:
                 if not item:
                     continue
                 sig = item["signal"]
-                base_score = abs(float(sig.get("fusion_score", 0.0) or 0.0))
+                base_score = abs(float(sig.get("fusion_score", 0.0)))
                 journal.autoscan(symbol, score=base_score, trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=None, fusion_score=sig.get("fusion_score"), confidence=sig.get("confidence"), risk_amount=sig.get("risk_amount"), notional=sig.get("notional"))
                 candidates.append({**item, "score": base_score})
             except Exception as e:
@@ -189,7 +214,7 @@ class PrometheusEngine:
     async def _manage_open_trades_rotator(self):
         for trade in list(self.orders.get_open_trades()):
             symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
-            df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=80)
+            df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=120)
             if df is None or df.empty:
                 continue
             price = float(df["close"].iloc[-1])
@@ -207,14 +232,14 @@ class PrometheusEngine:
                         await self._broadcast_state(ranked[0]["price"] if ranked else 0, ranked[0]["signal"] if ranked else {}, ranked[0]["layer_scores"] if ranked else {}, ranked[0]["regime"] if ranked else {})
                         await asyncio.sleep(15)
                         continue
-                    min_score = float(getattr(cfg, "ROTATOR_MIN_SCORE", 0.55))
+                    min_score = float(getattr(cfg, "ROTATOR_MIN_SCORE", 0.10))
                     top_n = int(getattr(cfg, "ROTATOR_TRADE_ONLY_TOP_N", 3))
                     for item in ranked[:top_n]:
-                        sig = item["signal"]
+                        sig = self._force_paper_trade_signal(item["signal"], item)
                         if not sig.get("trade"):
                             journal.add("decision", f"skip {item['symbol']} no_trade reason={sig.get('reason')}", symbol=item["symbol"], reason=sig.get("reason"), score=item.get("final_score"))
                             continue
-                        if float(item.get("final_score", 0.0)) < min_score:
+                        if float(item.get("final_score", item.get("score", 0.0)) or 0.0) < min_score:
                             journal.add("decision", f"skip {item['symbol']} below rotator min score", symbol=item["symbol"], score=item.get("final_score"), min_score=min_score)
                             continue
                         result = await self.orders.execute_signal(sig, item["price"])
@@ -239,7 +264,7 @@ class PrometheusEngine:
                 self._last_candle_time = latest_time
                 self._consec_errors = 0
                 self._backoff_seconds = 30
-                signal = item["signal"]
+                signal = self._force_paper_trade_signal(item["signal"], item)
                 logger.info(f"[Engine] New candle | price={item['price']:.2f} | time={latest_time}")
                 if signal["trade"]:
                     result = await self.orders.execute_signal(signal, item["price"])
@@ -275,7 +300,7 @@ class PrometheusEngine:
                 logger.info("[Engine] Auto-training XGBoost on startup...")
                 train_symbol = self._symbols()[0]
                 df = await self.exchange.get_ohlcv(train_symbol, cfg.TIMEFRAME, limit=1500)
-                if not df.empty and len(df) >= 300 and hasattr(self.entry, "_load_xgb"):
+                if df is not None and not df.empty and len(df) >= 300 and hasattr(self.entry, "_load_xgb"):
                     self.entry._load_xgb()
                     model = getattr(self.entry, "_xgb", None)
                     if model is not None and hasattr(model, "train_if_stale"):
@@ -325,8 +350,8 @@ class PrometheusEngine:
 
     async def _update_4h_bias(self):
         try:
-            df_4h = await self.exchange.get_ohlcv(self._symbols()[0], "4h", limit=60)
-            if df_4h.empty or len(df_4h) < 20:
+            df_4h = await self.exchange.get_ohlcv(self._symbols()[0], "4h", limit=120)
+            if df_4h.empty or len(df_4h) < 50:
                 self._4h_bias = 0
                 journal.add("htf", "4H bias neutral: insufficient data")
                 return
