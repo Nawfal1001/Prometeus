@@ -171,7 +171,9 @@ class PrometheusEngine:
             logger.info(f"[Rotator] ranking updated | {summary}")
         return ranked
 
-    async def _manage_open_trades_rotator(self):
+    async def _manage_open_trades_rotator(self, ranked=None):
+        ranked = ranked or self._rotator_ranked
+
         for trade in list(self.orders.get_open_trades()):
             symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
             df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=80)
@@ -182,12 +184,79 @@ class PrometheusEngine:
             recent = df.tail(max(lookback, 2))
             await self.orders.check_paper_exits(price, high=float(recent["high"].max()), low=float(recent["low"].min()), symbol=symbol)
 
+            await self._maybe_early_rotate(trade, price, ranked)
+
+    async def _maybe_early_rotate(self, trade, price, ranked):
+        if not bool(getattr(cfg, "EARLY_EXIT_ENABLED", True)):
+            return
+        if not ranked:
+            return
+
+        trade_id = trade.get("id")
+        still_open = any(t.get("id") == trade_id for t in self.orders.get_open_trades())
+        if not still_open:
+            return
+
+        bars_open = int(trade.get("bars_open", 0))
+        if bars_open < int(getattr(cfg, "EARLY_EXIT_MIN_BARS", 3)):
+            return
+
+        stale_bars = int(trade.get("stale_bars", 0))
+        if stale_bars < int(getattr(cfg, "EARLY_EXIT_STALE_BARS", 2)):
+            return
+
+        pnl_pct = float(trade.get("unrealized_pnl_pct", 0.0) or 0.0)
+        if pnl_pct > float(getattr(cfg, "EARLY_EXIT_MAX_NEGATIVE_PNL_PCT", -1.2)):
+            return
+
+        near_tp = float(trade.get("distance_to_tp_pct") or 999.0)
+        if near_tp <= float(getattr(cfg, "EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT", 0.35)):
+            return
+
+        current_symbol = trade.get("symbol")
+        current_score = self._current_rotator_score(current_symbol, trade)
+        replacement = self._best_replacement_candidate(current_symbol, ranked)
+        if not replacement:
+            return
+
+        advantage = float(getattr(cfg, "EARLY_EXIT_REPLACEMENT_ADVANTAGE", 0.20))
+        replacement_score = float(replacement.get("final_score", 0.0) or 0.0)
+        if replacement_score < current_score + advantage:
+            return
+
+        result = await self.orders.force_close_trade(trade_id, price, reason="ROTATION_EXIT")
+        if result.get("status") == "closed":
+            logger.info(
+                f"[Rotator] early rotation exit | closed={current_symbol} "
+                f"pnl={result.get('pnl')} replacement={replacement.get('symbol')} "
+                f"current_score={current_score:.3f} replacement_score={replacement_score:.3f}"
+            )
+
+    def _current_rotator_score(self, symbol, trade):
+        for item in self._rotator_ranked:
+            if item.get("symbol") == symbol:
+                return float(item.get("final_score", 0.0) or 0.0)
+        return float(trade.get("entry_score", 0.0) or 0.0)
+
+    def _best_replacement_candidate(self, current_symbol, ranked):
+        top_n = int(getattr(cfg, "ROTATOR_TRADE_ONLY_TOP_N", 3))
+        min_score = float(getattr(cfg, "ROTATOR_MIN_SCORE", 0.55))
+        for item in ranked[:top_n]:
+            if item.get("symbol") == current_symbol:
+                continue
+            if not item.get("signal", {}).get("trade"):
+                continue
+            if float(item.get("final_score", 0.0) or 0.0) < min_score:
+                continue
+            return item
+        return None
+
     async def _candle_loop(self):
         while self.running:
             try:
                 if self._rotator_enabled():
                     ranked = await self._autoscan()
-                    await self._manage_open_trades_rotator()
+                    await self._manage_open_trades_rotator(ranked)
                     if self.orders.get_open_trades():
                         await asyncio.sleep(15)
                         continue
