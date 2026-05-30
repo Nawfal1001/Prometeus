@@ -185,7 +185,7 @@ class BacktestEngine:
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
-        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.2))
+        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
         if tp2_mult / max(sl_mult, 1e-9) < min_rr:
             return {"trade": False, "reason": "rr_too_low", "fusion_score": fusion_score, "abs_score": abs_score}
@@ -197,7 +197,7 @@ class BacktestEngine:
         confidence_mult = 0.35 + 1.15 / (1.0 + np.exp(-8.0 * (strength - 0.35)))
         confidence_mult = float(np.clip(confidence_mult, 0.35, 1.50))
         pos_size = capital * risk_frac * leverage * confidence_mult
-        return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "position_size": round(pos_size, 4), "atr_norm": atr_norm, "sl_mult": sl_mult, "tp1_mult": tp1_mult, "tp2_mult": tp2_mult}
+        return {"trade": True, "direction": direction, "side": "long" if direction == 1 else "short", "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": round(abs_score * 100, 1), "position_size": round(pos_size, 4), "confidence_mult": round(confidence_mult, 4), "atr_norm": atr_norm, "sl_mult": sl_mult, "tp1_mult": tp1_mult, "tp2_mult": tp2_mult}
 
     def _fusion_signal(self, row, current_capital=None):
         return self.compute_signal(row, current_capital)
@@ -215,6 +215,8 @@ class BacktestEngine:
         trade_side = entry_bar = 0
         entry_score = 0.0
         entry_capital = capital
+        entry_confidence_mult = 1.0
+        entry_notional = 0.0
         tp1_hit = False
         remaining = 1.0
         realized_pnl = 0.0
@@ -252,9 +254,8 @@ class BacktestEngine:
                     if hit_tp1:
                         ep = tp1 * (1 - trade_side * SLIPPAGE)
                         rret = ((ep - entry_px) / entry_px) * trade_side
-                        an_sl = float(row.get("atr_norm", 0.003)) * sl_mult
-                        ra = entry_capital * risk_frac * tp1_pct
-                        p1 = ra * (rret / max(an_sl, 1e-9)) * leverage - ra * TAKER_FEE * 2
+                        partial_notional = entry_notional * tp1_pct
+                        p1 = partial_notional * rret - partial_notional * TAKER_FEE * 2
                         realized_pnl += p1
                         capital += p1
                         remaining = 1.0 - tp1_pct
@@ -277,10 +278,9 @@ class BacktestEngine:
                         exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
                         raw_ret = ((exit_px_v - entry_px) / entry_px) * trade_side
                         exit_type = "TP" if hit_tp2 else "SL"
-                    an_sl = float(row.get("atr_norm", 0.003)) * sl_mult
-                    ra = entry_capital * risk_frac * remaining
-                    fee = ra * TAKER_FEE * 2
-                    pnl_rem = ra * (raw_ret / max(an_sl, 1e-9)) * leverage - fee
+                    remaining_notional = entry_notional * remaining
+                    fee = remaining_notional * TAKER_FEE * 2
+                    pnl_rem = remaining_notional * raw_ret - fee
                     total_pnl = pnl_rem + realized_pnl
                     capital += pnl_rem
                     if total_pnl > 0:
@@ -294,10 +294,11 @@ class BacktestEngine:
                         self.regime_memory.update({"atr_norm": float(row.get("atr_norm", 0.003)), "vol_zscore": float(row.get("vol_zscore", 0)), "ema_stack": float(row.get("ema_stack", 0)), "fusion_score": entry_score}, total_pnl)
                     except Exception as e:
                         logger.debug(f"[Backtest] regime_memory.update skipped: {e}")
-                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score})
+                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score})
                     in_trade = False
                     remaining = 1.0
                     realized_pnl = 0.0
+                    entry_notional = 0.0
                     tp1_hit = False
                     if capital <= 0:
                         break
@@ -316,9 +317,14 @@ class BacktestEngine:
             trade_side = int(sig["direction"])
             entry_score = float(sig.get("fusion_score", 0))
             entry_capital = capital
+            entry_confidence_mult = float(sig.get("confidence_mult", 1.0) or 1.0)
             entry_px = close * (1 + trade_side * SLIPPAGE)
             an = float(sig.get("atr_norm", 0.003))
             sl_mult = float(sig.get("sl_mult", 1.2))
+            stop_distance = max(an * sl_mult, 1e-9)
+            risk_amount = entry_capital * risk_frac * entry_confidence_mult
+            max_notional = entry_capital * leverage
+            entry_notional = min(risk_amount / stop_distance, max_notional)
             tp1_m = float(sig.get("tp1_mult", 1.2))
             tp2_m = float(sig.get("tp2_mult", 2.4))
             atr_abs = entry_px * an
@@ -366,8 +372,17 @@ class BacktestEngine:
             max_dd = max(max_dd, (peak - c) / (peak + 1e-9))
         final = float(df_t["capital"].iloc[-1])
         ret = (final - initial) / initial
-        rets = df_t["pnl_pct"].values / 100
-        sharpe = float(rets.mean() / (rets.std() + 1e-9)) * np.sqrt(252) if len(rets) > 1 else 0.0
+        prev_capital = pd.Series([initial] + list(df_t["capital"].iloc[:-1]), index=df_t.index).replace(0, np.nan)
+        rets = (df_t["pnl"] / prev_capital).replace([np.inf, -np.inf], np.nan).fillna(0).values
+        if len(rets) > 1:
+            bars = df_t["bar"].values if "bar" in df_t.columns else np.arange(len(rets))
+            bars_span = max(float(bars[-1] - bars[0]), 1.0)
+            trades_per_bar = len(rets) / bars_span
+            bars_per_year = 365 * 48
+            annualization = np.sqrt(max(trades_per_bar * bars_per_year, 1.0))
+            sharpe = float(rets.mean() / (rets.std() + 1e-9)) * annualization
+        else:
+            sharpe = 0.0
         gw = float(wins["pnl"].sum()) if len(wins) else 0.0
         gl = abs(float(losses["pnl"].sum())) if len(losses) else 1e-9
         pf = gw / gl
@@ -458,6 +473,8 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         trade_side = entry_bar = 0
         entry_score = 0.0
         entry_capital = capital
+        entry_confidence_mult = 1.0
+        entry_notional = 0.0
         tp1_hit = False
         remaining = 1.0
         realized_pnl = 0.0
@@ -496,9 +513,8 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                     if hit_tp1:
                         ep = tp1 * (1 - trade_side * SLIPPAGE)
                         rret = ((ep - entry_px) / entry_px) * trade_side
-                        an_sl = float(row.get("atr_norm", 0.003)) * sl_mult
-                        ra = entry_capital * risk_frac * tp1_pct
-                        p1 = ra * (rret / max(an_sl, 1e-9)) * leverage - ra * TAKER_FEE * 2
+                        partial_notional = entry_notional * tp1_pct
+                        p1 = partial_notional * rret - partial_notional * TAKER_FEE * 2
                         realized_pnl += p1
                         capital += p1
                         remaining = 1.0 - tp1_pct
@@ -521,10 +537,9 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                         exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
                         raw_ret = ((exit_px_v - entry_px) / entry_px) * trade_side
                         exit_type = "TP" if hit_tp2 else "SL"
-                    an_sl = float(row.get("atr_norm", 0.003)) * sl_mult
-                    ra = entry_capital * risk_frac * remaining
-                    fee = ra * TAKER_FEE * 2
-                    pnl_rem = ra * (raw_ret / max(an_sl, 1e-9)) * leverage - fee
+                    remaining_notional = entry_notional * remaining
+                    fee = remaining_notional * TAKER_FEE * 2
+                    pnl_rem = remaining_notional * raw_ret - fee
                     total_pnl = pnl_rem + realized_pnl
                     capital += pnl_rem
                     st = selection_stats[active_symbol]
@@ -538,11 +553,12 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
                             consec_losses = 0
-                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round(raw_ret * leverage * 100, 3), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": i, "entry_bar": entry_bar, "fusion_score": entry_score})
+                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": i, "entry_bar": entry_bar, "fusion_score": entry_score})
                     in_trade = False
                     active_symbol = None
                     remaining = 1.0
                     realized_pnl = 0.0
+                    entry_notional = 0.0
                     tp1_hit = False
                     if capital <= 0:
                         break
@@ -572,12 +588,17 @@ class MultiSymbolBacktestEngine(BacktestEngine):
             trade_side = int(sig["direction"])
             entry_score = float(sig.get("fusion_score", 0))
             entry_capital = capital
+            entry_confidence_mult = float(sig.get("confidence_mult", 1.0) or 1.0)
             close = float(row["close"])
             high = float(row["high"])
             low = float(row["low"])
             entry_px = close * (1 + trade_side * SLIPPAGE)
             an = float(sig.get("atr_norm", 0.003))
             sl_mult = float(sig.get("sl_mult", 1.2))
+            stop_distance = max(an * sl_mult, 1e-9)
+            risk_amount = entry_capital * risk_frac * entry_confidence_mult
+            max_notional = entry_capital * leverage
+            entry_notional = min(risk_amount / stop_distance, max_notional)
             tp1_m = float(sig.get("tp1_mult", 1.2))
             tp2_m = float(sig.get("tp2_mult", 2.4))
             sl = entry_px * (1 - trade_side * an * sl_mult)
