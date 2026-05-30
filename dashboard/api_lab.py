@@ -109,13 +109,13 @@ async def lab_compete(request: Request):
         data = await fetch_many_ohlcv(symbols, timeframe, limit)
         if not data:
             return JSONResponse({"error": "No symbol data returned"}, status_code=400)
-        from backtest.engine import MultiSymbolBacktestEngine
-        out = {"symbols": list(data.keys()), "timeframe": timeframe, "limit": limit, "logic": "competing_symbol_selector_same_as_compete_optimizer"}
+        from backtest.aligned_engine import AlignedMultiSymbolBacktestEngine
+        out = {"symbols": list(data.keys()), "timeframe": timeframe, "limit": limit, "logic": "aligned_paper_rotator_selector"}
         if body.get("compare_baseline", False):
             with temporary_settings({"RAW_PROFIT_MODE": False, "ADAPTIVE_RISK_MODE": False}):
-                out["baseline"] = MultiSymbolBacktestEngine().run_competing_symbols(data)
+                out["baseline"] = AlignedMultiSymbolBacktestEngine().run_competing_symbols(data)
         with temporary_settings(exp_settings(body)):
-            out["experiment"] = MultiSymbolBacktestEngine().run_competing_symbols(data)
+            out["experiment"] = AlignedMultiSymbolBacktestEngine().run_competing_symbols(data)
         return out
     except Exception as e:
         logger.exception("Lab compete failed")
