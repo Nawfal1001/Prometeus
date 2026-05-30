@@ -7,6 +7,7 @@ from loguru import logger
 import config.settings as cfg
 
 WEIGHT_SUM_TOLERANCE = 0.02
+PROXY_LAYER_WEIGHT_FACTOR = 0.50
 
 
 class FusionEngine:
@@ -111,6 +112,13 @@ class FusionEngine:
             session_mult=1.0,
             threshold_mult=threshold_mult,
             atr_norm=atr_norm,
+            layer_sources={
+                "regime": "ohlcv_proxy",
+                "sentiment": "ohlcv_proxy",
+                "whale": "ohlcv_proxy",
+                "liquidation": "ohlcv_proxy",
+                "entry": entry_source,
+            },
         )
 
         rr_ratio = result.get("rr_ratio")
@@ -128,13 +136,14 @@ class FusionEngine:
         self.last_result = result
         return result
 
-    def fuse(self, regime_score: float, sentiment_score: float, whale_score: float, liquidation_score: float, entry_score: float, regime_bias: int = 0, current_price: float = 0.0, liquidation_target: float = None, htf_bias: int = 0, session_mult: float = 1.0, threshold_mult: float = 1.0, current_capital: float = None, atr_norm: float = None) -> dict:
+    def fuse(self, regime_score: float, sentiment_score: float, whale_score: float, liquidation_score: float, entry_score: float, regime_bias: int = 0, current_price: float = 0.0, liquidation_target: float = None, htf_bias: int = 0, session_mult: float = 1.0, threshold_mult: float = 1.0, current_capital: float = None, atr_norm: float = None, layer_sources: dict = None) -> dict:
         if regime_bias is None:
             logger.warning("[Fusion] CHAOS regime → NO TRADE")
             return self._no_trade("chaos_regime")
         scores = {"regime": regime_score, "sentiment": sentiment_score, "whale": whale_score, "liquidation": liquidation_score, "entry": entry_score}
-        w_total = max(sum(self.weights.values()), 1e-9)
-        raw_fusion_score = sum(scores[k] * self.weights[k] for k in scores) / w_total
+        effective_weights, independence = self._effective_weights(scores, layer_sources)
+        w_total = max(sum(effective_weights.values()), 1e-9)
+        raw_fusion_score = sum(scores[k] * effective_weights[k] for k in scores) / w_total
         raw_fusion_score = float(np.clip(raw_fusion_score, -1.0, 1.0))
         session_adjusted_score = float(np.clip(raw_fusion_score * session_mult, -1.0, 1.0))
         direction = 1 if session_adjusted_score > 0 else -1
@@ -159,7 +168,7 @@ class FusionEngine:
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
         if abs_score < effective_threshold:
             result = self._no_trade("below_threshold")
-            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4)})
+            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "independence_score": independence["score"], "layer_sources": independence["sources"], "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()}, "source_warning": independence["warning"]})
             return result
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
@@ -169,7 +178,7 @@ class FusionEngine:
         rr_ratio = tp2_mult / max(sl_mult, 1e-9)
         if rr_ratio < min_rr:
             result = self._no_trade("rr_too_low")
-            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "rr_ratio": round(rr_ratio, 2)})
+            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "rr_ratio": round(rr_ratio, 2), "independence_score": independence["score"], "layer_sources": independence["sources"], "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()}, "source_warning": independence["warning"]})
             return result
 
         position_size = self._confidence_scaled_size(abs_score, current_capital=current_capital, threshold=effective_threshold)
@@ -191,6 +200,10 @@ class FusionEngine:
             "take_profit": round(take_profit, 2) if take_profit else None,
             "rr_ratio": round(rr_ratio, 2),
             "layer_scores": {k: round(v, 4) for k, v in scores.items()},
+            "layer_sources": independence["sources"],
+            "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()},
+            "independence_score": independence["score"],
+            "source_warning": independence["warning"],
             "htf_bias": htf_bias,
             "session_mult": round(session_mult, 2),
             "effective_threshold": round(effective_threshold, 4),
@@ -198,6 +211,28 @@ class FusionEngine:
         }
         self.last_result = result
         return result
+
+    def _effective_weights(self, scores: dict, layer_sources: dict = None):
+        sources = {k: "unknown" for k in scores}
+        if isinstance(layer_sources, dict):
+            sources.update({k: str(v or "unknown") for k, v in layer_sources.items() if k in sources})
+
+        effective = dict(self.weights)
+        proxy_layers = [k for k, src in sources.items() if src in {"ohlcv_proxy", "proxy", "derived_ohlcv", "unknown"} and k != "entry"]
+        independent_layers = [k for k in scores if k not in proxy_layers]
+
+        if len(proxy_layers) >= 3:
+            for k in proxy_layers:
+                effective[k] *= PROXY_LAYER_WEIGHT_FACTOR
+
+        total_layers = max(len(scores), 1)
+        independence_score = round(len(independent_layers) / total_layers, 2)
+        warning = None
+        if len(proxy_layers) >= 3:
+            warning = "proxy_layer_cluster: several non-entry layers are derived from the same OHLCV source"
+            logger.debug(f"[Fusion] {warning} | proxy_layers={proxy_layers} sources={sources}")
+
+        return effective, {"score": independence_score, "sources": sources, "warning": warning}
 
     def _confidence_scaled_size(self, confidence: float, current_capital: float = None, threshold: float = None) -> float:
         capital = float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL)
