@@ -18,6 +18,7 @@ from core.layers.fusion import FusionEngine
 from core.execution.order_manager import OrderManager
 from core.alerts.telegram_bot import TelegramBot
 from core.selection.candidate_selector import CandidateSelector
+from core.monitoring.decision_journal import journal
 
 
 class PrometheusEngine:
@@ -53,11 +54,13 @@ class PrometheusEngine:
         self.running = True
         mode = "rotator" if self._rotator_enabled() else "single"
         logger.info(f"[Engine] PROMETHEUS starting | mode={cfg.TRADING_MODE}/{mode} | symbol={cfg.SYMBOL} | tf={cfg.TIMEFRAME}")
+        journal.add("engine", f"start mode={cfg.TRADING_MODE}/{mode} exchange={cfg.EXCHANGE} symbol={cfg.SYMBOL} tf={cfg.TIMEFRAME}", mode=cfg.TRADING_MODE, rotator=mode, exchange=cfg.EXCHANGE, symbol=cfg.SYMBOL, timeframe=cfg.TIMEFRAME)
         await asyncio.gather(self._candle_loop(), self._slow_data_loop())
 
     def stop(self):
         self.running = False
         logger.info("[Engine] PROMETHEUS stopped")
+        journal.add("engine", "stopped")
 
     def _rotator_enabled(self) -> bool:
         return bool(getattr(cfg, "AUTO_SYMBOL_SELECTION", False) and cfg.TRADING_MODE == "paper")
@@ -77,6 +80,7 @@ class PrometheusEngine:
     async def _symbol_signal(self, symbol: str):
         df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=500)
         if df is None or df.empty:
+            journal.autoscan(symbol, reason="empty_ohlcv")
             return None
         current_price = float(df["close"].iloc[-1])
         lookback = int(getattr(cfg, "CHANDELIER_LOOKBACK", 22))
@@ -145,6 +149,7 @@ class PrometheusEngine:
             "entry": entry_score,
             "fusion": signal.get("fusion_score", 0),
         }
+        journal.signal(symbol, signal, price=current_price, layer_scores=layer_scores, regime=regime_result.get("regime"), htf_bias=self._4h_bias, atr_norm=atr_norm, vol_zscore=vol_zscore)
         return {"symbol": symbol, "df": df, "price": current_price, "signal": signal, "layer_scores": layer_scores, "regime": regime_result}
 
     async def _autoscan(self, force: bool = False):
@@ -152,6 +157,7 @@ class PrometheusEngine:
         interval = int(getattr(cfg, "AUTOSCAN_INTERVAL_SEC", 900))
         if not force and now - self._last_autoscan < interval and self._rotator_ranked:
             return self._rotator_ranked
+        journal.add("autoscan_start", f"autoscan started symbols={len(self._symbols())}", symbols=self._symbols(), interval=interval)
         candidates = []
         for symbol in self._symbols():
             try:
@@ -160,16 +166,24 @@ class PrometheusEngine:
                     continue
                 sig = item["signal"]
                 base_score = abs(float(sig.get("fusion_score", 0.0) or 0.0))
+                journal.autoscan(symbol, score=base_score, trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=None, fusion_score=sig.get("fusion_score"), confidence=sig.get("confidence"), risk_amount=sig.get("risk_amount"), notional=sig.get("notional"))
                 candidates.append({**item, "score": base_score})
             except Exception as e:
                 logger.warning(f"[Rotator] scan failed for {symbol}: {e}")
+                journal.autoscan(symbol, reason=f"scan_failed: {e}")
         ranked = self.selector.rank(candidates)
         ranked = ranked[: int(getattr(cfg, "AUTOSCAN_TOP_N", 5))]
+        for r in ranked:
+            sig = r.get("signal", {})
+            journal.autoscan(r.get("symbol"), score=float(r.get("final_score", r.get("score", 0.0)) or 0.0), trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=r.get("final_score"), rank=ranked.index(r) + 1)
         self._rotator_ranked = ranked
         self._last_autoscan = now
         if ranked:
             summary = ", ".join([f"{r['symbol']}:{r.get('final_score', 0):.3f}" for r in ranked])
             logger.info(f"[Rotator] ranking updated | {summary}")
+            journal.add("autoscan_done", f"ranking updated | {summary}", ranked=[{"symbol": r.get("symbol"), "score": r.get("final_score"), "trade": r.get("signal", {}).get("trade"), "side": r.get("signal", {}).get("side"), "reason": r.get("signal", {}).get("reason")} for r in ranked])
+        else:
+            journal.add("autoscan_done", "ranking empty", ranked=[])
         return ranked
 
     async def _manage_open_trades_rotator(self):
@@ -190,6 +204,7 @@ class PrometheusEngine:
                     ranked = await self._autoscan()
                     await self._manage_open_trades_rotator()
                     if self.orders.get_open_trades():
+                        await self._broadcast_state(ranked[0]["price"] if ranked else 0, ranked[0]["signal"] if ranked else {}, ranked[0]["layer_scores"] if ranked else {}, ranked[0]["regime"] if ranked else {})
                         await asyncio.sleep(15)
                         continue
                     min_score = float(getattr(cfg, "ROTATOR_MIN_SCORE", 0.55))
@@ -197,10 +212,13 @@ class PrometheusEngine:
                     for item in ranked[:top_n]:
                         sig = item["signal"]
                         if not sig.get("trade"):
+                            journal.add("decision", f"skip {item['symbol']} no_trade reason={sig.get('reason')}", symbol=item["symbol"], reason=sig.get("reason"), score=item.get("final_score"))
                             continue
                         if float(item.get("final_score", 0.0)) < min_score:
+                            journal.add("decision", f"skip {item['symbol']} below rotator min score", symbol=item["symbol"], score=item.get("final_score"), min_score=min_score)
                             continue
                         result = await self.orders.execute_signal(sig, item["price"])
+                        journal.order(item["symbol"], result.get("status"), reason=result.get("reason"), result=result, price=item["price"], score=item.get("final_score"))
                         if result.get("status") == "filled":
                             logger.info(f"[Rotator] opened {sig.get('side')} {item['symbol']} score={item.get('final_score', 0):.3f}")
                             self.telegram.signal_alert(sig, item["price"])
@@ -225,14 +243,18 @@ class PrometheusEngine:
                 logger.info(f"[Engine] New candle | price={item['price']:.2f} | time={latest_time}")
                 if signal["trade"]:
                     result = await self.orders.execute_signal(signal, item["price"])
+                    journal.order(cfg.SYMBOL, result.get("status"), reason=result.get("reason"), result=result, price=item["price"])
                     if result.get("status") == "filled":
                         self.telegram.signal_alert(signal, item["price"])
                         self.fusion.reload_weights()
+                else:
+                    journal.add("decision", f"no trade {cfg.SYMBOL} reason={signal.get('reason')}", symbol=cfg.SYMBOL, reason=signal.get("reason"), signal=signal)
                 await self.orders.check_paper_exits(item["price"], high=signal["recent_high"], low=signal["recent_low"], symbol=cfg.SYMBOL)
                 await self._broadcast_state(item["price"], signal, item["layer_scores"], item["regime"])
             except Exception as e:
                 self._consec_errors += 1
                 logger.error(f"[Engine] Candle loop error #{self._consec_errors}: {e}")
+                journal.add("error", f"candle loop error #{self._consec_errors}: {e}")
                 wait = min(self._backoff_seconds * (2 ** (self._consec_errors - 1)), 300)
                 logger.info(f"[Engine] Backing off {wait}s before retry")
                 if self._consec_errors >= 3:
@@ -261,6 +283,7 @@ class PrometheusEngine:
                 self._xgb_trained_on_start = True
             except Exception as e:
                 logger.warning(f"[Engine] XGBoost startup training failed: {e}")
+                journal.add("ml", f"XGBoost startup training failed: {e}")
                 self._xgb_trained_on_start = True
 
         while self.running:
@@ -269,10 +292,12 @@ class PrometheusEngine:
                 if now - self._last_sentiment_update > 3600:
                     self.sentiment.update()
                     self._last_sentiment_update = now
+                    journal.add("slow_data", "sentiment updated")
                 if now - self._last_whale_update > 1800:
                     coin = self._symbols()[0].replace("/USDT", "")
                     self.whale.update(coin)
                     self._last_whale_update = now
+                    journal.add("slow_data", f"whale data updated coin={coin}", coin=coin)
                 if now - self._last_4h_update > 1800:
                     await self._update_4h_bias()
                     self._last_4h_update = now
@@ -285,14 +310,17 @@ class PrometheusEngine:
                             model = getattr(self.entry, "_xgb", None)
                             if model is not None and hasattr(model, "train_if_stale"):
                                 model.train_if_stale(df, max_age_hours=6)
+                                journal.add("ml", f"XGBoost retrain checked symbol={train_symbol}", symbol=train_symbol)
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")
+                        journal.add("ml", f"XGBoost retrain check failed: {e}")
                     self._last_xgb_retrain = now
                 now_t = datetime.now().time()
                 if dtime(0, 0) <= now_t <= dtime(0, 5):
                     self.telegram.daily_summary(self.orders.get_stats())
             except Exception as e:
                 logger.warning(f"[Engine] Slow loop error: {e}")
+                journal.add("error", f"slow loop error: {e}")
             await asyncio.sleep(300)
 
     async def _update_4h_bias(self):
@@ -300,6 +328,7 @@ class PrometheusEngine:
             df_4h = await self.exchange.get_ohlcv(self._symbols()[0], "4h", limit=60)
             if df_4h.empty or len(df_4h) < 20:
                 self._4h_bias = 0
+                journal.add("htf", "4H bias neutral: insufficient data")
                 return
             ema20 = df_4h["close"].ewm(span=20).mean().iloc[-1]
             ema50 = df_4h["close"].ewm(span=50).mean().iloc[-1]
@@ -310,8 +339,10 @@ class PrometheusEngine:
                 self._4h_bias = -1
             else:
                 self._4h_bias = 0
+            journal.add("htf", f"4H bias updated={self._4h_bias}", htf_bias=self._4h_bias, price=last)
         except Exception as e:
             logger.warning(f"[Engine] 4H bias update failed: {e}")
+            journal.add("htf", f"4H bias update failed: {e}")
             self._4h_bias = 0
 
     def _session_multiplier(self) -> float:
@@ -333,7 +364,7 @@ class PrometheusEngine:
             return 0.0
 
     async def _broadcast_state(self, price, signal, layer_scores, regime):
-        state_update = {"type": "state", "data": {"last_price": price, "regime": regime.get("regime"), "fear_greed": regime.get("fear_greed"), "funding_rate": regime.get("funding_rate"), "htf_bias": self._4h_bias, "last_signal": signal if signal.get("trade") else None, "rotator_ranked": [{"symbol": r.get("symbol"), "score": r.get("final_score"), "trade": r.get("signal", {}).get("trade"), "side": r.get("signal", {}).get("side")} for r in self._rotator_ranked[:10]], "layer_scores": layer_scores, "stats": self.orders.get_stats(), "open_trades": self.orders.get_open_trades(), "trade_log": self.orders.risk.trade_history[-50:]}}
+        state_update = {"type": "state", "data": {"last_price": price, "regime": regime.get("regime"), "fear_greed": regime.get("fear_greed"), "funding_rate": regime.get("funding_rate"), "htf_bias": self._4h_bias, "last_signal": signal if signal.get("trade") else signal, "rotator_ranked": [{"symbol": r.get("symbol"), "score": r.get("final_score"), "raw_score": r.get("score"), "trade": r.get("signal", {}).get("trade"), "side": r.get("signal", {}).get("side"), "reason": r.get("signal", {}).get("reason"), "confidence": r.get("signal", {}).get("confidence"), "notional": r.get("signal", {}).get("notional"), "risk_amount": r.get("signal", {}).get("risk_amount")} for r in self._rotator_ranked[:10]], "layer_scores": layer_scores, "stats": self.orders.get_stats(), "open_trades": self.orders.get_open_trades(), "trade_log": self.orders.risk.trade_history[-50:], "decision_log": journal.list(160)}}
         try:
             await self.broadcast(state_update)
         except Exception:
