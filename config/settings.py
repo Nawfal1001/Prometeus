@@ -269,5 +269,23 @@ def reload_from_sources():
     PORT = get_int("PORT", 8000)
     LOG_LEVEL = get("LOG_LEVEL", "INFO")
 
+    _validate()
+
+
+def _validate():
+    import warnings as _warnings
+    if LEVERAGE > 20:
+        _warnings.warn(f"LEVERAGE={LEVERAGE} is dangerously high. Consider ≤20.", stacklevel=4)
+    if MAX_RISK_PER_TRADE > 0.5:
+        _warnings.warn(f"MAX_RISK_PER_TRADE={MAX_RISK_PER_TRADE} exceeds 50% — likely a misconfiguration.", stacklevel=4)
+    if MAX_DAILY_DRAWDOWN > 0.5:
+        _warnings.warn(f"MAX_DAILY_DRAWDOWN={MAX_DAILY_DRAWDOWN} exceeds 50% — likely a misconfiguration.", stacklevel=4)
+    valid_timeframes = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
+    if TIMEFRAME not in valid_timeframes:
+        _warnings.warn(f"TIMEFRAME='{TIMEFRAME}' is not a standard CCXT timeframe. Valid: {sorted(valid_timeframes)}", stacklevel=4)
+    valid_modes = {"paper", "live", "backtest"}
+    if TRADING_MODE not in valid_modes:
+        _warnings.warn(f"TRADING_MODE='{TRADING_MODE}' is not recognised. Expected one of: {sorted(valid_modes)}", stacklevel=4)
+
 
 reload_from_sources()

@@ -25,7 +25,9 @@ class SymbolMemory:
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps({'updated_at': time.time(), 'setups': self.data}, indent=2))
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            tmp.write_text(json.dumps({'updated_at': time.time(), 'setups': self.data}, indent=2))
+            tmp.replace(self.path)
         except Exception:
             pass
 

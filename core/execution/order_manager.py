@@ -35,7 +35,9 @@ class OrderManager:
                 "capital": self.risk.capital,
                 "trade_history": self.risk.trade_history[-200:],
             }
-            TRADES_FILE.write_text(json.dumps(data, indent=2, default=str))
+            tmp = TRADES_FILE.with_suffix(TRADES_FILE.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2, default=str))
+            tmp.replace(TRADES_FILE)
         except Exception as e:
             logger.warning(f"[Orders] Save failed: {e}")
 

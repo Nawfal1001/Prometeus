@@ -117,7 +117,7 @@ class RegimeDetector:
             self.current_regime = "RANGE"
             bias = 0
 
-        logger.info(
+        logger.debug(
             f"[Regime] {self.current_regime} | "
             f"score={self.regime_score:.2f} | "
             f"F&G={fg} | funding={funding_rate:.4f}"

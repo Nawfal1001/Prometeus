@@ -84,16 +84,23 @@ def ui_log(message: str, level: str = "INFO"):
     getattr(logger, level.lower(), logger.info)(f"[UI] {message}")
 
 
+_ws_lock = asyncio.Lock()
+
+
 async def broadcast(data: dict):
+    async with _ws_lock:
+        clients = list(_ws_clients)
     dead = []
-    for ws in _ws_clients:
+    for ws in clients:
         try:
             await ws.send_json(data)
         except Exception:
             dead.append(ws)
-    for ws in dead:
-        if ws in _ws_clients:
-            _ws_clients.remove(ws)
+    if dead:
+        async with _ws_lock:
+            for ws in dead:
+                if ws in _ws_clients:
+                    _ws_clients.remove(ws)
 
 
 def update_state(key, value):
@@ -549,7 +556,8 @@ async def apply_optimization_params(request: Request):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    _ws_clients.append(websocket)
+    async with _ws_lock:
+        _ws_clients.append(websocket)
     try:
         await websocket.send_json({"type": "state", "data": _state})
         while True:
@@ -559,5 +567,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         pass
     finally:
-        if websocket in _ws_clients:
-            _ws_clients.remove(websocket)
+        async with _ws_lock:
+            if websocket in _ws_clients:
+                _ws_clients.remove(websocket)
