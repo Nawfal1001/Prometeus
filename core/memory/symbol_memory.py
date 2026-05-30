@@ -29,13 +29,30 @@ class SymbolMemory:
         except Exception:
             pass
 
-    def setup_key(self, symbol, side):
+    def _decay(self, st):
+        decay = float(getattr(cfg, 'MEMORY_DECAY', 0.995))
+        decay = max(0.90, min(1.0, decay))
+        st['wins'] = float(st.get('wins', 0.0)) * decay
+        st['losses'] = float(st.get('losses', 0.0)) * decay
+        st['pnl'] = float(st.get('pnl', 0.0)) * decay
+        return st
+
+    def setup_key(self, symbol, side, regime=None):
+        if regime:
+            return f'{symbol}|{side}|{regime}'
         return f'{symbol}|{side}'
 
-    def score(self, symbol, side):
+    def _keys(self, symbol, side, regime=None):
+        keys = []
+        if regime:
+            keys.append(self.setup_key(symbol, side, regime))
+        keys.extend([self.setup_key(symbol, side), symbol])
+        return keys
+
+    def score(self, symbol, side, regime=None):
         min_trades = int(getattr(cfg, 'MEMORY_MIN_TRADES', 5))
         scores = []
-        for key in (self.setup_key(symbol, side), symbol):
+        for key in self._keys(symbol, side, regime):
             st = self.data.get(key)
             if not st:
                 continue
@@ -50,13 +67,16 @@ class SymbolMemory:
         return float(sum(scores) / len(scores)) if scores else 0.5
 
     def update(self, symbol, side, pnl, meta=None):
-        for key in (self.setup_key(symbol, side), symbol):
-            st = self.data.setdefault(key, {'trades': 0, 'wins': 0, 'losses': 0, 'pnl': 0.0})
+        meta = meta or {}
+        regime = meta.get('regime')
+        for key in self._keys(symbol, side, regime):
+            st = self.data.setdefault(key, {'trades': 0, 'wins': 0.0, 'losses': 0.0, 'pnl': 0.0})
+            st = self._decay(st)
             st['trades'] = int(st.get('trades', 0)) + 1
             if pnl > 0:
-                st['wins'] = int(st.get('wins', 0)) + 1
+                st['wins'] = float(st.get('wins', 0.0)) + 1.0
             else:
-                st['losses'] = int(st.get('losses', 0)) + 1
+                st['losses'] = float(st.get('losses', 0.0)) + 1.0
             st['pnl'] = round(float(st.get('pnl', 0.0)) + float(pnl), 6)
             st['last_pnl'] = round(float(pnl), 6)
             st['updated_at'] = time.time()
