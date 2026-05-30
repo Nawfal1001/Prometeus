@@ -19,8 +19,8 @@ class LiquidationGravity:
     def update(self, current_price: float, symbol: str = "BTC") -> dict:
         """
         Fetch liquidation clusters and compute gravity score.
-        Positive = price pulled upward (long liq above)
-        Negative = price pulled downward (short liq below)
+        Positive = price pulled upward (short liquidations above)
+        Negative = price pulled downward (long liquidations below)
         """
         clusters = self._fetch_clusters(symbol, current_price)
         if not clusters:
@@ -30,14 +30,13 @@ class LiquidationGravity:
         score = self._compute_gravity(clusters, current_price)
         self.last_score = score
 
-        # Find nearest targets
         above = [c for c in clusters if c["price"] > current_price]
         below = [c for c in clusters if c["price"] < current_price]
 
         self.nearest_short = min(above, key=lambda x: x["price"]) if above else None
         self.nearest_long  = max(below, key=lambda x: x["price"]) if below else None
 
-        nearest_target = self.nearest_short if score < 0 else self.nearest_long
+        nearest_target = self.nearest_short if score > 0 else self.nearest_long if score < 0 else None
 
         logger.info(f"[LiqGravity] score={score:.3f} | price={current_price:.0f} | clusters={len(clusters)}")
         return {
@@ -51,15 +50,11 @@ class LiquidationGravity:
         return self.last_score
 
     def get_price_target(self, direction: int, current_price: float) -> float:
-        """Return the liquidation-based price target."""
         if direction == 1 and self.nearest_short:
             return self.nearest_short["price"]
         if direction == -1 and self.nearest_long:
             return self.nearest_long["price"]
-        # Fallback to default take profit
         return current_price * (1 + direction * cfg.TAKE_PROFIT_PCT)
-
-    # ── Gravity Formula ───────────────────────────────────────
 
     def _compute_gravity(self, clusters: list, price: float) -> float:
         """
@@ -67,45 +62,37 @@ class LiquidationGravity:
         Short liq above price → pull up (+)
         Long liq below price  → pull down (-)
 
-        We TRADE in the direction of gravity (price hunts liquidity).
+        Normalize by total absolute gravity contribution so the score is a
+        real imbalance in [-1, 1], not a constant sign value.
         """
-        gravity = 0.0
-        proximity = cfg.LIQUIDATION_PROXIMITY_PCT
+        net_gravity = 0.0
+        total_magnitude = 0.0
+        proximity = float(getattr(cfg, "LIQUIDATION_PROXIMITY_PCT", 0.08))
 
         for c in clusters:
-            distance = abs(c["price"] - price) / price
-            if distance < 0.0001:
-                continue  # avoid division by near-zero
+            try:
+                level = float(c["price"])
+                size = max(float(c.get("size", 0.0)), 0.0)
+            except Exception:
+                continue
+            distance = abs(level - price) / max(price, 1e-9)
+            if distance < 0.0001 or distance > proximity:
+                continue
 
-            g = c["size"] / (distance ** 2)
+            contribution = size / max(distance ** 2, 1e-9)
+            total_magnitude += abs(contribution)
+            net_gravity += contribution if level > price else -contribution
 
-            if c["price"] > price:
-                # Short liquidations above → price hunts up → positive
-                gravity += g
-            else:
-                # Long liquidations below → price hunts down → negative
-                gravity -= g
-
-        # Normalize to [-1, 1]
-        max_g = max(abs(gravity), 1e-9)
-        return float(np.clip(gravity / (max_g * 10), -1.0, 1.0))
-
-    # ── Data Fetching ─────────────────────────────────────────
+        if total_magnitude <= 1e-9:
+            return 0.0
+        return float(np.clip(net_gravity / total_magnitude, -1.0, 1.0))
 
     def _fetch_clusters(self, symbol: str, price: float) -> list:
-        """
-        Fetch liquidation heatmap from Coinglass.
-        Falls back to synthetic data if API unavailable.
-        """
         coin = symbol.replace("/USDT", "").replace("USDT", "")
-
-        # Try Coinglass API
         if cfg.COINGLASS_KEY:
             clusters = self._coinglass_api(coin)
             if clusters:
                 return clusters
-
-        # Free scrape fallback (public endpoint)
         return self._coinglass_public(coin, price)
 
     def _coinglass_api(self, coin: str) -> list:
@@ -128,20 +115,16 @@ class LiquidationGravity:
 
     def _coinglass_public(self, coin: str, current_price: float) -> list:
         """
-        Synthetic liquidation clusters based on round numbers and
-        common leverage levels when Coinglass API is unavailable.
+        Synthetic clusters are intentionally weak and slightly distance-limited.
+        They are a fallback only. Real Coinglass data should dominate whenever configured.
         """
         clusters = []
-        leverages = [2, 3, 5, 10, 20, 25, 50, 100]
+        leverages = [5, 10, 20, 25, 50, 100]
         base_size = 1000
-
         for lev in leverages:
-            # Long liquidations below (will be liquidated if price drops 1/lev)
             long_liq_price  = current_price * (1 - 1 / lev)
             short_liq_price = current_price * (1 + 1 / lev)
-            size = base_size * lev  # Higher leverage = more liq at that level
-
+            size = base_size * lev
             clusters.append({"price": long_liq_price,  "size": size})
             clusters.append({"price": short_liq_price, "size": size})
-
         return clusters
