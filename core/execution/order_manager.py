@@ -52,6 +52,9 @@ class OrderManager:
         except Exception as e:
             logger.warning(f"[Orders] Load failed, starting fresh: {e}")
 
+    def _is_paper_forced(self, signal: dict) -> bool:
+        return bool(self.paper and str(signal.get("reason", "")).startswith("paper_forced_from_"))
+
     def _sizing_from_signal(self, signal: dict, price: float):
         notional = float(signal.get("notional", signal.get("position_size", 0.0)) or 0.0)
         qty = float(signal.get("qty", 0.0) or 0.0)
@@ -89,17 +92,22 @@ class OrderManager:
         if self.paper and self.open_trades:
             return {"status": "blocked", "reason": "one_active_trade_limit"}
 
+        paper_forced = self._is_paper_forced(signal)
         atr_norm = float(signal.get("atr_norm", signal.get("atr", 0.002)) or 0.002)
         vol_z = float(signal.get("vol_zscore", 0) or 0)
         allowed_entry, entry_reason = self.exit_mgr.entry_allowed(atr_norm, vol_z)
-        if not allowed_entry:
+        if not allowed_entry and not paper_forced:
             return {"status": "blocked", "reason": entry_reason}
+        if not allowed_entry and paper_forced:
+            logger.info(f"[Orders] Paper forced signal bypassed exit entry filter: {entry_reason}")
 
         threshold_mult = self.risk.threshold_multiplier()
         effective_thr = cfg.FUSION_THRESHOLD * threshold_mult
-        if abs(signal.get("fusion_score", 0)) < effective_thr:
+        if abs(float(signal.get("fusion_score", 0) or 0)) < effective_thr and not paper_forced:
             logger.info(f"[Orders] Trade blocked by live feedback (mult={threshold_mult:.2f})")
             return {"status": "blocked", "reason": "live_feedback"}
+        if paper_forced:
+            logger.info(f"[Orders] Paper forced signal accepted | score={abs(float(signal.get('fusion_score', 0) or 0)):.4f} threshold={effective_thr:.4f}")
 
         allowed, reason = self.risk.can_trade(open_trades=self.open_trades, signal=signal)
         if not allowed:
