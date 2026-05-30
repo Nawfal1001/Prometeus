@@ -77,20 +77,23 @@ class DecisionJournal:
         )
 
     def signal(self, symbol: str, signal: Dict[str, Any], **data: Any):
+        payload = {
+            "symbol": symbol,
+            "trade": bool(signal.get("trade")),
+            "side": signal.get("side"),
+            "fusion_score": float(signal.get("fusion_score", 0) or 0),
+            "confidence": signal.get("confidence"),
+            "reason": signal.get("reason"),
+            "notional": signal.get("notional"),
+            "risk_amount": signal.get("risk_amount"),
+            "layer_scores": signal.get("layer_scores"),
+            "source_warning": signal.get("source_warning"),
+        }
+        payload.update(data)
         return self.add(
             "signal",
             f"{symbol} trade={bool(signal.get('trade'))} side={signal.get('side') or '-'} score={float(signal.get('fusion_score', 0) or 0):.3f} reason={signal.get('reason', '-')}",
-            symbol=symbol,
-            trade=bool(signal.get("trade")),
-            side=signal.get("side"),
-            fusion_score=float(signal.get("fusion_score", 0) or 0),
-            confidence=signal.get("confidence"),
-            reason=signal.get("reason"),
-            notional=signal.get("notional"),
-            risk_amount=signal.get("risk_amount"),
-            layer_scores=signal.get("layer_scores"),
-            source_warning=signal.get("source_warning"),
-            **data,
+            **payload,
         )
 
     def order(self, symbol: str, status: str, reason: str = None, **data: Any):

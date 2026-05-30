@@ -95,11 +95,26 @@ function applyLayers(scores) {
 }
 
 function applySignal(sig) {
-  if (!sig?.trade) return;
+  if (!sig) return;
   const panel = document.getElementById("signal-panel");
+  const confTxt = sig.confidence !== undefined ? `${Number(sig.confidence).toFixed(1)}%` : "—";
+  if (!sig.trade) {
+    if (panel) panel.className = `signal-panel signal-none`;
+    const reason = sig.reason ? ` — ${sig.reason}` : "";
+    set("sig-direction", `BLOCKED${reason}`);
+    set("sig-conf", confTxt);
+    set("sig-entry", "—");
+    set("sig-sl", "—");
+    set("sig-tp", "—");
+    set("sig-rr", "—");
+    set("sig-size", "—");
+    set("sig-market", sig.market_type || "—");
+    if (sig.layer_scores) applyLayers({...sig.layer_scores, fusion: sig.fusion_score});
+    return;
+  }
   if (panel) panel.className = `signal-panel signal-${sig.side}`;
   set("sig-direction", sig.side === "long" ? "▲ LONG" : "▼ SHORT");
-  set("sig-conf",   sig.confidence !== undefined ? `${sig.confidence}%` : "—");
+  set("sig-conf",   confTxt);
   set("sig-entry",  sig.entry_price ? money(sig.entry_price) : "—");
   set("sig-sl",     sig.stop_loss ? money(sig.stop_loss) : "—");
   set("sig-tp",     sig.take_profit ? money(sig.take_profit) : "—");

@@ -150,26 +150,51 @@ class FusionEngine:
         direction = 1 if session_adjusted_score > 0 else -1
         abs_score = abs(session_adjusted_score)
 
+        blocked_signal_payload = {
+            "raw_fusion_score": round(raw_fusion_score, 4),
+            "fusion_score": round(session_adjusted_score, 4),
+            "abs_score": round(abs_score, 4),
+            "confidence": round(abs_score * 100, 1),
+            "direction": direction,
+            "side": "long" if direction == 1 else "short",
+            "session_mult": round(session_mult, 2),
+            "htf_bias": htf_bias,
+            "layer_scores": {k: round(v, 4) for k, v in scores.items()},
+            "layer_sources": independence["sources"],
+            "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()},
+            "independence_score": independence["score"],
+            "source_warning": independence["warning"],
+        }
+
         htf_block_threshold = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
         if htf_bias == 1 and direction == -1 and abs(entry_score) < htf_block_threshold:
             logger.info(f"[Fusion] 4H BULL bias blocks weak short (entry={entry_score:.3f})")
-            return self._no_trade("htf_bias_blocks_short")
+            result = self._no_trade("htf_bias_blocks_short")
+            result.update(blocked_signal_payload)
+            return result
         if htf_bias == -1 and direction == 1 and abs(entry_score) < htf_block_threshold:
             logger.info(f"[Fusion] 4H BEAR bias blocks weak long (entry={entry_score:.3f})")
-            return self._no_trade("htf_bias_blocks_long")
+            result = self._no_trade("htf_bias_blocks_long")
+            result.update(blocked_signal_payload)
+            return result
 
         regime_block_threshold = float(getattr(cfg, "REGIME_BLOCK_THRESHOLD", 0.25))
         if regime_bias == 1 and direction == -1 and abs(entry_score) < regime_block_threshold:
             logger.info("[Fusion] BULL regime blocks weak short")
-            return self._no_trade("regime_filter")
+            result = self._no_trade("regime_filter")
+            result.update(blocked_signal_payload)
+            return result
         if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_block_threshold:
             logger.info("[Fusion] BEAR regime blocks weak long")
-            return self._no_trade("regime_filter")
+            result = self._no_trade("regime_filter")
+            result.update(blocked_signal_payload)
+            return result
 
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
         if abs_score < effective_threshold:
             result = self._no_trade("below_threshold")
-            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "independence_score": independence["score"], "layer_sources": independence["sources"], "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()}, "source_warning": independence["warning"]})
+            result.update(blocked_signal_payload)
+            result["effective_threshold"] = round(effective_threshold, 4)
             return result
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
@@ -179,7 +204,9 @@ class FusionEngine:
         rr_ratio = tp2_mult / max(sl_mult, 1e-9)
         if rr_ratio < min_rr:
             result = self._no_trade("rr_too_low")
-            result.update({"raw_fusion_score": round(raw_fusion_score, 4), "fusion_score": round(session_adjusted_score, 4), "session_mult": round(session_mult, 2), "effective_threshold": round(effective_threshold, 4), "rr_ratio": round(rr_ratio, 2), "independence_score": independence["score"], "layer_sources": independence["sources"], "effective_weights": {k: round(v, 4) for k, v in effective_weights.items()}, "source_warning": independence["warning"]})
+            result.update(blocked_signal_payload)
+            result["effective_threshold"] = round(effective_threshold, 4)
+            result["rr_ratio"] = round(rr_ratio, 2)
             return result
 
         confidence_mult = self._confidence_multiplier(abs_score, threshold=effective_threshold)
