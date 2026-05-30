@@ -150,9 +150,9 @@ class BacktestEngine:
         vol_z = float(row.get("vol_zscore", 0) or 0)
         atr_norm = float(row.get("atr_norm", 0.003) or 0.003)
         if vol_z > float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5)):
-            return {"trade": False, "reason": "vol_spike", "fusion_score": 0.0, "abs_score": 0.0}
+            return {"trade": False, "reason": "vol_spike", "fusion_score": 0.0, "abs_score": 0.0, "confidence": 0.0}
         if atr_norm < float(getattr(cfg, "MIN_ATR_NORM", 0.001)):
-            return {"trade": False, "reason": "dead_vol", "fusion_score": 0.0, "abs_score": 0.0}
+            return {"trade": False, "reason": "dead_vol", "fusion_score": 0.0, "abs_score": 0.0, "confidence": 0.0}
 
         entry_score = self._entry_score(row)
         regime_bias, regime_score = self._regime_score(row)
@@ -162,14 +162,19 @@ class BacktestEngine:
         fusion_score = float(np.clip((entry_score * w_e + regime_score * w_r) / w_total, -1, 1))
         direction = 1 if fusion_score > 0 else -1
         abs_score = abs(fusion_score)
+        side = "long" if direction == 1 else "short"
+        confidence_pct = round(abs_score * 100, 1)
+
+        def _blocked(reason):
+            return {"trade": False, "reason": reason, "fusion_score": round(fusion_score, 4), "abs_score": round(abs_score, 4), "confidence": confidence_pct, "direction": direction, "side": side}
 
         if str(getattr(cfg, "MARKET_TYPE", "futures")).lower() == "spot" and direction == -1:
-            return {"trade": False, "reason": "spot_short", "fusion_score": fusion_score, "abs_score": abs_score}
+            return _blocked("spot_short")
         regime_thr = float(getattr(cfg, "REGIME_BLOCK_THRESHOLD", 0.25))
         if regime_bias == 1 and direction == -1 and abs(entry_score) < regime_thr:
-            return {"trade": False, "reason": "regime_blocks_short", "fusion_score": fusion_score, "abs_score": abs_score}
+            return _blocked("regime_blocks_short")
         if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_thr:
-            return {"trade": False, "reason": "regime_blocks_long", "fusion_score": fusion_score, "abs_score": abs_score}
+            return _blocked("regime_blocks_long")
 
         vol_regime = float(row.get("vol_regime", 1.0) or 1.0)
         threshold_mult = 1.0
@@ -181,14 +186,14 @@ class BacktestEngine:
             threshold_mult = 0.90
         threshold = float(getattr(cfg, "FUSION_THRESHOLD", 0.17)) * threshold_mult
         if abs_score < threshold:
-            return {"trade": False, "reason": "below_threshold", "fusion_score": fusion_score, "abs_score": abs_score}
+            return {**_blocked("below_threshold"), "effective_threshold": round(threshold, 4)}
 
         sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
         tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
         tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
         min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
         if tp2_mult / max(sl_mult, 1e-9) < min_rr:
-            return {"trade": False, "reason": "rr_too_low", "fusion_score": fusion_score, "abs_score": abs_score}
+            return {**_blocked("rr_too_low"), "rr_ratio": round(tp2_mult / max(sl_mult, 1e-9), 2)}
 
         capital = current_capital if current_capital is not None else float(getattr(cfg, "INITIAL_CAPITAL", 50))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
