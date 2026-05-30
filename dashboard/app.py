@@ -27,6 +27,7 @@ from dashboard.api_lab import router as lab_router
 from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
+ROOT_DIR = BASE_DIR.parent
 app = FastAPI(title="PROMETHEUS v4")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -105,6 +106,90 @@ def reload_runtime_settings():
     _state["market_type"] = cfg.MARKET_TYPE
     _state["exchange"] = cfg.EXCHANGE
     return ["EXCHANGE", "MARKET_TYPE", "TRADING_MODE", "SYMBOL", "TIMEFRAME", "LEVERAGE", "INITIAL_CAPITAL", "MAX_RISK_PER_TRADE", "MAX_DAILY_DRAWDOWN", "MAX_TRADES_PER_DAY", "FUSION_THRESHOLD", "MIN_RR_RATIO", "REGIME_CHAOS_VOLATILITY", "STOP_LOSS_PCT", "TAKE_PROFIT_PCT"]
+
+
+def _mask_secret(value):
+    if value in (None, ""):
+        return ""
+    s = str(value)
+    return "*" * max(4, len(s) - 4) + s[-4:]
+
+
+def _health_test(status, group, name, message, details=None):
+    return {"status": status, "group": group, "name": name, "message": message, "details": details or {}}
+
+
+def _health_summary(tests):
+    groups = {}
+    for t in tests:
+        g = groups.setdefault(t["group"], {"status": "ok", "summary": "", "ok": 0, "warn": 0, "fail": 0})
+        g[t["status"]] += 1
+    for g in groups.values():
+        g["status"] = "fail" if g["fail"] else "warn" if g["warn"] else "ok"
+        g["summary"] = f"{g['ok']} ok, {g['warn']} warn, {g['fail']} fail"
+    ok_count = sum(1 for t in tests if t["status"] == "ok")
+    warn_count = sum(1 for t in tests if t["status"] == "warn")
+    fail_count = sum(1 for t in tests if t["status"] == "fail")
+    return {"overall_status": "fail" if fail_count else "warn" if warn_count else "ok", "generated_at": datetime.utcnow().isoformat(), "uptime_s": int(_time.time() - _start_time), "ok_count": ok_count, "warn_count": warn_count, "fail_count": fail_count, "groups": groups, "tests": tests}
+
+
+async def run_full_health_tests():
+    tests = []
+    reload_runtime_settings()
+    tests.append(_health_test("ok", "Core", "FastAPI", "Backend running", {"uptime_s": int(_time.time() - _start_time)}))
+    tests.append(_health_test("ok", "Core", "Settings", "Runtime settings loaded", {"exchange": cfg.EXCHANGE, "symbol": cfg.SYMBOL, "timeframe": cfg.TIMEFRAME, "mode": cfg.TRADING_MODE}))
+
+    for name, path in {"data_dir": ROOT_DIR / "data", "model_dir": ROOT_DIR / "data" / "models"}.items():
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".healthcheck"
+            probe.write_text("ok")
+            probe.unlink(missing_ok=True)
+            tests.append(_health_test("ok", "Storage", name, "Writable", {"path": str(path)}))
+        except Exception as e:
+            tests.append(_health_test("fail", "Storage", name, "Not writable", {"path": str(path), "error": str(e)}))
+
+    for key in sorted(_SECRET_KEYS):
+        value = getattr(cfg, key, "")
+        configured = bool(value)
+        tests.append(_health_test("ok" if configured else "warn", "APIs", key, "configured" if configured else "missing", {"configured": configured, "masked": _mask_secret(value)}))
+
+    df = None
+    try:
+        df = await _fetch_ohlcv(cfg.SYMBOL, cfg.TIMEFRAME, 80)
+        tests.append(_health_test("ok" if df is not None and not df.empty else "fail", "Exchange", "OHLCV", "Market data fetched" if df is not None and not df.empty else "No candles returned", {"symbol": cfg.SYMBOL, "timeframe": cfg.TIMEFRAME, "rows": 0 if df is None else len(df)}))
+    except Exception as e:
+        tests.append(_health_test("fail", "Exchange", "OHLCV", "Market data fetch failed", {"error": str(e)}))
+
+    try:
+        from core.models.feature_engine import compute_features
+        if df is not None and not df.empty:
+            feat = compute_features(df.copy())
+            tests.append(_health_test("ok" if feat is not None and not feat.empty else "fail", "AI", "Feature engine", "Features computed" if feat is not None and not feat.empty else "No features returned", {"rows": 0 if feat is None else len(feat)}))
+        else:
+            tests.append(_health_test("warn", "AI", "Feature engine", "Skipped because OHLCV failed"))
+    except Exception as e:
+        tests.append(_health_test("fail", "AI", "Feature engine", "Feature computation failed", {"error": str(e)}))
+
+    try:
+        from core.models.xgboost_model import MODEL_PATH, MODEL_VERSION, XGBoostSignalModel
+        model = XGBoostSignalModel()
+        model.load()
+        loaded = model.model is not None
+        tests.append(_health_test("ok" if loaded else "warn", "AI", "XGBoost model", "Model loaded" if loaded else "Model not trained yet", {"exists": MODEL_PATH.exists(), "path": str(MODEL_PATH), "version": getattr(model, "_version", None), "expected_version": MODEL_VERSION}))
+    except Exception as e:
+        tests.append(_health_test("fail", "AI", "XGBoost model", "Model load failed", {"error": str(e)}))
+
+    for group, name, module in [("Trading", "Fusion", "core.layers.fusion"), ("Trading", "Entry signal", "core.layers.entry_signal"), ("Trading", "Risk manager", "core.risk.risk_manager"), ("Trading", "Exit manager", "core.execution.exit_manager"), ("Trading", "Order manager", "core.execution.order_manager"), ("Optimization", "Optimizer", "optimization.optimizer"), ("Optimization", "Walk-forward optimizer", "optimization.walkforward_optimizer")]:
+        try:
+            __import__(module)
+            tests.append(_health_test("ok", group, name, "Import ok", {"module": module}))
+        except Exception as e:
+            tests.append(_health_test("fail", group, name, "Import failed", {"module": module, "error": str(e)}))
+
+    tests.append(_health_test("ok" if not _opt_status.get("running") else "warn", "Jobs", "Optimizer", "idle" if not _opt_status.get("running") else "running", _opt_status))
+    tests.append(_health_test("ok" if not _model_status.get("running") else "warn", "Jobs", "Model training", "idle" if not _model_status.get("running") else "running", _model_status))
+    return _health_summary(tests)
 
 
 def _normalize_symbol_list(raw, fallback_symbol=None, all_default=False):
@@ -257,7 +342,7 @@ async def _run_optimization_job(params: dict):
                         res = await loop.run_in_executor(executor, lambda d=df: _run_walkforward_sync(d, train_bars, test_bars, step_bars, trials, metric, timeout))
                         res["rank_score"] = float(res.get("summary", {}).get("avg_profit_factor", 0)) * 100 + float(res.get("summary", {}).get("avg_win_rate", 0)) * 100
                     else:
-                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, None, mode="single"))
+                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, progress_callback, mode="single"))
                         res["rank_score"] = float(res.get("best_value", -999))
                     res["symbol"] = symbol
                     rows.append(res)
@@ -313,9 +398,19 @@ async def train_page(request: Request):
     return templates.TemplateResponse("train.html", {"request": request})
 
 
+@app.get("/health-dashboard", response_class=HTMLResponse)
+async def health_dashboard(request: Request):
+    return templates.TemplateResponse("health.html", {"request": request})
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "uptime_s": int(_time.time() - _start_time), "engine": _state.get("status", "unknown"), "exchange": cfg.EXCHANGE, "symbol": cfg.SYMBOL, "optimization_running": _opt_status["running"], "model_training_running": _model_status["running"]}
+
+
+@app.get("/api/health/full")
+async def api_health_full():
+    return await run_full_health_tests()
 
 
 @app.get("/api/state")
@@ -337,7 +432,9 @@ async def clear_logs():
 @app.get("/api/settings")
 def api_get_settings():
     keys = [k for k in dir(cfg) if k.isupper() and not k.startswith("_")]
-    return {k: getattr(cfg, k) for k in keys if k not in _SECRET_KEYS}
+    data = {k: getattr(cfg, k) for k in keys if k not in _SECRET_KEYS}
+    data["_secret_status"] = {k: {"configured": bool(getattr(cfg, k, "")), "masked": _mask_secret(getattr(cfg, k, ""))} for k in sorted(_SECRET_KEYS)}
+    return data
 
 
 @app.post("/api/settings")
