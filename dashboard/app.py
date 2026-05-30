@@ -562,7 +562,10 @@ async def backtest_page(request: Request):
 async def optimize_page(request: Request):
     return templates.TemplateResponse("optimize.html", {"request": request})
 
-
+@app.get("/log-trade", response_class=HTMLResponse)
+async def log_trade_page(request: Request):
+    return templates.TemplateResponse("log_trade.html", {"request": request})
+    
 @app.get("/robust-optimize", response_class=HTMLResponse)
 async def robust_optimize_page(request: Request):
     return templates.TemplateResponse("robust_optimize.html", {"request": request})
