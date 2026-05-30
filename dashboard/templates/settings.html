@@ -4,195 +4,101 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PROMETHEUS — Settings</title>
 <link rel="stylesheet" href="/static/css/style.css">
+<style>.textarea{min-height:78px;width:100%;resize:vertical}.full{grid-column:1/-1}</style>
 </head>
 <body>
-<nav class="navbar">
-  <div class="nav-brand">⚡ PROMETHEUS</div>
-  <div class="nav-links">
-    <a href="/">Dashboard</a><a href="/backtest">Backtest</a>
-    <a href="/optimize">Optimize</a><a href="/lab">Lab</a><a href="/settings" class="active">Settings</a>
-  </div>
-  <div class="nav-status"><span id="status-badge" class="badge badge-stopped">STOPPED</span></div>
-</nav>
-
+<nav class="navbar"><div class="nav-brand">⚡ PROMETHEUS</div><div class="nav-links"><a href="/">Dashboard</a><a href="/scan">Scanner</a><a href="/backtest">Backtest</a><a href="/optimize">Optimize</a><a href="/lab">Lab</a><a href="/train">Train ML</a><a href="/log-trade">Trade Logs</a><a href="/settings" class="active">Settings</a></div><div class="nav-status"><span id="status-badge" class="badge badge-stopped">STOPPED</span></div></nav>
 <div class="container">
-  <div class="settings-header">
-    <h1>⚙️ Settings</h1>
-    <div>
-      <button class="btn btn-secondary" type="button" onclick="resetSettings()">↺ Reset</button>
-      <button class="btn btn-primary" type="button" onclick="saveSettings()">💾 Save All</button>
-    </div>
-  </div>
+  <div class="settings-header"><h1>⚙️ Settings</h1><div><button class="btn btn-secondary" type="button" onclick="loadSettings()">↻ Reload</button><button class="btn btn-primary" type="button" onclick="saveSettings()">💾 Save All</button></div></div>
   <div id="save-msg" class="save-msg" style="display:none"></div>
-
-  <div class="card api-guide" style="margin-bottom:16px">
-    <div class="card-header">🔑 API Keys — What You Need</div>
-    <div style="padding:16px">
-      <table class="trade-table">
-        <thead><tr><th>Service</th><th>Required?</th><th>Cost</th><th>Get It</th><th>Used For</th></tr></thead>
-        <tbody>
-          <tr><td><b>KuCoin</b></td><td class="green">No key for paper/backtest</td><td class="green">Free</td><td>Auto public data</td><td>Spot/futures paper data</td></tr>
-          <tr><td><b>Binance</b></td><td class="yellow">Live only / may be blocked on Render</td><td class="green">Free</td><td><a href="https://binance.com/en/my/settings/api-management" target="_blank" class="link">binance.com ↗</a></td><td>Crypto futures/margin/spot</td></tr>
-          <tr><td><b>Alpaca</b></td><td class="yellow">Stocks only</td><td class="green">Free</td><td><a href="https://app.alpaca.markets/signup" target="_blank" class="link">alpaca.markets ↗</a></td><td>US stocks & ETFs</td></tr>
-          <tr><td><b>CryptoCompare</b></td><td class="green">Recommended</td><td class="green">Free</td><td><a href="https://min-api.cryptocompare.com" target="_blank" class="link">cryptocompare.com ↗</a></td><td>News sentiment</td></tr>
-          <tr><td><b>Etherscan</b></td><td class="green">Recommended</td><td class="green">Free</td><td><a href="https://etherscan.io/apis" target="_blank" class="link">etherscan.io ↗</a></td><td>Whale tracking</td></tr>
-          <tr><td><b>Gemini LLM</b></td><td class="green">Optional</td><td class="green">Free tier</td><td><a href="https://aistudio.google.com" target="_blank" class="link">aistudio.google.com ↗</a></td><td>Premium sentiment</td></tr>
-          <tr><td><b>Telegram</b></td><td class="green">Optional</td><td class="green">Free</td><td><a href="https://t.me/BotFather" target="_blank" class="link">@BotFather ↗</a></td><td>Trade alerts</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
   <form id="settings-form">
-    <div class="settings-section">
-      <div class="section-title">🔌 Exchange & Market Mode</div>
-      <div class="settings-grid">
-        <div class="field-group"><label>Exchange</label><select name="EXCHANGE" id="exchange-select" onchange="updateMarketUI()"><option value="kucoin">KuCoin — Render safe</option><option value="binance">Binance — may be geo-blocked</option><option value="alpaca">Alpaca — stocks</option></select><span class="hint">Use KuCoin on Render to avoid Binance 451 errors.</span></div>
-        <div class="field-group"><label>Market Type</label><select name="MARKET_TYPE" id="market-type-select" onchange="updateMarketUI()"><option value="spot">Spot</option><option value="futures">Futures</option><option value="margin">Margin</option><option value="stocks">Stocks</option></select></div>
-        <div class="field-group"><label>Margin Mode</label><select name="MARGIN_MODE"><option value="isolated">Isolated</option><option value="cross">Cross</option></select></div>
-        <div class="field-group"><label>Trading Mode</label><select name="TRADING_MODE"><option value="paper">Paper</option><option value="live">Live</option></select><span class="hint">Paper mode is recommended until backtests and paper stats are stable.</span></div>
-      </div>
-      <div id="binance-keys" class="settings-grid" style="padding-top:0">
-        <div class="field-group"><label>Binance API Key</label><input type="password" name="BINANCE_API_KEY" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Binance API Secret</label><input type="password" name="BINANCE_API_SECRET" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Use Testnet</label><select name="BINANCE_TESTNET"><option value="false">No</option><option value="true">Yes</option></select></div>
-      </div>
-      <div id="alpaca-keys" class="settings-grid" style="padding-top:0;display:none">
-        <div class="field-group"><label>Alpaca API Key</label><input type="password" name="ALPACA_API_KEY" placeholder="From alpaca.markets dashboard"></div>
-        <div class="field-group"><label>Alpaca API Secret</label><input type="password" name="ALPACA_API_SECRET" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Paper Trading</label><select name="ALPACA_PAPER"><option value="true">Yes</option><option value="false">No</option></select></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">🔌 Exchange & Market Mode</div><div class="settings-grid">
+      <div class="field-group"><label>Exchange</label><select name="EXCHANGE" id="exchange-select" onchange="updateMarketUI()"><option value="kucoin">KuCoin</option><option value="binance">Binance</option><option value="bybit">Bybit</option><option value="alpaca">Alpaca</option></select><span class="hint">KuCoin is usually safer on Render.</span></div>
+      <div class="field-group"><label>Market Type</label><select name="MARKET_TYPE"><option value="spot">Spot</option><option value="futures">Futures</option><option value="margin">Margin</option><option value="stocks">Stocks</option></select></div>
+      <div class="field-group"><label>Trading Mode</label><select name="TRADING_MODE"><option value="paper">Paper</option><option value="live">Live</option></select></div>
+      <div class="field-group"><label>Margin Mode</label><select name="MARGIN_MODE"><option value="isolated">Isolated</option><option value="cross">Cross</option></select></div>
+    </div></div>
 
-    <div class="settings-section">
-      <div class="section-title">📊 Trading Parameters</div>
-      <div class="settings-grid">
-        <div class="field-group"><label>Symbol</label><select name="SYMBOL" id="symbol-select"><optgroup label="Crypto"><option value="BTC/USDT">BTC/USDT</option><option value="ETH/USDT">ETH/USDT</option><option value="SOL/USDT">SOL/USDT</option><option value="BNB/USDT">BNB/USDT</option><option value="XRP/USDT">XRP/USDT</option><option value="DOGE/USDT">DOGE/USDT</option><option value="AVAX/USDT">AVAX/USDT</option></optgroup><optgroup label="US Stocks"><option value="AAPL">AAPL</option><option value="TSLA">TSLA</option><option value="NVDA">NVDA</option><option value="MSFT">MSFT</option><option value="SPY">SPY</option><option value="QQQ">QQQ</option></optgroup></select></div>
-        <div class="field-group"><label>Timeframe</label><select name="TIMEFRAME"><option value="1m">1 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="4h">4 hour</option><option value="1d">Daily</option></select></div>
-        <div class="field-group"><label>Leverage</label><input type="number" name="LEVERAGE" min="1" max="20" step="1"></div>
-        <div class="field-group"><label>Initial Capital</label><input type="number" name="INITIAL_CAPITAL" min="10" step="1"></div>
-        <div class="field-group"><label>Max Risk Per Trade</label><input type="number" name="MAX_RISK_PER_TRADE" min="0.001" max="0.20" step="0.001"></div>
-        <div class="field-group"><label>Max Daily Drawdown</label><input type="number" name="MAX_DAILY_DRAWDOWN" min="0.01" max="0.50" step="0.01"></div>
-        <div class="field-group"><label>Max Trades Per Day</label><input type="number" name="MAX_TRADES_PER_DAY" min="1" max="50" step="1"></div>
-        <div class="field-group"><label>Stop Loss %</label><input type="number" name="STOP_LOSS_PCT" min="0.001" max="0.10" step="0.001"></div>
-        <div class="field-group"><label>Take Profit %</label><input type="number" name="TAKE_PROFIT_PCT" min="0.001" max="0.20" step="0.001"></div>
-        <div class="field-group"><label>Minimum R:R Ratio</label><input type="number" name="MIN_RR_RATIO" min="0.5" max="5" step="0.1"><span class="hint">Fusion blocks trades below this reward:risk.</span></div>
-        <div class="field-group"><label>Fusion Threshold</label><input type="number" name="FUSION_THRESHOLD" min="0.10" max="0.70" step="0.01"><span class="hint">0.15–0.25 recommended. Lower = more trades.</span></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">🪙 Symbols / Paper-Live Universe</div><div class="settings-grid">
+      <div class="field-group"><label>Single Symbol</label><input name="SYMBOL" placeholder="BTC/USDT"><span class="hint">Used when Auto Symbol Selection is OFF.</span></div>
+      <div class="field-group"><label>Auto Symbol Selection</label><select name="AUTO_SYMBOL_SELECTION"><option value="false">Single Symbol Only</option><option value="true">Multi-Symbol Rotator</option></select><span class="hint">This is the main single/multi switch used by the engine config.</span></div>
+      <div class="field-group full"><label>SYMBOLS</label><textarea class="textarea" name="SYMBOLS" placeholder="BTC/USDT,ETH/USDT,SOL/USDT"></textarea><span class="hint">General list used by scanners/optimizers.</span></div>
+      <div class="field-group full"><label>PAPER_SYMBOLS / Live Paper Universe</label><textarea class="textarea" name="PAPER_SYMBOLS" placeholder="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT"></textarea><span class="hint">Symbols used for paper/live rotator when Auto Symbol Selection is ON.</span></div>
+      <div class="field-group"><label>Autoscan Interval Seconds</label><input type="number" name="AUTOSCAN_INTERVAL_SEC" min="30" step="30"></div>
+      <div class="field-group"><label>Autoscan Top N</label><input type="number" name="AUTOSCAN_TOP_N" min="1" max="50" step="1"></div>
+      <div class="field-group"><label>Rotator Minimum Score</label><input type="number" name="ROTATOR_MIN_SCORE" min="0" max="1" step="0.01"></div>
+      <div class="field-group"><label>Trade Only Top N</label><input type="number" name="ROTATOR_TRADE_ONLY_TOP_N" min="1" max="20" step="1"></div>
+      <div class="field-group"><label>Trade On Candle Close</label><select name="TRADE_ON_CANDLE_CLOSE"><option value="true">Yes</option><option value="false">No</option></select></div>
+    </div></div>
 
-    <div class="settings-section">
-      <div class="section-title">📈 Technical Indicators</div>
-      <div class="settings-grid">
-        <div class="field-group"><label>EMA Fast</label><input type="number" name="EMA_FAST" min="5" max="50"></div>
-        <div class="field-group"><label>EMA Mid</label><input type="number" name="EMA_MID" min="20" max="100"></div>
-        <div class="field-group"><label>EMA Slow</label><input type="number" name="EMA_SLOW" min="50" max="300" step="10"></div>
-        <div class="field-group"><label>RSI Period</label><input type="number" name="RSI_PERIOD" min="3" max="30"></div>
-        <div class="field-group"><label>Chaos Vol Threshold</label><input type="number" name="REGIME_CHAOS_VOLATILITY" min="0.03" max="0.15" step="0.005"><span class="hint">Rolling vol threshold for CHAOS. Higher = fewer chaos blocks.</span></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">📊 Trading Parameters</div><div class="settings-grid">
+      <div class="field-group"><label>Timeframe</label><select name="TIMEFRAME"><option value="1m">1m</option><option value="5m">5m</option><option value="15m">15m</option><option value="30m">30m</option><option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option></select></div>
+      <div class="field-group"><label>Leverage</label><input type="number" name="LEVERAGE" min="1" max="50" step="1"></div>
+      <div class="field-group"><label>Initial Capital</label><input type="number" name="INITIAL_CAPITAL" min="1" step="1"></div>
+      <div class="field-group"><label>Max Risk Per Trade</label><input type="number" name="MAX_RISK_PER_TRADE" min="0.001" max="0.50" step="0.001"></div>
+      <div class="field-group"><label>Max Daily Drawdown</label><input type="number" name="MAX_DAILY_DRAWDOWN" min="0.001" max="0.90" step="0.001"></div>
+      <div class="field-group"><label>Max Trades Per Day</label><input type="number" name="MAX_TRADES_PER_DAY" min="1" max="200" step="1"></div>
+      <div class="field-group"><label>Max Consecutive Losses</label><input type="number" name="MAX_CONSEC_LOSSES" min="1" max="50" step="1"></div>
+      <div class="field-group"><label>Fusion Threshold</label><input type="number" name="FUSION_THRESHOLD" min="0" max="1" step="0.01"></div>
+      <div class="field-group"><label>Minimum R:R Ratio</label><input type="number" name="MIN_RR_RATIO" min="0" max="10" step="0.1"></div>
+      <div class="field-group"><label>Stop Loss %</label><input type="number" name="STOP_LOSS_PCT" min="0" max="1" step="0.0001"></div>
+      <div class="field-group"><label>Take Profit %</label><input type="number" name="TAKE_PROFIT_PCT" min="0" max="1" step="0.0001"></div>
+    </div></div>
 
-    <div class="settings-section">
-      <div class="section-title">⚖️ Layer Weights</div>
-      <div class="weight-sum">Sum: <b id="weight-sum">1.00</b> <button type="button" class="btn btn-secondary" onclick="normalizeWeights()" style="margin-left:12px">Normalize</button></div>
-      <div class="settings-grid">
-        <div class="field-group"><label>L1: Regime</label><input type="number" name="WEIGHT_REGIME" min="0" max="1" step="0.01" class="weight-input"></div>
-        <div class="field-group"><label>L2: Sentiment</label><input type="number" name="WEIGHT_SENTIMENT" min="0" max="1" step="0.01" class="weight-input"></div>
-        <div class="field-group"><label>L3: Whale</label><input type="number" name="WEIGHT_WHALE" min="0" max="1" step="0.01" class="weight-input"></div>
-        <div class="field-group"><label>L4: Liquidation</label><input type="number" name="WEIGHT_LIQUIDATION" min="0" max="1" step="0.01" class="weight-input"></div>
-        <div class="field-group"><label>L5: Entry</label><input type="number" name="WEIGHT_ENTRY" min="0" max="1" step="0.01" class="weight-input"></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">🎯 ATR / Exit Manager</div><div class="settings-grid">
+      <div class="field-group"><label>ATR SL Mult</label><input type="number" name="ATR_SL_MULT" min="0" max="10" step="0.1"></div>
+      <div class="field-group"><label>ATR TP1 Mult</label><input type="number" name="ATR_TP1_MULT" min="0" max="20" step="0.1"></div>
+      <div class="field-group"><label>ATR TP2 Mult</label><input type="number" name="ATR_TP2_MULT" min="0" max="30" step="0.1"></div>
+      <div class="field-group"><label>TP1 Exit %</label><input type="number" name="TP1_EXIT_PCT" min="0" max="1" step="0.01"></div>
+      <div class="field-group"><label>TP2 Exit %</label><input type="number" name="TP2_EXIT_PCT" min="0" max="1" step="0.01"></div>
+      <div class="field-group"><label>Max Trade Duration Bars</label><input type="number" name="MAX_TRADE_DURATION_BARS" min="1" max="500" step="1"></div>
+      <div class="field-group"><label>Breakeven Buffer %</label><input type="number" name="BREAKEVEN_BUFFER_PCT" min="0" max="1" step="0.0001"></div>
+      <div class="field-group"><label>Chandelier Lookback</label><input type="number" name="CHANDELIER_LOOKBACK" min="1" max="200" step="1"></div>
+    </div></div>
 
-    <div class="settings-section">
-      <div class="section-title">🧠 Sentiment Engine</div>
-      <div class="settings-grid">
-        <div class="field-group"><label>Sentiment Model</label><select name="SENTIMENT_MODEL"><option value="vader">VADER</option><option value="finbert">FinBERT</option><option value="gemini">Gemini LLM</option></select></div>
-        <div class="field-group"><label>CryptoCompare API Key</label><input type="password" name="CRYPTOCOMPARE_API_KEY" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Gemini API Key</label><input type="password" name="GEMINI_API_KEY" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Velocity Window</label><input type="number" name="SENTIMENT_VELOCITY_WINDOW" min="1" max="24" step="1"></div>
-        <div class="field-group"><label>Bull F&G Threshold</label><input type="number" name="FEAR_GREED_BULL_THRESHOLD" min="50" max="90" step="5"></div>
-        <div class="field-group"><label>Bear F&G Threshold</label><input type="number" name="FEAR_GREED_BEAR_THRESHOLD" min="10" max="50" step="5"></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">📈 Technical / Filters</div><div class="settings-grid">
+      <div class="field-group"><label>EMA Fast</label><input type="number" name="EMA_FAST"></div><div class="field-group"><label>EMA Mid</label><input type="number" name="EMA_MID"></div><div class="field-group"><label>EMA Slow</label><input type="number" name="EMA_SLOW"></div>
+      <div class="field-group"><label>RSI Period</label><input type="number" name="RSI_PERIOD"></div><div class="field-group"><label>Stoch RSI Period</label><input type="number" name="STOCHRSI_PERIOD"></div><div class="field-group"><label>BB Period</label><input type="number" name="BB_PERIOD"></div><div class="field-group"><label>BB STD</label><input type="number" name="BB_STD" step="0.1"></div><div class="field-group"><label>Volume MA Period</label><input type="number" name="VOLUME_MA_PERIOD"></div>
+      <div class="field-group"><label>Min Session Mult</label><input type="number" name="MIN_SESSION_MULT" step="0.01"></div><div class="field-group"><label>Min ADX</label><input type="number" name="MIN_ADX" step="0.1"></div><div class="field-group"><label>Min ADX Trend Strength</label><input type="number" name="MIN_ADX_TREND_STRENGTH" step="0.01"></div><div class="field-group"><label>Strong Signal ADX Bypass</label><input type="number" name="STRONG_SIGNAL_ADX_BYPASS" step="0.01"></div>
+      <div class="field-group"><label>Max Vol Z-Score</label><input type="number" name="MAX_VOL_ZSCORE" step="0.1"></div><div class="field-group"><label>Min ATR Norm</label><input type="number" name="MIN_ATR_NORM" step="0.0001"></div><div class="field-group"><label>HTF Block Threshold</label><input type="number" name="HTF_BLOCK_THRESHOLD" step="0.01"></div><div class="field-group"><label>Regime Block Threshold</label><input type="number" name="REGIME_BLOCK_THRESHOLD" step="0.01"></div><div class="field-group"><label>Chaos Vol Threshold</label><input type="number" name="REGIME_CHAOS_VOLATILITY" step="0.001"></div>
+    </div></div>
 
-    <div class="settings-section">
-      <div class="section-title">🐳 Whale / Liquidation / Alerts</div>
-      <div class="settings-grid">
-        <div class="field-group"><label>Etherscan API Key</label><input type="password" name="ETHERSCAN_API_KEY" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Whale Inflow Threshold</label><input type="number" name="WHALE_EXCHANGE_INFLOW_THRESHOLD" min="100" max="100000" step="100"></div>
-        <div class="field-group"><label>CoinGlass API Key</label><input type="password" name="COINGLASS_API_KEY" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Liquidation Proximity %</label><input type="number" name="LIQUIDATION_PROXIMITY_PCT" min="0.001" max="0.20" step="0.001"></div>
-        <div class="field-group"><label>Telegram Bot Token</label><input type="password" name="TELEGRAM_BOT_TOKEN" placeholder="Leave blank to keep existing"></div>
-        <div class="field-group"><label>Telegram Chat ID</label><input type="text" name="TELEGRAM_CHAT_ID"></div>
-        <div class="field-group"><label>Alert On Signal</label><select name="ALERT_ON_SIGNAL"><option value="true">Yes</option><option value="false">No</option></select></div>
-        <div class="field-group"><label>Alert On Optimization</label><select name="ALERT_ON_OPTIMIZATION"><option value="true">Yes</option><option value="false">No</option></select></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">⚖️ Layer Weights</div><div class="weight-sum">Sum: <b id="weight-sum">1.00</b> <button type="button" class="btn btn-secondary" onclick="normalizeWeights()" style="margin-left:12px">Normalize</button></div><div class="settings-grid">
+      <div class="field-group"><label>L1 Regime</label><input type="number" name="WEIGHT_REGIME" min="0" max="1" step="0.01" class="weight-input"></div><div class="field-group"><label>L2 Sentiment</label><input type="number" name="WEIGHT_SENTIMENT" min="0" max="1" step="0.01" class="weight-input"></div><div class="field-group"><label>L3 Whale</label><input type="number" name="WEIGHT_WHALE" min="0" max="1" step="0.01" class="weight-input"></div><div class="field-group"><label>L4 Liquidation</label><input type="number" name="WEIGHT_LIQUIDATION" min="0" max="1" step="0.01" class="weight-input"></div><div class="field-group"><label>L5 Entry</label><input type="number" name="WEIGHT_ENTRY" min="0" max="1" step="0.01" class="weight-input"></div>
+    </div></div>
 
-    <div class="settings-section">
-      <div class="section-title">🧬 Optimizer</div>
-      <div class="settings-grid">
-        <div class="field-group"><label>Optuna Trials</label><input type="number" name="OPTUNA_TRIALS" min="5" max="500" step="1"></div>
-        <div class="field-group"><label>Timeout Seconds</label><input type="number" name="OPTUNA_TIMEOUT_SEC" min="30" max="7200" step="30"></div>
-        <div class="field-group"><label>Metric</label><select name="OPTUNA_METRIC"><option value="composite">Composite</option><option value="profit_factor">Profit Factor</option><option value="sharpe">Sharpe</option><option value="return">Return</option></select></div>
-        <div class="field-group"><label>Pruning</label><select name="OPTUNA_PRUNING"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
-      </div>
-    </div>
+    <div class="settings-section"><div class="section-title">🧠 Sentiment / External APIs</div><div class="settings-grid">
+      <div class="field-group"><label>Sentiment Model</label><select name="SENTIMENT_MODEL"><option value="vader">VADER</option><option value="finbert">FinBERT</option><option value="gemini">Gemini LLM</option></select></div>
+      <div class="field-group"><label>CryptoCompare Key</label><input type="password" name="CRYPTOCOMPARE_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Etherscan Key</label><input type="password" name="ETHERSCAN_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>CoinGlass Key</label><input type="password" name="COINGLASS_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>CryptoQuant Key</label><input type="password" name="CRYPTOQUANT_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Gemini Key</label><input type="password" name="GEMINI_API_KEY" placeholder="Leave blank to keep existing"></div>
+      <div class="field-group"><label>Sentiment Velocity Window</label><input type="number" name="SENTIMENT_VELOCITY_WINDOW"></div><div class="field-group"><label>Fear Greed Bull Threshold</label><input type="number" name="FEAR_GREED_BULL_THRESHOLD"></div><div class="field-group"><label>Fear Greed Bear Threshold</label><input type="number" name="FEAR_GREED_BEAR_THRESHOLD"></div><div class="field-group"><label>Whale Min Transfer BTC</label><input type="number" name="WHALE_MIN_TRANSFER_BTC" step="1"></div><div class="field-group"><label>Whale Inflow Threshold</label><input type="number" name="WHALE_EXCHANGE_INFLOW_THRESHOLD" step="10"></div><div class="field-group"><label>Liquidation Gravity Min</label><input type="number" name="LIQUIDATION_GRAVITY_MIN" step="0.01"></div><div class="field-group"><label>Liquidation Proximity %</label><input type="number" name="LIQUIDATION_PROXIMITY_PCT" step="0.0001"></div>
+    </div></div>
+
+    <div class="settings-section"><div class="section-title">🧬 Optimizer / Backtest</div><div class="settings-grid">
+      <div class="field-group"><label>Optuna Trials</label><input type="number" name="OPTUNA_TRIALS" min="1" max="1000" step="1"></div><div class="field-group"><label>Timeout Seconds</label><input type="number" name="OPTUNA_TIMEOUT_SEC" min="1" max="20000" step="1"></div><div class="field-group"><label>Metric</label><input name="OPTUNA_METRIC" placeholder="target_150"></div><div class="field-group"><label>Data Candles</label><input type="number" name="OPTUNA_DATA_CANDLES" min="100" max="50000" step="100"></div><div class="field-group"><label>Optuna Timeframe</label><input name="OPTUNA_TIMEFRAME" placeholder="30m"></div><div class="field-group"><label>Pruning</label><select name="OPTUNA_PRUNING"><option value="false">Disabled</option><option value="true">Enabled</option></select></div><div class="field-group"><label>Target Capital</label><input type="number" name="OPTUNA_TARGET_CAPITAL" step="1"></div><div class="field-group"><label>Raw Profit Mode</label><select name="RAW_PROFIT_MODE"><option value="true">Yes</option><option value="false">No</option></select></div><div class="field-group"><label>Adaptive Risk Mode</label><select name="ADAPTIVE_RISK_MODE"><option value="true">Yes</option><option value="false">No</option></select></div>
+    </div></div>
+
+    <div class="settings-section"><div class="section-title">🚪 Early Exit / Memory / Alerts</div><div class="settings-grid">
+      <div class="field-group"><label>Early Exit Enabled</label><select name="EARLY_EXIT_ENABLED"><option value="true">Yes</option><option value="false">No</option></select></div><div class="field-group"><label>Early Exit Min Bars</label><input type="number" name="EARLY_EXIT_MIN_BARS"></div><div class="field-group"><label>Early Exit Max Negative PnL %</label><input type="number" name="EARLY_EXIT_MAX_NEGATIVE_PNL_PCT" step="0.1"></div><div class="field-group"><label>Early Exit Stale Bars</label><input type="number" name="EARLY_EXIT_STALE_BARS"></div><div class="field-group"><label>Replacement Advantage</label><input type="number" name="EARLY_EXIT_REPLACEMENT_ADVANTAGE" step="0.01"></div><div class="field-group"><label>Protect If Near TP %</label><input type="number" name="EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT" step="0.01"></div>
+      <div class="field-group"><label>Memory Enabled</label><select name="MEMORY_ENABLED"><option value="true">Yes</option><option value="false">No</option></select></div><div class="field-group"><label>Memory Weight</label><input type="number" name="MEMORY_WEIGHT" step="0.01"></div><div class="field-group"><label>Memory Min Trades</label><input type="number" name="MEMORY_MIN_TRADES"></div><div class="field-group"><label>Memory Persist</label><select name="MEMORY_PERSIST"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="field-group"><label>Telegram Token</label><input type="password" name="TELEGRAM_BOT_TOKEN" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Telegram Chat ID</label><input name="TELEGRAM_CHAT_ID"></div><div class="field-group"><label>Alert On Signal</label><select name="ALERT_ON_SIGNAL"><option value="true">Yes</option><option value="false">No</option></select></div><div class="field-group"><label>Alert On Trade</label><select name="ALERT_ON_TRADE"><option value="true">Yes</option><option value="false">No</option></select></div><div class="field-group"><label>Daily Summary</label><select name="ALERT_ON_DAILY_SUMMARY"><option value="true">Yes</option><option value="false">No</option></select></div><div class="field-group"><label>Alert On Optimization</label><select name="ALERT_ON_OPTIMIZATION"><option value="true">Yes</option><option value="false">No</option></select></div>
+    </div></div>
+
+    <div class="settings-section"><div class="section-title">🔑 Exchange API Keys</div><div class="settings-grid">
+      <div class="field-group"><label>Binance API Key</label><input type="password" name="BINANCE_API_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Binance Secret</label><input type="password" name="BINANCE_SECRET" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Binance Testnet</label><select name="BINANCE_TESTNET"><option value="false">No</option><option value="true">Yes</option></select></div><div class="field-group"><label>Bybit API Key</label><input type="password" name="BYBIT_API_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Bybit Secret</label><input type="password" name="BYBIT_SECRET" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Bybit Testnet</label><select name="BYBIT_TESTNET"><option value="false">No</option><option value="true">Yes</option></select></div><div class="field-group"><label>Alpaca API Key</label><input type="password" name="ALPACA_API_KEY" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Alpaca Secret</label><input type="password" name="ALPACA_SECRET" placeholder="Leave blank to keep existing"></div><div class="field-group"><label>Alpaca Paper</label><select name="ALPACA_PAPER"><option value="true">Yes</option><option value="false">No</option></select></div>
+    </div></div>
   </form>
 </div>
-
 <script>
-const boolKeys = new Set(['BINANCE_TESTNET','ALPACA_PAPER','OPTUNA_PRUNING','ALERT_ON_SIGNAL','ALERT_ON_OPTIMIZATION']);
-async function loadSettings(){
-  const res = await fetch('/api/settings');
-  const data = await res.json();
-  Object.entries(data).forEach(([k,v])=>{
-    const el = document.querySelector(`[name="${k}"]`);
-    if(!el) return;
-    if(el.tagName === 'SELECT') el.value = String(v);
-    else el.value = v ?? '';
-  });
-  updateWeightSum(); updateMarketUI();
-}
-function collectSettings(){
-  const body = {};
-  document.querySelectorAll('#settings-form [name]').forEach(el=>{
-    if(el.type === 'password' && (!el.value || el.value === '***')) return;
-    body[el.name] = boolKeys.has(el.name) ? String(el.value).toLowerCase() === 'true' : el.value;
-  });
-  return body;
-}
-async function saveSettings(){
-  const msg = document.getElementById('save-msg');
-  try{
-    const res = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(collectSettings())});
-    const data = await res.json();
-    if(!res.ok || data.error) throw new Error(data.error || 'Save failed');
-    msg.style.display='block'; msg.className='save-msg success'; msg.textContent='✅ Settings saved';
-  }catch(e){ msg.style.display='block'; msg.className='save-msg error'; msg.textContent='❌ '+e.message; }
-}
-async function resetSettings(){
-  if(!confirm('Reset settings to defaults?')) return;
-  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({_reset:true})});
-  await loadSettings();
-}
-async function normalizeWeights(){
-  const res = await fetch('/api/settings/normalize_weights',{method:'POST'});
-  if(res.ok) await loadSettings();
-}
-function updateWeightSum(){
-  const sum = [...document.querySelectorAll('.weight-input')].reduce((a,e)=>a+(parseFloat(e.value)||0),0);
-  const el=document.getElementById('weight-sum'); if(el){ el.textContent=sum.toFixed(2); el.className=Math.abs(sum-1)<0.01?'green':'yellow'; }
-}
-function updateMarketUI(){
-  const ex=document.getElementById('exchange-select')?.value;
-  const bin=document.getElementById('binance-keys'); const alp=document.getElementById('alpaca-keys');
-  if(bin) bin.style.display = ex === 'binance' ? '' : 'none';
-  if(alp) alp.style.display = ex === 'alpaca' ? '' : 'none';
-}
-document.querySelectorAll('.weight-input').forEach(e=>e.addEventListener('input',updateWeightSum));
-loadSettings();
+const boolKeys=new Set(['BINANCE_TESTNET','BYBIT_TESTNET','ALPACA_PAPER','OPTUNA_PRUNING','RAW_PROFIT_MODE','ADAPTIVE_RISK_MODE','AUTO_SYMBOL_SELECTION','TRADE_ON_CANDLE_CLOSE','EARLY_EXIT_ENABLED','MEMORY_ENABLED','MEMORY_PERSIST','ALERT_ON_SIGNAL','ALERT_ON_TRADE','ALERT_ON_DAILY_SUMMARY','ALERT_ON_OPTIMIZATION']);
+const listKeys=new Set(['SYMBOLS','PAPER_SYMBOLS']);
+async function loadSettings(){const res=await fetch('/api/settings',{cache:'no-store'});const data=await res.json();Object.entries(data).forEach(([k,v])=>{const el=document.querySelector(`[name="${k}"]`);if(!el)return;if(el.type==='password'){el.value='';return;}if(Array.isArray(v))v=v.join(',');if(el.tagName==='SELECT')el.value=String(v);else el.value=v??'';});updateWeightSum();showMsg('✅ Settings loaded','success');}
+function cleanNumber(v){if(v===''||v===null||v===undefined)return '';const n=Number(v);return Number.isFinite(n)?n:v}
+function collectSettings(){const body={};document.querySelectorAll('#settings-form [name]').forEach(el=>{if(el.type==='password'&&!el.value)return;let v=el.value;if(boolKeys.has(el.name))v=String(v).toLowerCase()==='true';else if(listKeys.has(el.name))v=v.split(',').map(x=>x.trim()).filter(Boolean);else if(el.type==='number')v=cleanNumber(v);body[el.name]=v;});return body;}
+function showMsg(t,cls){const msg=document.getElementById('save-msg');msg.style.display='block';msg.className='save-msg '+(cls||'success');msg.textContent=t;}
+async function saveSettings(){try{const payload=collectSettings();const res=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok||data.error)throw new Error(data.error||'Save failed');showMsg('✅ Settings saved and backend reloaded. Stop/restart Paper or Live for running engine loops to fully apply.','success');await loadSettings();}catch(e){showMsg('❌ '+e.message,'error')}}
+async function normalizeWeights(){const res=await fetch('/api/settings/normalize_weights',{method:'POST'});if(res.ok)await loadSettings();}
+function updateWeightSum(){const sum=[...document.querySelectorAll('.weight-input')].reduce((a,e)=>a+(parseFloat(e.value)||0),0);const el=document.getElementById('weight-sum');if(el){el.textContent=sum.toFixed(2);el.className=Math.abs(sum-1)<0.01?'green':'yellow';}}
+document.querySelectorAll('.weight-input').forEach(e=>e.addEventListener('input',updateWeightSum));loadSettings();
 </script>
 </body>
 </html>
