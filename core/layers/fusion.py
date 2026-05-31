@@ -167,16 +167,24 @@ class FusionEngine:
         }
 
         htf_block_threshold = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
+        require_ltf_disagree = bool(getattr(cfg, "HTF_REQUIRES_LTF_CONFIRMATION", True))
+        ltf_confirms_trade = (regime_bias == direction)
         if htf_bias == 1 and direction == -1 and abs(entry_score) < htf_block_threshold:
-            logger.info(f"[Fusion] 4H BULL bias blocks weak short (entry={entry_score:.3f})")
-            result = self._no_trade("htf_bias_blocks_short")
-            result.update(blocked_signal_payload)
-            return result
+            if require_ltf_disagree and ltf_confirms_trade:
+                logger.info(f"[Fusion] 4H BULL but 30m bear confirms short — HTF block bypassed (entry={entry_score:.3f})")
+            else:
+                logger.info(f"[Fusion] 4H BULL bias blocks weak short (entry={entry_score:.3f}, 30m regime_bias={regime_bias})")
+                result = self._no_trade("htf_bias_blocks_short")
+                result.update(blocked_signal_payload)
+                return result
         if htf_bias == -1 and direction == 1 and abs(entry_score) < htf_block_threshold:
-            logger.info(f"[Fusion] 4H BEAR bias blocks weak long (entry={entry_score:.3f})")
-            result = self._no_trade("htf_bias_blocks_long")
-            result.update(blocked_signal_payload)
-            return result
+            if require_ltf_disagree and ltf_confirms_trade:
+                logger.info(f"[Fusion] 4H BEAR but 30m bull confirms long — HTF block bypassed (entry={entry_score:.3f})")
+            else:
+                logger.info(f"[Fusion] 4H BEAR bias blocks weak long (entry={entry_score:.3f}, 30m regime_bias={regime_bias})")
+                result = self._no_trade("htf_bias_blocks_long")
+                result.update(blocked_signal_payload)
+                return result
 
         regime_block_threshold = float(getattr(cfg, "REGIME_BLOCK_THRESHOLD", 0.25))
         if regime_bias == 1 and direction == -1 and abs(entry_score) < regime_block_threshold:
