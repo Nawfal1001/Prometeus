@@ -106,6 +106,30 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
         df["funding_rate"] = 0.0
     df["funding_signal"] = np.clip(-df["funding_rate"].fillna(0) * 200, -1, 1)
 
+    for col, lag in (("rsi_norm", 3), ("rsi_norm", 6), ("ema_stack", 3), ("macd_signal", 3),
+                     ("vol_zscore", 3), ("ret_1", 3), ("ret_1", 6), ("adx_direction", 3)):
+        new_col = f"{col}_lag{lag}"
+        if col in df.columns and new_col not in df.columns:
+            df[new_col] = df[col].shift(lag).fillna(0)
+
+    ret_window = df["close"].pct_change().rolling(20)
+    df["ret_skew_20"] = ret_window.skew().fillna(0)
+    df["ret_kurt_20"] = ret_window.kurt().fillna(0)
+    df["close_pct_change_5"] = df["close"].pct_change(5).fillna(0)
+    df["high_low_range_pct"] = ((df["high"] - df["low"]) / df["close"].replace(0, np.nan)).fillna(0)
+
+    rsi_n = df.get("rsi_norm")
+    adx_str = df.get("adx_trend_strength")
+    if rsi_n is not None and adx_str is not None:
+        df["rsi_x_adx"] = (rsi_n * adx_str).fillna(0)
+    vol_z = df.get("vol_zscore")
+    atr_n = df.get("atr_norm")
+    if vol_z is not None and atr_n is not None:
+        df["vol_z_x_atr"] = (vol_z * atr_n * 100).fillna(0)
+    macd_s = df.get("macd_signal")
+    if macd_s is not None and rsi_n is not None:
+        df["macd_x_rsi"] = (macd_s * rsi_n).fillna(0)
+
     df = df.replace([np.inf, -np.inf], np.nan)
     return df.ffill().bfill().fillna(0)
 
@@ -178,6 +202,10 @@ def get_feature_columns() -> list[str]:
         "cci_norm", "candle_pattern", "gap_signal", "market_structure",
         "squeeze_fire", "cvd_signal", "cvd_divergence", "pressure_signal",
         "ob_signal", "funding_signal", "ret_1", "ret_3", "ret_6", "ret_12",
+        "rsi_norm_lag3", "rsi_norm_lag6", "ema_stack_lag3", "macd_signal_lag3",
+        "vol_zscore_lag3", "ret_1_lag3", "ret_1_lag6", "adx_direction_lag3",
+        "ret_skew_20", "ret_kurt_20", "close_pct_change_5", "high_low_range_pct",
+        "rsi_x_adx", "vol_z_x_atr", "macd_x_rsi",
     ]
 
 

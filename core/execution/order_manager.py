@@ -453,7 +453,7 @@ class OrderManager:
         logger.info(f"[Paper] Force closed | {trade_id} | reason={reason} | total_pnl={trade['pnl']:+.4f}")
         return {"status": "closed", "trade_id": trade_id, "pnl": trade["pnl"], "reason": reason}
 
-    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None, bar_time=None):
+    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None, bar_time=None, regime_bias: int = None, regime_score: float = None):
         changed = False
         high = float(high if high is not None else current_price)
         low = float(low if low is not None else current_price)
@@ -474,7 +474,7 @@ class OrderManager:
                 trade["last_seen_bar_time"] = bar_time_str
             trade["bars_open"] = int(trade.get("bars_open", 0)) + 1
             self._update_unrealized_pnl(trade, current_price)
-            events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)))
+            events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)), regime_bias=regime_bias, regime_score=regime_score)
             is_live = bool(trade.get("is_live"))
             for event in events:
                 live_fill = None
