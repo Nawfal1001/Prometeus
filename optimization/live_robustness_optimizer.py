@@ -114,7 +114,7 @@ class LiveRobustnessOptimizer:
         tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 0.90, step=0.05)
         return {
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.14, 0.38, step=0.01),
-            "ROTATOR_MIN_SCORE": trial.suggest_float("ROTATOR_MIN_SCORE", 0.22, 0.52, step=0.01),
+            "ROTATOR_MIN_SCORE": trial.suggest_float("ROTATOR_MIN_SCORE", 0.05, 0.52, step=0.01),
             "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.20, 2.80, step=0.05),
             "MIN_ADX": trial.suggest_float("MIN_ADX", 9, 30, step=1),
             "MIN_ATR_NORM": trial.suggest_float("MIN_ATR_NORM", 0.0004, 0.0045, step=0.0001),
