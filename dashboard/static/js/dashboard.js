@@ -132,31 +132,64 @@ function applyOpenTrades(trades) {
     const pnl = Number(t.unrealized_pnl ?? 0);
     const pnlPct = Number(t.unrealized_pnl_pct ?? 0);
     const cls = pnl >= 0 ? "pnl-pos" : "pnl-neg";
+    const liveTag = t.is_live ? ' <span class="badge" style="background:#3a1a1a;color:var(--red);font-size:10px">LIVE</span>' : '';
+    const tp1Tag = t.tp1_hit ? ' <span class="badge" style="background:#1a3a2a;color:var(--green);font-size:10px">TP1 HIT</span>' : '';
+    const openedAt = t.open_time ? fmtTime(t.open_time) : '';
+    const dur = t.open_time ? fmtDuration(Math.max(0, (Date.now() / 1000) - Number(t.open_time))) : '';
     return `
       <div class="trade-card ${t.side}">
-        <b>${t.side === "long" ? "▲ LONG" : "▼ SHORT"}</b> — ${t.id || "paper"}<br>
-        Entry: ${money(t.entry_price)} | Current: ${money(t.current_price || t.entry_price)}<br>
-        Size: ${money(t.size)} | Fake PnL: <span class="${cls}">${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(3)}%)</span><br>
-        TP: ${money(t.take_profit)} ${t.distance_to_tp_pct != null ? `(${Number(t.distance_to_tp_pct).toFixed(3)}%)` : ""}<br>
-        SL: ${money(t.stop_loss)} ${t.distance_to_sl_pct != null ? `(${Number(t.distance_to_sl_pct).toFixed(3)}%)` : ""}
+        <b>${t.side === "long" ? "▲ LONG" : "▼ SHORT"}</b> — ${t.id || "paper"} — ${t.symbol || ""}${liveTag}${tp1Tag}<br>
+        Entry: ${money(t.entry_price)} ${openedAt ? `@ ${openedAt}` : ''} | Current: ${money(t.current_price || t.entry_price)} | ${dur ? `Held: ${dur}` : ''}<br>
+        Size: ${money(t.size || t.notional)} | PnL: <span class="${cls}">${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(3)}%)</span><br>
+        TP1: ${money(t.tp1)} | TP2: ${money(t.tp2 || t.take_profit)} ${t.distance_to_tp_pct != null ? `(${Number(t.distance_to_tp_pct).toFixed(3)}%)` : ""}<br>
+        SL: ${money(t.trailing_sl || t.stop_loss)} ${t.distance_to_sl_pct != null ? `(${Number(t.distance_to_sl_pct).toFixed(3)}%)` : ""}
       </div>`;
   }).join("");
 }
 
+function fmtDuration(sec) {
+  if (sec === undefined || sec === null) return "—";
+  const s = Math.max(0, Number(sec));
+  if (s < 60) return s.toFixed(0) + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m" + Math.round(s % 60) + "s";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return `${h}h${m}m`;
+}
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(typeof ts === "number" ? ts * 1000 : ts);
+  if (isNaN(d.getTime())) return "";
+  return d.toISOString().slice(11, 19);
+}
 function applyTradeLog(trades) {
   const tbody = document.getElementById("trade-log-body");
   if (!tbody) return;
-  if (!trades.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No trades yet</td></tr>'; return; }
-  tbody.innerHTML = [...trades].reverse().map((t, i) => `
+  if (!trades.length) { tbody.innerHTML = '<tr><td colspan="12" class="empty-state">No trades yet</td></tr>'; return; }
+  tbody.innerHTML = [...trades].reverse().map((t, i) => {
+    const pnl = Number(t.pnl ?? 0);
+    const gross = t.gross_pnl !== undefined && t.gross_pnl !== null ? Number(t.gross_pnl) : null;
+    const fees = t.fees !== undefined && t.fees !== null ? Number(t.fees) : null;
+    const dur = fmtDuration(t.duration_sec);
+    const openedAt = fmtTime(t.opened_at);
+    const closedAt = fmtTime(t.closed_at);
+    const entryCell = t.entry_price ? `${money(t.entry_price)}${openedAt ? `<br><span class="muted small">${openedAt}</span>` : ''}` : '—';
+    const exitCell = t.exit_price ? `${money(t.exit_price)}${closedAt ? `<br><span class="muted small">${closedAt}</span>` : ''}` : '—';
+    return `
     <tr>
-      <td>${t.id || i + 1}</td>
+      <td>${t.id || i + 1}${t.is_live ? '<br><span class="badge" style="background:#3a1a1a;color:var(--red);font-size:10px">LIVE</span>' : ''}</td>
+      <td>${t.symbol || '—'}</td>
       <td class="${t.side === "long" ? "green" : "red"}">${(t.side || "").toUpperCase()}</td>
-      <td>${money(t.entry_price)}</td>
-      <td>${t.exit_price ? money(t.exit_price) : "—"}</td>
-      <td class="${Number(t.pnl ?? 0) >= 0 ? "pnl-pos" : "pnl-neg"}">${Number(t.pnl ?? 0) >= 0 ? "+" : ""}$${Number(t.pnl ?? 0).toFixed(2)}</td>
+      <td>${entryCell}</td>
+      <td>${exitCell}</td>
+      <td>${dur}${t.bars_open ? `<br><span class="muted small">${t.bars_open}b</span>` : ''}</td>
+      <td>${t.notional ? money(t.notional) : '—'}</td>
+      <td class="${gross !== null && gross >= 0 ? 'pnl-pos' : gross !== null ? 'pnl-neg' : ''}">${gross !== null ? (gross >= 0 ? "+" : "") + "$" + gross.toFixed(4) : "—"}</td>
+      <td class="muted">${fees !== null ? "-$" + fees.toFixed(4) : "—"}</td>
+      <td class="${pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)}</td>
       <td>${t.exit_type || "open"}</td>
-      <td>${t.signal?.fusion_score ? Number(t.signal.fusion_score).toFixed(3) : "—"}</td>
-    </tr>`).join("");
+      <td>${t.score ? Number(t.score).toFixed(3) : (t.fusion_score ? Number(t.fusion_score).toFixed(3) : '—')}</td>
+    </tr>`;
+  }).join("");
 }
 
 function applyTick(data) {
