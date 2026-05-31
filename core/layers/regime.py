@@ -158,7 +158,8 @@ class RegimeDetector:
         components["structure"] = round(structure_score, 4)
 
         score = float(np.clip(0.62 * trend_score + 0.18 * fg_score + 0.12 * funding_score + 0.08 * structure_score, -1.0, 1.0))
-        if abs(score) < 0.05:
+        dead_zone = float(getattr(cfg, "REGIME_DEAD_ZONE", 0.0))
+        if dead_zone > 0 and abs(score) < dead_zone:
             score = 0.0
         self.regime_score = score
 

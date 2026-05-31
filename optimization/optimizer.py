@@ -48,7 +48,7 @@ SEED_PARAMS = [
 
 
 class PrometheusOptimizer:
-    def __init__(self, df=None, metric=None, n_trials=None, timeout=None, progress_callback=None):
+    def __init__(self, df=None, metric=None, n_trials=None, timeout=None, progress_callback=None, tune_groups=None):
         self.df = df
         self.metric = metric or cfg.OPTUNA_METRIC
         self.n_trials = n_trials or cfg.OPTUNA_TRIALS
@@ -64,6 +64,7 @@ class PrometheusOptimizer:
         self._multi_raw_data = None
         self._multi_prepared_data = None
         self._mode = "single"
+        self._tune_groups = tune_groups
 
     def run(self, data=None, mode: str | None = None) -> dict:
         if data is not None:
@@ -184,36 +185,62 @@ class PrometheusOptimizer:
                 if v is not None and hasattr(cfg, k):
                     setattr(cfg, k, v)
 
+    PARAM_GROUPS = {"weights", "exits", "thresholds", "risk", "duration", "indicators"}
+
+    def _active_groups(self) -> set:
+        raw = getattr(self, "_tune_groups", None)
+        if raw is None:
+            raw = getattr(cfg, "OPTUNA_TUNE_GROUPS", "weights,exits,thresholds,risk,duration")
+        if isinstance(raw, (list, tuple, set)):
+            tokens = [str(t).strip().lower() for t in raw]
+        else:
+            tokens = [t.strip().lower() for t in str(raw or "").split(",") if t.strip()]
+        groups = {t for t in tokens if t in self.PARAM_GROUPS}
+        if bool(getattr(cfg, "OPTUNA_TUNE_INDICATORS", False)):
+            groups.add("indicators")
+        if not groups:
+            groups = {"weights", "exits", "thresholds"}
+        return groups
+
     def _suggest_params(self, trial: optuna.Trial) -> dict:
-        tune_indicators = bool(getattr(cfg, "OPTUNA_TUNE_INDICATORS", False))
-        w1 = trial.suggest_float("WEIGHT_REGIME", 0.08, 0.30)
-        w2 = trial.suggest_float("WEIGHT_SENTIMENT", 0.02, 0.15)
-        w3 = trial.suggest_float("WEIGHT_WHALE", 0.04, 0.20)
-        w4 = trial.suggest_float("WEIGHT_LIQUIDATION", 0.12, 0.42)
-        total = w1 + w2 + w3 + w4
-        w5 = max(0.18, round(1.0 - total, 3))
-        total2 = w1 + w2 + w3 + w4 + w5
-        w1, w2, w3, w4, w5 = [round(w / total2, 4) for w in [w1, w2, w3, w4, w5]]
-        sl_mult = trial.suggest_float("ATR_SL_MULT", 0.75, 1.9, step=0.05)
-        tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.65, 1.8, step=0.05)
-        min_tp2 = round(max(sl_mult * 1.15, tp1_mult + 0.15), 2)
-        max_tp2 = max(min_tp2 + 0.25, 3.4)
-        tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.05)
-        rr_cap = max(1.05, min(2.6, tp2_mult / max(sl_mult, 1e-9)))
-        min_rr = trial.suggest_float("MIN_RR_RATIO", 1.05, rr_cap, step=0.05)
-        tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
-        tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
-        params = {
-            "WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5,
-            "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.10, 0.32, step=0.01),
-            "MIN_RR_RATIO": min_rr, "ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult,
-            "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit,
-            "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 54),
-            "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005),
-            "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.12, 0.42, step=0.05),
-            "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
-        }
-        if tune_indicators:
+        groups = self._active_groups()
+        params = {}
+
+        if "weights" in groups:
+            w1 = trial.suggest_float("WEIGHT_REGIME", 0.08, 0.30)
+            w2 = trial.suggest_float("WEIGHT_SENTIMENT", 0.02, 0.15)
+            w3 = trial.suggest_float("WEIGHT_WHALE", 0.04, 0.20)
+            w4 = trial.suggest_float("WEIGHT_LIQUIDATION", 0.12, 0.42)
+            total = w1 + w2 + w3 + w4
+            w5 = max(0.18, round(1.0 - total, 3))
+            total2 = w1 + w2 + w3 + w4 + w5
+            w1, w2, w3, w4, w5 = [round(w / total2, 4) for w in [w1, w2, w3, w4, w5]]
+            params.update({"WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5})
+
+        if "exits" in groups:
+            sl_mult = trial.suggest_float("ATR_SL_MULT", 0.75, 1.9, step=0.05)
+            tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.65, 1.8, step=0.05)
+            min_tp2 = round(max(sl_mult * 1.15, tp1_mult + 0.15), 2)
+            max_tp2 = max(min_tp2 + 0.25, 3.4)
+            tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.05)
+            rr_cap = max(1.05, min(2.6, tp2_mult / max(sl_mult, 1e-9)))
+            min_rr = trial.suggest_float("MIN_RR_RATIO", 1.05, rr_cap, step=0.05)
+            tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
+            tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
+            params.update({"ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult, "MIN_RR_RATIO": min_rr, "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit})
+
+        if "thresholds" in groups:
+            params["FUSION_THRESHOLD"] = trial.suggest_float("FUSION_THRESHOLD", 0.10, 0.32, step=0.01)
+            params["REGIME_BLOCK_THRESHOLD"] = trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.12, 0.42, step=0.05)
+            params["HTF_BLOCK_THRESHOLD"] = trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05)
+
+        if "risk" in groups:
+            params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005)
+
+        if "duration" in groups:
+            params["MAX_TRADE_DURATION_BARS"] = trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 54)
+
+        if "indicators" in groups:
             ema_fast = trial.suggest_int("EMA_FAST", 6, 25)
             ema_mid = trial.suggest_int("EMA_MID", ema_fast + 8, 90)
             ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 40, 260, step=10)
@@ -222,6 +249,7 @@ class PrometheusOptimizer:
             params["EMA_SLOW"] = ema_slow
             params["RSI_PERIOD"] = trial.suggest_int("RSI_PERIOD", 3, 20)
             params["MAX_TRADES_PER_DAY"] = trial.suggest_int("MAX_TRADES_PER_DAY", 3, 12)
+
         return params
 
     def _inject_params(self, params: dict):
