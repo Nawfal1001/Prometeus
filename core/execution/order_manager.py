@@ -37,6 +37,23 @@ class OrderManager:
         return float(getattr(cfg, fee_key, 0.0005))
 
     @staticmethod
+    def _timeframe_seconds() -> int:
+        tf = str(getattr(cfg, "TIMEFRAME", "30m"))
+        try:
+            unit = tf[-1]
+            n = int(tf[:-1])
+            mult = {"m": 60, "h": 3600, "d": 86400}.get(unit, 60)
+            return n * mult
+        except Exception:
+            return 1800
+
+    def _stamp_symbol_cooldown(self, symbol: str):
+        cooldown_bars = float(getattr(cfg, "SYMBOL_COOLDOWN_BARS", 1.0))
+        if cooldown_bars <= 0:
+            return
+        self.symbol_cooldowns[symbol] = time.time() + cooldown_bars * self._timeframe_seconds()
+
+    @staticmethod
     def _orderbook_slippage(ob_top: dict, side: str, qty: float):
         if not ob_top:
             return None
@@ -130,17 +147,16 @@ class OrderManager:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
         symbol = signal.get("symbol") or cfg.SYMBOL
-        symbol = signal.get("symbol") or cfg.SYMBOL
         if self.paper and self.open_trades:
             return {"status": "blocked", "reason": "one_active_trade_limit"}
         if self.paper:
-            cooldown_bar = self.symbol_cooldowns.get(symbol)
-            if cooldown_bar is not None and bar_time is not None and str(cooldown_bar) == str(bar_time):
-                return {"status": "blocked", "reason": "same_symbol_cooldown", "symbol": symbol}
-        if self.paper:
-            cooldown_bar = self.symbol_cooldowns.get(symbol)
-            if cooldown_bar is not None and bar_time is not None and str(cooldown_bar) == str(bar_time):
-                return {"status": "blocked", "reason": "same_symbol_cooldown", "symbol": symbol}
+            try:
+                cooldown_until = float(self.symbol_cooldowns.get(symbol) or 0.0)
+            except (TypeError, ValueError):
+                cooldown_until = 0.0
+                self.symbol_cooldowns.pop(symbol, None)
+            if cooldown_until > 0 and time.time() < cooldown_until:
+                return {"status": "blocked", "reason": "symbol_cooldown", "symbol": symbol, "seconds_left": round(cooldown_until - time.time(), 1)}
         if not self.paper and any(not t.get("is_live") for t in self.open_trades.values()):
             return {"status": "blocked", "reason": "paper_trade_open_during_live"}
         if not self.paper:
@@ -425,7 +441,7 @@ class OrderManager:
             live_fill = await self._submit_live_exit(trade, portion_qty)
         self._realize_exit(trade_id, trade, event, live_fill=live_fill)
         if not trade.get("is_live"):
-            self.symbol_cooldowns[trade.get("symbol") or cfg.SYMBOL] = str(time.time())
+            self._stamp_symbol_cooldown(trade.get("symbol") or cfg.SYMBOL)
         trade["status"] = "closed"
         trade["exit_price"] = price
         trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
@@ -476,8 +492,8 @@ class OrderManager:
                 self._update_memory_on_close(trade)
                 tag = "Live" if is_live else "Paper"
                 logger.info(f"[{tag}] Closed | {trade_id} | total_pnl={trade['pnl']:+.4f}")
-                if not is_live and bar_time_str is not None:
-                    self.symbol_cooldowns[trade_symbol] = bar_time_str
+                if not is_live:
+                    self._stamp_symbol_cooldown(trade_symbol)
                 del self.open_trades[trade_id]
             changed = True
         if changed:
