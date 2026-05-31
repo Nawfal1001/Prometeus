@@ -251,7 +251,15 @@ class PrometheusEngine:
                 continue
             last = df.iloc[-1]
             price = float(last["close"])
-            await self.orders.check_paper_exits(price, high=float(last["high"]), low=float(last["low"]), symbol=symbol, bar_time=df.index[-1])
+            regime_bias = None
+            regime_score = None
+            try:
+                regime_now = self.regime.detect(df, funding_rate=await self._get_funding(symbol), symbol=symbol)
+                regime_bias = regime_now.get("bias")
+                regime_score = regime_now.get("score")
+            except Exception:
+                pass
+            await self.orders.check_paper_exits(price, high=float(last["high"]), low=float(last["low"]), symbol=symbol, bar_time=df.index[-1], regime_bias=regime_bias, regime_score=regime_score)
 
     async def _candle_loop(self):
         while self.running:
@@ -308,7 +316,7 @@ class PrometheusEngine:
                         self.fusion.reload_weights()
                 else:
                     journal.add("decision", f"no trade {cfg.SYMBOL} reason={signal.get('reason')}", symbol=cfg.SYMBOL, reason=signal.get("reason"), signal=signal)
-                await self.orders.check_paper_exits(item["price"], high=bar_high, low=bar_low, symbol=cfg.SYMBOL, bar_time=latest_time)
+                await self.orders.check_paper_exits(item["price"], high=bar_high, low=bar_low, symbol=cfg.SYMBOL, bar_time=latest_time, regime_bias=item["regime"].get("bias"), regime_score=item["regime"].get("score"))
                 await self._broadcast_state(item["price"], signal, item["layer_scores"], item["regime"])
             except Exception as e:
                 self._consec_errors += 1
