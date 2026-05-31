@@ -112,7 +112,7 @@ class QualitySignalOptimizer:
         tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 0.95, step=0.05)
         return {
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.16, 0.42, step=0.01),
-            "ROTATOR_MIN_SCORE": trial.suggest_float("ROTATOR_MIN_SCORE", 0.24, 0.55, step=0.01),
+            "ROTATOR_MIN_SCORE": trial.suggest_float("ROTATOR_MIN_SCORE", 0.05, 0.55, step=0.01),
             "MIN_RR_RATIO": trial.suggest_float("MIN_RR_RATIO", 1.15, 2.60, step=0.05),
             "MIN_ADX": trial.suggest_float("MIN_ADX", 10, 30, step=1),
             "MIN_ATR_NORM": trial.suggest_float("MIN_ATR_NORM", 0.0005, 0.0040, step=0.0001),
