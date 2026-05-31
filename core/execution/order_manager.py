@@ -130,8 +130,13 @@ class OrderManager:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
         symbol = signal.get("symbol") or cfg.SYMBOL
+        symbol = signal.get("symbol") or cfg.SYMBOL
         if self.paper and self.open_trades:
             return {"status": "blocked", "reason": "one_active_trade_limit"}
+        if self.paper:
+            cooldown_bar = self.symbol_cooldowns.get(symbol)
+            if cooldown_bar is not None and bar_time is not None and str(cooldown_bar) == str(bar_time):
+                return {"status": "blocked", "reason": "same_symbol_cooldown", "symbol": symbol}
         if self.paper:
             cooldown_bar = self.symbol_cooldowns.get(symbol)
             if cooldown_bar is not None and bar_time is not None and str(cooldown_bar) == str(bar_time):
