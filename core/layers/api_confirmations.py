@@ -126,11 +126,31 @@ def etherscan_large_transfer_pressure(symbol: str):
         return None
 
 
+def _coinalyze_history_last(url: str, key: str, symbol_param: str, hours_back: int = 4):
+    """Fetch the latest data point from a Coinalyze history endpoint.
+    Coinalyze auth is api_key query param, and history endpoints require from/to."""
+    now = int(time.time())
+    params = {
+        "api_key": key,
+        "symbols": symbol_param,
+        "interval": "1hour",
+        "from": now - hours_back * 3600,
+        "to": now,
+    }
+    data = requests.get(url, params=params, timeout=7).json()
+    if not isinstance(data, list) or not data:
+        return None
+    history = data[0].get("history") if isinstance(data[0], dict) else None
+    if not history:
+        return None
+    return history[-1] if isinstance(history[-1], dict) else None
+
+
 def coinanalyse_derivatives_pressure(symbol: str):
     """
-    Optional derivatives/liquidation confirmation for the liquidation layer.
-    Supports common config names and intentionally fails safe.
-    Returns dict or None.
+    Optional derivatives confirmation for the liquidation layer.
+    Pulls funding rate + open interest from Coinalyze and turns them into
+    a small score in [-0.6, +0.6]. Returns None if no key or API fails.
     """
     key = getattr(cfg, "COINANALYZE_KEY", "") or getattr(cfg, "COINALYZE_KEY", "") or getattr(cfg, "COINANALYSE_KEY", "")
     if not key:
@@ -140,26 +160,36 @@ def coinanalyse_derivatives_pressure(symbol: str):
     cached = _get_cache(cache_key)
     if cached is not None:
         return cached
-    headers = {"Authorization": f"Bearer {key}", "X-API-KEY": key}
-    candidates = [
-        f"https://api.coinalyze.net/v1/future-markets?base_asset={coin}",
-        f"https://api.coinalyze.net/v1/open-interest?symbols={coin}USDT_PERP&interval=1hour",
-        f"https://api.coinalyze.net/v1/funding-rate?symbols={coin}USDT_PERP&interval=1hour",
-    ]
-    for url in candidates:
-        try:
-            data = requests.get(url, headers=headers, timeout=7).json()
-            text = str(data).lower()
-            if not data or "error" in text or "invalid" in text:
-                continue
-            score = 0.0
-            if isinstance(data, list) and data:
-                sample = data[-1] if isinstance(data[-1], dict) else data[0]
-                oi_change = float(sample.get("oi_change", sample.get("open_interest_change", 0.0)) or 0.0) if isinstance(sample, dict) else 0.0
-                funding = float(sample.get("funding_rate", sample.get("funding", 0.0)) or 0.0) if isinstance(sample, dict) else 0.0
-                score = float(np.clip((oi_change / 100.0) - funding * 250.0, -0.6, 0.6))
-            result = {"score": score, "source": "coinanalyse", "raw_available": True}
-            return _set_cache(cache_key, result)
-        except Exception as e:
-            logger.debug(f"[APIConfirm] CoinAnalyze endpoint skipped: {e}")
-    return None
+    symbol_param = f"{coin}USDT_PERP.A"
+
+    funding = None
+    oi_change = None
+    try:
+        latest = _coinalyze_history_last("https://api.coinalyze.net/v1/funding-rate-history", key, symbol_param, hours_back=4)
+        if latest:
+            for field in ("c", "value", "fr", "funding_rate"):
+                v = latest.get(field)
+                if v is not None:
+                    funding = float(v)
+                    break
+    except Exception as e:
+        logger.debug(f"[APIConfirm] Coinalyze funding fetch failed: {e}")
+    try:
+        oi_now = _coinalyze_history_last("https://api.coinalyze.net/v1/open-interest-history", key, symbol_param, hours_back=2)
+        oi_prev = _coinalyze_history_last("https://api.coinalyze.net/v1/open-interest-history", key, symbol_param, hours_back=8)
+        if oi_now and oi_prev:
+            now_val = next((float(oi_now[f]) for f in ("c", "value", "oi", "open_interest") if oi_now.get(f) is not None), None)
+            prev_val = next((float(oi_prev[f]) for f in ("c", "value", "oi", "open_interest") if oi_prev.get(f) is not None), None)
+            if now_val and prev_val and prev_val > 0:
+                oi_change = (now_val - prev_val) / prev_val * 100.0
+    except Exception as e:
+        logger.debug(f"[APIConfirm] Coinalyze OI fetch failed: {e}")
+
+    if funding is None and oi_change is None:
+        return None
+    funding = funding if funding is not None else 0.0
+    oi_change = oi_change if oi_change is not None else 0.0
+    # Crowded longs (positive funding) = bearish pressure; OI rising = trend continuation
+    score = float(np.clip((oi_change / 100.0) - funding * 250.0, -0.6, 0.6))
+    result = {"score": score, "source": "coinanalyse", "funding": funding, "oi_change_pct": round(oi_change, 3)}
+    return _set_cache(cache_key, result)
