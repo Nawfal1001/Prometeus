@@ -424,7 +424,29 @@ class OrderManager:
         trade["remaining_pct"] = max(0.0, float(trade.get("remaining_pct", 1.0)) - portion)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
         trade["fees_paid"] = round(float(trade.get("fees_paid", 0.0)) + fees, 6)
-        self.risk.record_trade(pnl, {**trade["signal"], "symbol": trade.get("symbol"), "trade_id": trade_id, "entry_price": entry, "exit_price": exit_price, "exit_type": event["type"], "portion": portion, "notional": notional, "qty": qty, "gross_pnl": round(gross_pnl, 4), "fees": round(fees, 6), "is_live": is_live})
+        opened_at = float(trade.get("open_time") or time.time())
+        closed_at = time.time()
+        duration_sec = round(max(0.0, closed_at - opened_at), 1)
+        self.risk.record_trade(pnl, {
+            **trade["signal"],
+            "symbol": trade.get("symbol"),
+            "trade_id": trade_id,
+            "side": trade.get("side"),
+            "entry_price": entry,
+            "exit_price": exit_price,
+            "exit_type": event["type"],
+            "portion": portion,
+            "notional": notional,
+            "qty": qty,
+            "gross_pnl": round(gross_pnl, 4),
+            "fees": round(fees, 6),
+            "is_live": is_live,
+            "opened_at": opened_at,
+            "closed_at": closed_at,
+            "duration_sec": duration_sec,
+            "bars_open": int(trade.get("bars_open", 0)),
+            "entry_bar_time": trade.get("entry_bar_time"),
+        })
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
         tag = "Live" if is_live else "Paper"

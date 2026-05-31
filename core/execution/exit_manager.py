@@ -50,6 +50,15 @@ class AdvancedExitManager:
     def breakeven_buffer(self): return float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0002))
 
     @property
+    def profit_ratchet_mult(self): return float(getattr(cfg, "PROFIT_RATCHET_ATR_MULT", 0.6))
+
+    @property
+    def early_kill_bars(self): return int(getattr(cfg, "EARLY_KILL_BARS", 2))
+
+    @property
+    def early_kill_sl_pct(self): return float(getattr(cfg, "EARLY_KILL_SL_PCT", 0.70))
+
+    @property
     def min_atr_norm(self): return float(getattr(cfg, "MIN_ATR_NORM", 0.001))
 
     @property
@@ -86,8 +95,9 @@ class AdvancedExitManager:
 
         return ExitLevels(stop_loss=stop_loss, tp1=tp1, tp2=tp2, atr_abs=atr_abs, chandelier_sl=chandelier)
 
-    def ratchet_stop(self, *, current_sl: float, direction: int, peak_price: float, trough_price: float, atr_abs: float) -> float:
-        trail = peak_price - atr_abs * self.sl_mult if direction == 1 else trough_price + atr_abs * self.sl_mult
+    def ratchet_stop(self, *, current_sl: float, direction: int, peak_price: float, trough_price: float, atr_abs: float, profit_mode: bool = False) -> float:
+        mult = self.profit_ratchet_mult if profit_mode else self.sl_mult
+        trail = peak_price - atr_abs * mult if direction == 1 else trough_price + atr_abs * mult
         return max(current_sl, trail) if direction == 1 else min(current_sl, trail)
 
     def breakeven_stop(self, *, entry_price: float, current_sl: float, direction: int) -> float:
@@ -105,10 +115,24 @@ class AdvancedExitManager:
             peak_price=float(trade["peak_price"]),
             trough_price=float(trade["trough_price"]),
             atr_abs=float(trade.get("atr_abs", 0)),
+            profit_mode=bool(trade.get("tp1_hit")),
         )
         remaining = float(trade.get("remaining_pct", 1.0))
         if remaining <= 0:
             return events
+
+        bars_open = bar_index - int(trade.get("entry_bar", 0))
+        if (bool(getattr(cfg, "EARLY_KILL_ENABLED", True))
+                and not trade.get("tp1_hit")
+                and 0 < bars_open <= self.early_kill_bars):
+            entry = float(trade["entry_price"])
+            initial_sl = float(trade.get("stop_loss"))
+            sl_pct = abs(entry - initial_sl) / max(abs(entry), 1e-9)
+            pnl_pct = (float(close) - entry) / max(abs(entry), 1e-9) * direction
+            if sl_pct > 0 and pnl_pct <= -self.early_kill_sl_pct * sl_pct:
+                events.append({"type": "EARLY_KILL", "price": float(close), "portion": remaining})
+                trade["remaining_pct"] = 0.0
+                return events
 
         if bool(getattr(cfg, "EXIT_ON_REGIME_FLIP", False)) and regime_bias is not None and regime_score is not None:
             min_flip = float(getattr(cfg, "EXIT_REGIME_FLIP_MIN_SCORE", 0.30))
