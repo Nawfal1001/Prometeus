@@ -105,9 +105,12 @@ class PrometheusOptimizer:
                   else optuna.pruners.NopPruner())
         self.study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
 
+        tune_indicators = bool(getattr(cfg, "OPTUNA_TUNE_INDICATORS", False))
+        skip_keys = set() if tune_indicators else {"EMA_FAST", "EMA_MID", "EMA_SLOW", "RSI_PERIOD", "MAX_TRADES_PER_DAY"}
         for seed in SEED_PARAMS:
+            filtered = {k: v for k, v in seed.items() if k not in skip_keys}
             try:
-                self.study.enqueue_trial(seed)
+                self.study.enqueue_trial(filtered)
             except Exception:
                 pass
 
@@ -182,6 +185,7 @@ class PrometheusOptimizer:
                     setattr(cfg, k, v)
 
     def _suggest_params(self, trial: optuna.Trial) -> dict:
+        tune_indicators = bool(getattr(cfg, "OPTUNA_TUNE_INDICATORS", False))
         w1 = trial.suggest_float("WEIGHT_REGIME", 0.08, 0.30)
         w2 = trial.suggest_float("WEIGHT_SENTIMENT", 0.02, 0.15)
         w3 = trial.suggest_float("WEIGHT_WHALE", 0.04, 0.20)
@@ -190,9 +194,6 @@ class PrometheusOptimizer:
         w5 = max(0.18, round(1.0 - total, 3))
         total2 = w1 + w2 + w3 + w4 + w5
         w1, w2, w3, w4, w5 = [round(w / total2, 4) for w in [w1, w2, w3, w4, w5]]
-        ema_fast = trial.suggest_int("EMA_FAST", 6, 25)
-        ema_mid = trial.suggest_int("EMA_MID", ema_fast + 8, 90)
-        ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 40, 260, step=10)
         sl_mult = trial.suggest_float("ATR_SL_MULT", 0.75, 1.9, step=0.05)
         tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.65, 1.8, step=0.05)
         min_tp2 = round(max(sl_mult * 1.15, tp1_mult + 0.15), 2)
@@ -202,19 +203,26 @@ class PrometheusOptimizer:
         min_rr = trial.suggest_float("MIN_RR_RATIO", 1.05, rr_cap, step=0.05)
         tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
         tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
-        return {
+        params = {
             "WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5,
             "FUSION_THRESHOLD": trial.suggest_float("FUSION_THRESHOLD", 0.10, 0.32, step=0.01),
             "MIN_RR_RATIO": min_rr, "ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult,
             "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit,
             "MAX_TRADE_DURATION_BARS": trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 54),
-            "EMA_FAST": ema_fast, "EMA_MID": ema_mid, "EMA_SLOW": ema_slow,
-            "RSI_PERIOD": trial.suggest_int("RSI_PERIOD", 3, 20),
             "MAX_RISK_PER_TRADE": trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005),
-            "MAX_TRADES_PER_DAY": trial.suggest_int("MAX_TRADES_PER_DAY", 3, 12),
             "REGIME_BLOCK_THRESHOLD": trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.12, 0.42, step=0.05),
-            "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.18, 0.48, step=0.05),
+            "HTF_BLOCK_THRESHOLD": trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05),
         }
+        if tune_indicators:
+            ema_fast = trial.suggest_int("EMA_FAST", 6, 25)
+            ema_mid = trial.suggest_int("EMA_MID", ema_fast + 8, 90)
+            ema_slow = trial.suggest_int("EMA_SLOW", ema_mid + 40, 260, step=10)
+            params["EMA_FAST"] = ema_fast
+            params["EMA_MID"] = ema_mid
+            params["EMA_SLOW"] = ema_slow
+            params["RSI_PERIOD"] = trial.suggest_int("RSI_PERIOD", 3, 20)
+            params["MAX_TRADES_PER_DAY"] = trial.suggest_int("MAX_TRADES_PER_DAY", 3, 12)
+        return params
 
     def _inject_params(self, params: dict):
         for k, v in params.items():
@@ -239,9 +247,9 @@ class PrometheusOptimizer:
         drawdown_quality = max(0.0, 1.0 - dd / 0.22)
         ruin_penalty = 1.0
         if dd > 0.10:
-            ruin_penalty *= max(0.20, 1.0 - (dd - 0.10) * 4.0)
+            ruin_penalty *= max(0.45, 1.0 - (dd - 0.10) * 3.0)
         if n < 30:
-            ruin_penalty *= max(0.35, n / 30)
+            ruin_penalty *= max(0.55, n / 30)
         if self.metric == "target_150":
             initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
             target = float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150))
