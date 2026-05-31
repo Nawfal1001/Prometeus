@@ -213,6 +213,8 @@ def reload_from_sources():
     COINGLASS_KEY = get_secret("COINGLASS_KEY", "COINGLASS_API_KEY")
     CRYPTOQUANT_KEY = get_secret("CRYPTOQUANT_KEY", "CRYPTOQUANT_API_KEY")
     POLYGON_KEY = get_secret("POLYGON_KEY", "POLYGON_API_KEY")
+    global COINALYZE_KEY
+    COINALYZE_KEY = get_secret("COINALYZE_KEY", "COINALYZE_API_KEY")
 
     SENTIMENT_MODEL = get("SENTIMENT_MODEL", "vader")
     GEMINI_API_KEY = get_secret("GEMINI_API_KEY")

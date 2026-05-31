@@ -128,6 +128,31 @@ class WhaleTracker:
         except Exception:
             pass
 
+        # Coinalyze (authenticated, reliable from Render IPs)
+        if getattr(cfg, "COINALYZE_KEY", ""):
+            try:
+                now = int(time.time())
+                url = "https://api.coinalyze.net/v1/funding-rate-history"
+                params = {"api_key": cfg.COINALYZE_KEY, "symbols": f"{coin}USDT_PERP.A", "interval": "1hour", "from": now - 7200, "to": now}
+                r = requests.get(url, params=params, timeout=5)
+                data = r.json()
+                if isinstance(data, list) and data:
+                    history = data[0].get("history") or []
+                    if history:
+                        last = history[-1]
+                        funding = None
+                        for field in ("c", "value", "fr", "funding_rate"):
+                            v = last.get(field)
+                            if v is not None:
+                                funding = float(v)
+                                break
+                        if funding is not None:
+                            score = float(np.clip(-funding * 200, -1, 1))
+                            logger.debug(f"[Whale] Coinalyze funding={funding:.6f} → score={score:.3f}")
+                            return score
+            except Exception as e:
+                logger.debug(f"[Whale] Coinalyze funding fetch failed: {e}")
+
         return 0.0  # truly no data available
 
     # ── Keyed APIs ────────────────────────────────────────────

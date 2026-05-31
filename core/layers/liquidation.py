@@ -2,6 +2,7 @@
 #  PROMETHEUS — Layer 4: Liquidation Gravity
 # ============================================================
 
+import time
 import requests
 import numpy as np
 from loguru import logger
@@ -89,11 +90,91 @@ class LiquidationGravity:
 
     def _fetch_clusters(self, symbol: str, price: float) -> list:
         coin = symbol.replace("/USDT", "").replace("USDT", "")
+        if getattr(cfg, "COINALYZE_KEY", ""):
+            clusters = self._coinalyze_clusters(coin, price)
+            if clusters:
+                return clusters
         if cfg.COINGLASS_KEY:
             clusters = self._coinglass_api(coin)
             if clusters:
                 return clusters
         return self._coinglass_public(coin, price)
+
+    def _coinalyze_long_short_ratio(self, coin: str) -> float:
+        """Latest long ratio in [0,1]. Returns 0.5 if unknown so it's neutral."""
+        try:
+            now = int(time.time())
+            url = "https://api.coinalyze.net/v1/long-short-ratio-history"
+            params = {"api_key": cfg.COINALYZE_KEY, "symbols": f"{coin}USDT_PERP.A", "interval": "1hour", "from": now - 7200, "to": now}
+            r = requests.get(url, params=params, timeout=6)
+            data = r.json()
+            if isinstance(data, list) and data:
+                history = data[0].get("history", [])
+                if history:
+                    last = history[-1]
+                    for field in ("r", "ratio", "long_ratio", "l", "c"):
+                        v = last.get(field)
+                        if v is not None:
+                            r_val = float(v)
+                            if r_val > 1:
+                                r_val = r_val / (1 + r_val)
+                            return float(np.clip(r_val, 0.0, 1.0))
+        except Exception as e:
+            logger.debug(f"[LiqGravity] Coinalyze long/short ratio failed: {e}")
+        return 0.5
+
+    def _coinalyze_clusters(self, coin: str, current_price: float) -> list:
+        try:
+            now = int(time.time())
+            url = "https://api.coinalyze.net/v1/liquidation-history"
+            params = {"api_key": cfg.COINALYZE_KEY, "symbols": f"{coin}USDT_PERP.A", "interval": "1hour", "convert_to_usd": "true", "from": now - 24 * 3600, "to": now}
+            r = requests.get(url, params=params, timeout=8)
+            data = r.json()
+            if not isinstance(data, list) or not data:
+                return []
+            history = data[0].get("history") or []
+            long_liq_usd = 0.0
+            short_liq_usd = 0.0
+            for h in history:
+                long_liq_usd += float(h.get("l", 0) or 0)
+                short_liq_usd += float(h.get("s", 0) or 0)
+            if long_liq_usd <= 0 and short_liq_usd <= 0:
+                return self._synthetic_clusters_weighted(coin, current_price)
+            long_ratio = self._coinalyze_long_short_ratio(coin)
+            short_ratio = 1.0 - long_ratio
+            clusters = []
+            leverages = [10, 20, 25, 50, 100]
+            for lev in leverages:
+                long_liq_price = current_price * (1 - 1.0 / lev)
+                short_liq_price = current_price * (1 + 1.0 / lev)
+                long_size = (long_liq_usd / len(leverages)) + 1000.0 * lev * long_ratio
+                short_size = (short_liq_usd / len(leverages)) + 1000.0 * lev * short_ratio
+                if long_size > 0:
+                    clusters.append({"price": long_liq_price, "size": long_size})
+                if short_size > 0:
+                    clusters.append({"price": short_liq_price, "size": short_size})
+            logger.info(f"[LiqGravity] Coinalyze | {coin}: long_liq=${long_liq_usd:,.0f} short_liq=${short_liq_usd:,.0f} long_ratio={long_ratio:.2f} | {len(clusters)} clusters")
+            return clusters
+        except Exception as e:
+            logger.warning(f"[LiqGravity] Coinalyze fetch failed for {coin}: {e}")
+            return []
+
+    def _synthetic_clusters_weighted(self, coin: str, current_price: float) -> list:
+        """Asymmetric synthetic — uses Coinalyze long/short ratio to break the
+        symmetry that made the plain synthetic return 0."""
+        long_ratio = self._coinalyze_long_short_ratio(coin)
+        short_ratio = 1.0 - long_ratio
+        if abs(long_ratio - 0.5) < 0.05:
+            return []
+        clusters = []
+        leverages = [5, 10, 20, 25, 50, 100]
+        base = 1000.0
+        for lev in leverages:
+            long_liq_price = current_price * (1 - 1.0 / lev)
+            short_liq_price = current_price * (1 + 1.0 / lev)
+            clusters.append({"price": long_liq_price, "size": base * lev * long_ratio})
+            clusters.append({"price": short_liq_price, "size": base * lev * short_ratio})
+        return clusters
 
     def _coinglass_api(self, coin: str) -> list:
         try:
