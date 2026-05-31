@@ -280,8 +280,8 @@ async def _run_training_job(params: dict):
         await broadcast({"type": "model_training", "status": "error", "error": str(e)})
 
 
-def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None, data=None, mode="single"):
-    return PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout, progress_callback=progress_callback).run(data, mode=mode)
+def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None, data=None, mode="single", tune_groups=None):
+    return PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout, progress_callback=progress_callback, tune_groups=tune_groups).run(data, mode=mode)
 
 
 def _run_walkforward_sync(df, train_bars, test_bars, step_bars, trials, metric, timeout):
@@ -460,6 +460,7 @@ async def _run_optimization_job(params: dict):
         test_bars = min(int(params.get("test_bars", 200)), candles)
         step_bars = min(int(params.get("step_bars", 200)), candles)
         max_symbols = int(getattr(cfg, "MAX_UI_SYMBOLS", 7))
+        tune_groups = params.get("tune_groups")
 
         def progress_callback(**payload):
             trial_num = int(payload.get("trial_num") or 0)
@@ -478,7 +479,7 @@ async def _run_optimization_job(params: dict):
                 raise RuntimeError("No data returned from exchange")
             _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
             await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
-            result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback, mode="single"))
+            result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback, mode="single", tune_groups=tune_groups))
         else:
             symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
             ui_log(f"Optimization starting | mode={run_mode} symbols={symbols} metric={metric} trials={trials}")
@@ -507,7 +508,7 @@ async def _run_optimization_job(params: dict):
             await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
             if run_mode in ("compete", "competition"):
                 first_df = next(iter(data_by_symbol.values()))
-                result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(first_df, metric, trials, timeout, progress_callback, data=data_by_symbol, mode="compete"))
+                result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(first_df, metric, trials, timeout, progress_callback, data=data_by_symbol, mode="compete", tune_groups=tune_groups))
                 result.update({"mode": "competing_symbols_optimization", "optimizer_mode": "compete", "selection_logic": "aligned_paper_rotator_selector", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
             else:
                 rows = []
@@ -522,7 +523,7 @@ async def _run_optimization_job(params: dict):
                         res = await loop.run_in_executor(executor, lambda d=df: _run_walkforward_sync(d, train_bars, test_bars, step_bars, trials, metric, timeout))
                         res["rank_score"] = float(res.get("summary", {}).get("avg_profit_factor", 0)) * 100 + float(res.get("summary", {}).get("avg_win_rate", 0)) * 100
                     else:
-                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, progress_callback, mode="single"))
+                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, progress_callback, mode="single", tune_groups=tune_groups))
                         res["rank_score"] = float(res.get("best_value", -999))
                     res["symbol"] = symbol
                     rows.append(res)
