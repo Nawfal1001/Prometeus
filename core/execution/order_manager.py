@@ -27,6 +27,7 @@ class OrderManager:
         self.open_trades = {}
         self._trade_counter = 0
         self.real_taker_fee = None
+        self.symbol_cooldowns = {}
         self._load_trades()
 
     def _resolve_taker_fee(self, is_live: bool) -> float:
@@ -72,6 +73,7 @@ class OrderManager:
                 "trade_counter": self._trade_counter,
                 "capital": self.risk.capital,
                 "trade_history": self.risk.trade_history[-200:],
+                "symbol_cooldowns": self.symbol_cooldowns,
             }
             TRADES_FILE.write_text(json.dumps(data, indent=2, default=str))
         except Exception as e:
@@ -85,6 +87,7 @@ class OrderManager:
                 self._trade_counter = data.get("trade_counter", 0)
                 self.risk.capital = data.get("capital", cfg.INITIAL_CAPITAL)
                 self.risk.trade_history = data.get("trade_history", [])
+                self.symbol_cooldowns = data.get("symbol_cooldowns", {})
                 logger.info(f"[Orders] Restored {len(self.open_trades)} open trades, capital=${self.risk.capital:.2f}")
         except Exception as e:
             logger.warning(f"[Orders] Load failed, starting fresh: {e}")
@@ -126,8 +129,13 @@ class OrderManager:
     async def execute_signal(self, signal: dict, current_price: float, bar_time=None) -> dict:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
+        symbol = signal.get("symbol") or cfg.SYMBOL
         if self.paper and self.open_trades:
             return {"status": "blocked", "reason": "one_active_trade_limit"}
+        if self.paper:
+            cooldown_bar = self.symbol_cooldowns.get(symbol)
+            if cooldown_bar is not None and bar_time is not None and str(cooldown_bar) == str(bar_time):
+                return {"status": "blocked", "reason": "same_symbol_cooldown", "symbol": symbol}
         if not self.paper and any(not t.get("is_live") for t in self.open_trades.values()):
             return {"status": "blocked", "reason": "paper_trade_open_during_live"}
         if not self.paper:
@@ -411,6 +419,8 @@ class OrderManager:
             portion_qty = float(trade.get("qty_remaining", trade.get("qty", 0.0)))
             live_fill = await self._submit_live_exit(trade, portion_qty)
         self._realize_exit(trade_id, trade, event, live_fill=live_fill)
+        if not trade.get("is_live"):
+            self.symbol_cooldowns[trade.get("symbol") or cfg.SYMBOL] = str(time.time())
         trade["status"] = "closed"
         trade["exit_price"] = price
         trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
@@ -461,6 +471,8 @@ class OrderManager:
                 self._update_memory_on_close(trade)
                 tag = "Live" if is_live else "Paper"
                 logger.info(f"[{tag}] Closed | {trade_id} | total_pnl={trade['pnl']:+.4f}")
+                if not is_live and bar_time_str is not None:
+                    self.symbol_cooldowns[trade_symbol] = bar_time_str
                 del self.open_trades[trade_id]
             changed = True
         if changed:
