@@ -165,6 +165,13 @@ class PrometheusEngine:
         whale_score = self._normalize_layer_score(whale_result)
         sentiment_score = self._normalize_layer_score(sent_result)
         liquidation_score = self._normalize_layer_score(liq_result)
+        layer_sources_live = {
+            "regime": regime_result.get("source", "ohlcv_trend"),
+            "sentiment": "sentiment_text" if cfg.SENTIMENT_MODEL in ("vader", "finbert", "gemini") else "neutral",
+            "whale": (whale_result or {}).get("source", "smart_flow_ohlcv"),
+            "liquidation": (liq_result or {}).get("source", "ohlcv_liquidity_magnet"),
+            "entry": "EntrySignal",
+        }
         signal = self.fusion.fuse(
             regime_score=float(regime_result.get("score", 0.0) or 0.0),
             sentiment_score=sentiment_score,
@@ -179,6 +186,7 @@ class PrometheusEngine:
             threshold_mult=self.orders.risk.threshold_multiplier(),
             current_capital=self.orders.risk.capital,
             atr_norm=atr_norm,
+            layer_sources=layer_sources_live,
         )
         signal.update({
             "symbol": symbol,

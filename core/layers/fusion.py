@@ -270,18 +270,23 @@ class FusionEngine:
             sources.update({k: str(v or "unknown") for k, v in layer_sources.items() if k in sources})
 
         effective = dict(self.weights)
-        proxy_layers = [k for k, src in sources.items() if src in {"ohlcv_proxy", "proxy", "derived_ohlcv", "unknown"} and k != "entry"]
+        # "Pure proxy" = totally unknown or generic OHLCV stand-in. Distinct
+        # OHLCV-derived sources (smart_flow, liquidity_magnet, ohlcv_trend)
+        # are different aspects of the data, not redundant copies.
+        pure_proxy_sources = {"ohlcv_proxy", "proxy", "derived_ohlcv", "unknown"}
+        proxy_layers = [k for k, src in sources.items() if src in pure_proxy_sources and k != "entry"]
         independent_layers = [k for k in scores if k not in proxy_layers]
 
+        factor = float(getattr(cfg, "PROXY_LAYER_WEIGHT_FACTOR", PROXY_LAYER_WEIGHT_FACTOR))
         if len(proxy_layers) >= 3:
             for k in proxy_layers:
-                effective[k] *= PROXY_LAYER_WEIGHT_FACTOR
+                effective[k] *= factor
 
         total_layers = max(len(scores), 1)
         independence_score = round(len(independent_layers) / total_layers, 2)
         warning = None
         if len(proxy_layers) >= 3:
-            warning = "proxy_layer_cluster: several non-entry layers are derived from the same OHLCV source"
+            warning = "proxy_layer_cluster: several non-entry layers report unknown source"
             logger.debug(f"[Fusion] {warning} | proxy_layers={proxy_layers} sources={sources}")
 
         return effective, {"score": independence_score, "sources": sources, "warning": warning}
