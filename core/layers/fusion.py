@@ -166,7 +166,7 @@ class FusionEngine:
             "source_warning": independence["warning"],
         }
 
-        htf_block_threshold = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.30))
+        htf_block_threshold = float(getattr(cfg, "HTF_BLOCK_THRESHOLD", 0.20))
         require_ltf_disagree = bool(getattr(cfg, "HTF_REQUIRES_LTF_CONFIRMATION", True))
         ltf_confirms_trade = (regime_bias == direction)
         if htf_bias == 1 and direction == -1 and abs(entry_score) < htf_block_threshold:
