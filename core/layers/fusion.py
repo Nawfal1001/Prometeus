@@ -198,16 +198,27 @@ class FusionEngine:
             result.update(blocked_signal_payload)
             return result
 
-        liq_veto_threshold = float(getattr(cfg, "LIQUIDATION_VETO_THRESHOLD", 0.45))
-        if liq_veto_threshold > 0 and abs(liquidation_score) >= liq_veto_threshold:
+        liq_soft_threshold = float(getattr(cfg, "LIQUIDATION_SOFT_PENALTY_THRESHOLD", 0.30))
+        liq_hard_veto_threshold = float(getattr(cfg, "LIQUIDATION_HARD_VETO_THRESHOLD", 0.70))
+        liq_penalty_factor = float(getattr(cfg, "LIQUIDATION_PENALTY_FACTOR", 0.50))
+        liq_disagreement_factor = 1.0
+        liq_disagreement = False
+        if abs(liquidation_score) >= liq_soft_threshold:
             liq_direction = 1 if liquidation_score > 0 else -1
             if liq_direction == -direction:
-                logger.info(f"[Fusion] LIQUIDATION VETO | direction={direction} liq={liquidation_score:+.3f} threshold={liq_veto_threshold}")
-                result = self._no_trade("liquidation_contrarian")
-                result.update(blocked_signal_payload)
-                return result
+                liq_disagreement = True
+                if liq_hard_veto_threshold > 0 and abs(liquidation_score) >= liq_hard_veto_threshold:
+                    logger.info(f"[Fusion] LIQUIDATION HARD VETO | direction={direction} liq={liquidation_score:+.3f}")
+                    result = self._no_trade("liquidation_contrarian_hard")
+                    result.update(blocked_signal_payload)
+                    return result
+                excess = abs(liquidation_score) - liq_soft_threshold
+                liq_disagreement_factor = max(0.20, 1.0 - liq_penalty_factor * excess)
+                logger.info(f"[Fusion] LIQUIDATION SOFT PENALTY | direction={direction} liq={liquidation_score:+.3f} -> factor={liq_disagreement_factor:.2f}")
 
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
+        if liq_disagreement and liq_disagreement_factor < 1.0:
+            effective_threshold = effective_threshold / max(liq_disagreement_factor, 1e-6)
         if abs_score < effective_threshold:
             result = self._no_trade("below_threshold")
             result.update(blocked_signal_payload)
@@ -227,6 +238,7 @@ class FusionEngine:
             return result
 
         confidence_mult = self._confidence_multiplier(abs_score, threshold=effective_threshold)
+        confidence_mult *= liq_disagreement_factor
         atr_floor = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
         atr_for_exits = max(float(atr_norm or atr_floor), atr_floor)
         sizing = size_from_atr_risk(
