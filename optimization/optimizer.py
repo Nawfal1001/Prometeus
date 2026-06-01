@@ -145,9 +145,8 @@ class PrometheusOptimizer:
                     return -1.0
                 results = BacktestEngine().walk_forward(prepared)
 
-            if "error" in results or results.get("total_trades", 0) < 15:
-                n = int(results.get("total_trades", 0) or 0)
-                score = -0.5 - (15 - n) * 0.01
+            if "error" in results:
+                score = -0.4 + self._param_softness_bonus(params)
                 trial.report(score, step=1)
                 return score
 
@@ -224,16 +223,17 @@ class PrometheusOptimizer:
             max_tp2 = max(min_tp2 + 0.25, 3.4)
             tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.05)
             rr_cap = max(1.05, min(2.6, tp2_mult / max(sl_mult, 1e-9)))
-            min_rr = trial.suggest_float("MIN_RR_RATIO", 1.05, rr_cap, step=0.05)
+            rr_low = min(1.0, rr_cap - 0.01)
+            min_rr = trial.suggest_float("MIN_RR_RATIO", rr_low, max(rr_low + 0.05, rr_cap), step=0.05)
             tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
             tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
             params.update({"ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult, "MIN_RR_RATIO": min_rr, "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit})
 
         if "thresholds" in groups:
-            params["FUSION_THRESHOLD"] = trial.suggest_float("FUSION_THRESHOLD", 0.10, 0.32, step=0.01)
-            params["REGIME_BLOCK_THRESHOLD"] = trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.12, 0.42, step=0.05)
-            params["HTF_BLOCK_THRESHOLD"] = trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.15, 0.40, step=0.05)
-            params["ROTATOR_MIN_SCORE"] = trial.suggest_float("ROTATOR_MIN_SCORE", 0.05, 0.45, step=0.05)
+            params["FUSION_THRESHOLD"] = trial.suggest_float("FUSION_THRESHOLD", 0.05, 0.32, step=0.01)
+            params["REGIME_BLOCK_THRESHOLD"] = trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.08, 0.42, step=0.02)
+            params["HTF_BLOCK_THRESHOLD"] = trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.10, 0.40, step=0.02)
+            params["ROTATOR_MIN_SCORE"] = trial.suggest_float("ROTATOR_MIN_SCORE", 0.00, 0.45, step=0.02)
 
         if "risk" in groups:
             params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005)
@@ -263,42 +263,69 @@ class PrometheusOptimizer:
         pf = float(results.get("profit_factor", 0) or 0)
         sh = float(results.get("sharpe_ratio", 0) or 0)
         ret = float(results.get("total_return", 0) or 0)
-        dd = float(results.get("max_drawdown", 1) or 1)
+        dd = float(results.get("max_drawdown", 0) or 0)
         n = int(results.get("total_trades", 0) or 0)
         ter = float(results.get("time_exit_rate", 0) or 0)
         tp1 = float(results.get("tp1_hit_rate", 0) or 0)
-        if dd >= 0.45:
-            return -1.0
-        if ret <= -0.15:
-            return -0.5
-        trade_penalty = min(1.20, max(0.40, n / 40))
-        time_penalty = max(0.35, 1.0 - ter * 1.6)
-        drawdown_quality = max(0.0, 1.0 - dd / 0.22)
-        ruin_penalty = 1.0
-        if dd > 0.10:
-            ruin_penalty *= max(0.45, 1.0 - (dd - 0.10) * 3.0)
-        if n < 30:
-            ruin_penalty *= max(0.55, n / 30)
+
+        # Smooth trade-volume factor: rises monotonically with n, never flat.
+        # n=0 -> 0.02, n=5 -> ~0.20, n=15 -> ~0.43, n=30 -> ~0.60, n=60 -> ~0.75, n=120 -> ~0.86.
+        trade_factor = 0.02 + 0.95 * (n / (n + 20.0))
+        time_penalty = max(0.40, 1.0 - ter * 1.4)
+        # Smooth drawdown quality: linear decay, then continues negative gently (no cliff).
+        drawdown_quality = max(-0.4, 1.0 - dd / 0.22)
+        # Smooth ruin penalty: continuous, asymptotic, no flat region.
+        ruin_penalty = 1.0 / (1.0 + max(0.0, dd - 0.10) * 4.5)
+
         if self.metric == "target_150":
             initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
             target = float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150))
             final = float(results.get("final_capital", initial) or initial)
-            progress = min(final / target, 1.5)
-            ret_progress = max(0.0, min(ret / 2.0, 1.0))
-            score = (progress * 0.35 + ret_progress * 0.20 + min(pf / 3.0, 1.0) * 0.18 + drawdown_quality * 0.17 + wr * 0.10) * trade_penalty * time_penalty * ruin_penalty
-            if final >= target:
-                score += 0.25
+            progress = max(-0.5, min(final / target, 1.5))
+            ret_component = max(-0.4, min(ret / 2.0, 1.0))
+            base = (progress * 0.32 + ret_component * 0.22 + min(pf, 4.0) / 4.0 * 0.18
+                    + drawdown_quality * 0.16 + wr * 0.12)
+            score = base * trade_factor * time_penalty * ruin_penalty
+            if final >= target and n >= 10:
+                score += 0.20
             return score
         if self.metric == "win_rate":
-            return wr * trade_penalty * time_penalty * ruin_penalty
+            return wr * trade_factor * time_penalty * ruin_penalty
         if self.metric == "profit_factor":
-            return min(pf, 5.0) / 5.0 * trade_penalty * time_penalty * ruin_penalty
+            return min(pf, 5.0) / 5.0 * trade_factor * time_penalty * ruin_penalty
         if self.metric == "sharpe":
-            return max(min(sh, 4.0), -2.0) / 4.0 * trade_penalty * time_penalty * ruin_penalty
+            return max(min(sh, 4.0), -2.0) / 4.0 * trade_factor * time_penalty * ruin_penalty
         if self.metric == "total_return":
-            return max(min(ret, 2.0), -0.5) / 2.0 * trade_penalty * time_penalty * ruin_penalty
-        score = (wr * 0.22 + min(pf, 4.0) / 4.0 * 0.22 + max(min(ret, 1.8), -0.4) / 1.8 * 0.24 + drawdown_quality * 0.16 + max(min(sh, 3.0), -1.0) / 3.0 * 0.10 + max(0.0, min(tp1, 1.0)) * 0.06)
-        return score * trade_penalty * time_penalty * ruin_penalty
+            return max(min(ret, 2.0), -0.5) / 2.0 * trade_factor * time_penalty * ruin_penalty
+        base = (wr * 0.20
+                + min(pf, 4.0) / 4.0 * 0.22
+                + max(min(ret, 1.8), -0.4) / 1.8 * 0.24
+                + drawdown_quality * 0.16
+                + max(min(sh, 3.0), -1.0) / 3.0 * 0.12
+                + max(0.0, min(tp1, 1.0)) * 0.06)
+        return base * trade_factor * time_penalty * ruin_penalty
+
+    def _param_softness_bonus(self, params: dict) -> float:
+        """
+        Tiny gradient signal when the backtest errors out so the TPE sampler
+        can still learn which direction relaxes the gates. Never dominates a
+        real result; range roughly [-0.05, +0.05].
+        """
+        if not params:
+            return 0.0
+        fusion = float(params.get("FUSION_THRESHOLD", 0.20))
+        regime = float(params.get("REGIME_BLOCK_THRESHOLD", 0.25))
+        htf = float(params.get("HTF_BLOCK_THRESHOLD", 0.25))
+        rot = float(params.get("ROTATOR_MIN_SCORE", 0.15))
+        rr = float(params.get("MIN_RR_RATIO", 1.5))
+        softness = (
+            (0.32 - fusion) * 0.08
+            + (0.42 - regime) * 0.04
+            + (0.40 - htf) * 0.04
+            + (0.45 - rot) * 0.03
+            + (2.6 - rr) * 0.02
+        )
+        return max(-0.05, min(0.05, softness))
 
     def _trial_callback(self, study, trial):
         self._trial_num += 1
