@@ -104,7 +104,7 @@ class AdvancedExitManager:
         be = entry_price * (1 + direction * self.breakeven_buffer)
         return max(current_sl, be) if direction == 1 else min(current_sl, be)
 
-    def evaluate(self, trade: Dict[str, Any], *, high: float, low: float, close: float, bar_index: int, regime_bias: int = None, regime_score: float = None) -> List[Dict[str, Any]]:
+    def evaluate(self, trade: Dict[str, Any], *, high: float, low: float, close: float, bar_index: int, regime_bias: int = None, regime_score: float = None, signal_direction: int = None, signal_score: float = None) -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
         direction = int(trade["direction"])
         trade["peak_price"] = max(float(trade.get("peak_price", high)), high)
@@ -138,6 +138,13 @@ class AdvancedExitManager:
             min_flip = float(getattr(cfg, "EXIT_REGIME_FLIP_MIN_SCORE", 0.30))
             if regime_bias != 0 and regime_bias == -direction and abs(float(regime_score)) >= min_flip:
                 events.append({"type": "REGIME_FLIP", "price": float(close), "portion": remaining})
+                trade["remaining_pct"] = 0.0
+                return events
+
+        if bool(getattr(cfg, "EXIT_ON_SIGNAL_FLIP", True)) and signal_direction is not None and signal_score is not None:
+            min_signal_flip = float(getattr(cfg, "EXIT_SIGNAL_FLIP_MIN_SCORE", 0.20))
+            if signal_direction != 0 and signal_direction == -direction and abs(float(signal_score)) >= min_signal_flip:
+                events.append({"type": "SIGNAL_FLIP", "price": float(close), "portion": remaining})
                 trade["remaining_pct"] = 0.0
                 return events
 

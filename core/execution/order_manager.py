@@ -147,8 +147,13 @@ class OrderManager:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
         symbol = signal.get("symbol") or cfg.SYMBOL
-        if self.paper and self.open_trades:
-            return {"status": "blocked", "reason": "one_active_trade_limit"}
+        if self.paper:
+            max_concurrent = int(getattr(cfg, "MAX_CONCURRENT_PAPER_TRADES", 1))
+            existing_paper = [t for t in self.open_trades.values() if not t.get("is_live")]
+            if any((t.get("symbol") or cfg.SYMBOL) == symbol for t in existing_paper):
+                return {"status": "blocked", "reason": "symbol_already_open", "symbol": symbol}
+            if len(existing_paper) >= max(1, max_concurrent):
+                return {"status": "blocked", "reason": "concurrent_trade_limit", "open": len(existing_paper), "max": max_concurrent}
         if self.paper:
             try:
                 cooldown_until = float(self.symbol_cooldowns.get(symbol) or 0.0)
@@ -483,7 +488,7 @@ class OrderManager:
             pass
         return {"status": "closed", "trade_id": trade_id, "pnl": trade["pnl"], "reason": reason}
 
-    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None, bar_time=None, regime_bias: int = None, regime_score: float = None):
+    async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None, bar_time=None, regime_bias: int = None, regime_score: float = None, signal_direction: int = None, signal_score: float = None):
         changed = False
         high = float(high if high is not None else current_price)
         low = float(low if low is not None else current_price)
@@ -515,7 +520,7 @@ class OrderManager:
             trade["last_seen_bar_epoch"] = current_bar_epoch
             trade["bars_open"] = int(trade.get("bars_open", 0)) + 1
             self._update_unrealized_pnl(trade, current_price)
-            events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)), regime_bias=regime_bias, regime_score=regime_score)
+            events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)), regime_bias=regime_bias, regime_score=regime_score, signal_direction=signal_direction, signal_score=signal_score)
             is_live = bool(trade.get("is_live"))
             for event in events:
                 live_fill = None
