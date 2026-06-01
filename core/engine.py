@@ -244,6 +244,7 @@ class PrometheusEngine:
         return ranked
 
     async def _manage_open_trades_rotator(self):
+        ranked_by_symbol = {r.get("symbol"): r for r in (self._rotator_ranked or [])}
         for trade in list(self.orders.get_open_trades()):
             symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
             df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=120)
@@ -259,7 +260,16 @@ class PrometheusEngine:
                 regime_score = regime_now.get("score")
             except Exception:
                 pass
-            await self.orders.check_paper_exits(price, high=float(last["high"]), low=float(last["low"]), symbol=symbol, bar_time=df.index[-1], regime_bias=regime_bias, regime_score=regime_score)
+            signal_direction = None
+            signal_score = None
+            ranked_entry = ranked_by_symbol.get(symbol)
+            if ranked_entry:
+                sig = ranked_entry.get("signal") or {}
+                fs = sig.get("fusion_score")
+                if fs is not None:
+                    signal_direction = 1 if float(fs) > 0 else -1 if float(fs) < 0 else 0
+                    signal_score = float(fs)
+            await self.orders.check_paper_exits(price, high=float(last["high"]), low=float(last["low"]), symbol=symbol, bar_time=df.index[-1], regime_bias=regime_bias, regime_score=regime_score, signal_direction=signal_direction, signal_score=signal_score)
 
     async def _candle_loop(self):
         while self.running:
@@ -316,7 +326,9 @@ class PrometheusEngine:
                         self.fusion.reload_weights()
                 else:
                     journal.add("decision", f"no trade {cfg.SYMBOL} reason={signal.get('reason')}", symbol=cfg.SYMBOL, reason=signal.get("reason"), signal=signal)
-                await self.orders.check_paper_exits(item["price"], high=bar_high, low=bar_low, symbol=cfg.SYMBOL, bar_time=latest_time, regime_bias=item["regime"].get("bias"), regime_score=item["regime"].get("score"))
+                _live_fusion = item["signal"].get("fusion_score") if item.get("signal") else None
+                _live_dir = (1 if (_live_fusion or 0) > 0 else -1 if (_live_fusion or 0) < 0 else 0) if _live_fusion is not None else None
+                await self.orders.check_paper_exits(item["price"], high=bar_high, low=bar_low, symbol=cfg.SYMBOL, bar_time=latest_time, regime_bias=item["regime"].get("bias"), regime_score=item["regime"].get("score"), signal_direction=_live_dir, signal_score=_live_fusion)
                 await self._broadcast_state(item["price"], signal, item["layer_scores"], item["regime"])
             except Exception as e:
                 self._consec_errors += 1
