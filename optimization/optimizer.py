@@ -268,13 +268,22 @@ class PrometheusOptimizer:
         ter = float(results.get("time_exit_rate", 0) or 0)
         tp1 = float(results.get("tp1_hit_rate", 0) or 0)
 
-        # Smooth trade-volume factor: rises monotonically with n, never flat.
-        # n=0 -> 0.02, n=5 -> ~0.20, n=15 -> ~0.43, n=30 -> ~0.60, n=60 -> ~0.75, n=120 -> ~0.86.
-        trade_factor = 0.02 + 0.95 * (n / (n + 20.0))
+        # Trade-volume factor: monotonic, strongest gradient in the 30-100 trade
+        # range so the optimizer is actively pushed to find configs that trade a
+        # lot, not just "few-but-clean" setups.
+        # Two stages: fast ramp up to the floor (~30), then continued linear
+        # reward up to the sweet spot (~100). Sample values:
+        # n=0->0.03  n=5->0.22  n=15->0.36  n=30->0.46  n=50->0.62
+        # n=80->0.85  n=100->0.95  n=160->0.96
+        n_floor, n_sweet = 30.0, 100.0
+        below = n / (n + 8.0)
+        above = max(0.0, min(1.0, (n - n_floor) / (n_sweet - n_floor)))
+        trade_factor = 0.03 + 0.50 * below + 0.47 * above
+        # Additive density bonus: small, but the optimizer cannot escape it by
+        # picking very few high-PF trades. Saturates around 80 trades.
+        trade_bonus = 0.18 * (n / (n + 30.0))
         time_penalty = max(0.40, 1.0 - ter * 1.4)
-        # Smooth drawdown quality: linear decay, then continues negative gently (no cliff).
         drawdown_quality = max(-0.4, 1.0 - dd / 0.22)
-        # Smooth ruin penalty: continuous, asymptotic, no flat region.
         ruin_penalty = 1.0 / (1.0 + max(0.0, dd - 0.10) * 4.5)
 
         if self.metric == "target_150":
@@ -285,25 +294,25 @@ class PrometheusOptimizer:
             ret_component = max(-0.4, min(ret / 2.0, 1.0))
             base = (progress * 0.32 + ret_component * 0.22 + min(pf, 4.0) / 4.0 * 0.18
                     + drawdown_quality * 0.16 + wr * 0.12)
-            score = base * trade_factor * time_penalty * ruin_penalty
+            score = base * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
             if final >= target and n >= 10:
                 score += 0.20
             return score
         if self.metric == "win_rate":
-            return wr * trade_factor * time_penalty * ruin_penalty
+            return wr * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
         if self.metric == "profit_factor":
-            return min(pf, 5.0) / 5.0 * trade_factor * time_penalty * ruin_penalty
+            return min(pf, 5.0) / 5.0 * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
         if self.metric == "sharpe":
-            return max(min(sh, 4.0), -2.0) / 4.0 * trade_factor * time_penalty * ruin_penalty
+            return max(min(sh, 4.0), -2.0) / 4.0 * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
         if self.metric == "total_return":
-            return max(min(ret, 2.0), -0.5) / 2.0 * trade_factor * time_penalty * ruin_penalty
+            return max(min(ret, 2.0), -0.5) / 2.0 * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
         base = (wr * 0.20
                 + min(pf, 4.0) / 4.0 * 0.22
                 + max(min(ret, 1.8), -0.4) / 1.8 * 0.24
                 + drawdown_quality * 0.16
                 + max(min(sh, 3.0), -1.0) / 3.0 * 0.12
                 + max(0.0, min(tp1, 1.0)) * 0.06)
-        return base * trade_factor * time_penalty * ruin_penalty
+        return base * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
 
     def _param_softness_bonus(self, params: dict) -> float:
         """
