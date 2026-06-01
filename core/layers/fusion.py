@@ -198,6 +198,15 @@ class FusionEngine:
             result.update(blocked_signal_payload)
             return result
 
+        liq_veto_threshold = float(getattr(cfg, "LIQUIDATION_VETO_THRESHOLD", 0.45))
+        if liq_veto_threshold > 0 and abs(liquidation_score) >= liq_veto_threshold:
+            liq_direction = 1 if liquidation_score > 0 else -1
+            if liq_direction == -direction:
+                logger.info(f"[Fusion] LIQUIDATION VETO | direction={direction} liq={liquidation_score:+.3f} threshold={liq_veto_threshold}")
+                result = self._no_trade("liquidation_contrarian")
+                result.update(blocked_signal_payload)
+                return result
+
         effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
         if abs_score < effective_threshold:
             result = self._no_trade("below_threshold")
