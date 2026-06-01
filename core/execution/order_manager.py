@@ -219,6 +219,7 @@ class OrderManager:
             "entry_price": entry_price,
             "entry_close_price": price,
             "entry_bar_time": str(bar_time) if bar_time is not None else None,
+            "entry_bar_start_epoch": int(time.time() // self._timeframe_seconds()) * self._timeframe_seconds(),
             "last_seen_bar_time": str(bar_time) if bar_time is not None else None,
             "current_price": entry_price,
             "entry_score": float(abs(signal.get("fusion_score", 0.0) or 0.0)),
@@ -298,6 +299,7 @@ class OrderManager:
             "entry_price": filled_price,
             "entry_close_price": price,
             "entry_bar_time": str(bar_time) if bar_time is not None else None,
+            "entry_bar_start_epoch": int(time.time() // self._timeframe_seconds()) * self._timeframe_seconds(),
             "last_seen_bar_time": str(bar_time) if bar_time is not None else None,
             "current_price": filled_price,
             "entry_score": float(abs(signal.get("fusion_score", 0.0) or 0.0)),
@@ -472,7 +474,13 @@ class OrderManager:
         self._update_memory_on_close(trade)
         del self.open_trades[trade_id]
         self._save_trades()
+        sym = trade.get("symbol") or cfg.SYMBOL
         logger.info(f"[Paper] Force closed | {trade_id} | reason={reason} | total_pnl={trade['pnl']:+.4f}")
+        try:
+            from core.monitoring.decision_journal import journal as _journal
+            _journal.add("close", f"{sym} {trade.get('side', '?')} force-closed reason={reason} pnl={trade['pnl']:+.4f}", symbol=sym, trade_id=trade_id, exit_type=reason, pnl=trade["pnl"], side=trade.get("side"), is_live=bool(trade.get("is_live")))
+        except Exception:
+            pass
         return {"status": "closed", "trade_id": trade_id, "pnl": trade["pnl"], "reason": reason}
 
     async def check_paper_exits(self, current_price: float, high: float = None, low: float = None, symbol: str = None, bar_time=None, regime_bias: int = None, regime_score: float = None):
@@ -480,13 +488,23 @@ class OrderManager:
         high = float(high if high is not None else current_price)
         low = float(low if low is not None else current_price)
         bar_time_str = str(bar_time) if bar_time is not None else None
+        tf_sec = self._timeframe_seconds()
+        current_bar_epoch = int(time.time() // tf_sec) * tf_sec
         for trade_id, trade in list(self.open_trades.items()):
             if trade["status"] != "open":
                 continue
             trade_symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
             if symbol and trade_symbol != symbol:
                 continue
+            entry_epoch = trade.get("entry_bar_start_epoch")
+            if entry_epoch is not None and current_bar_epoch == entry_epoch:
+                self._update_unrealized_pnl(trade, current_price)
+                continue
             if bar_time_str is not None and trade.get("entry_bar_time") == bar_time_str:
+                self._update_unrealized_pnl(trade, current_price)
+                continue
+            last_epoch = trade.get("last_seen_bar_epoch")
+            if last_epoch is not None and last_epoch == current_bar_epoch:
                 self._update_unrealized_pnl(trade, current_price)
                 continue
             if bar_time_str is not None:
@@ -494,6 +512,7 @@ class OrderManager:
                     self._update_unrealized_pnl(trade, current_price)
                     continue
                 trade["last_seen_bar_time"] = bar_time_str
+            trade["last_seen_bar_epoch"] = current_bar_epoch
             trade["bars_open"] = int(trade.get("bars_open", 0)) + 1
             self._update_unrealized_pnl(trade, current_price)
             events = self.exit_mgr.evaluate(trade, high=high, low=low, close=current_price, bar_index=int(trade.get("bars_open", 0)), regime_bias=regime_bias, regime_score=regime_score)
@@ -513,7 +532,13 @@ class OrderManager:
                 trade["exit_type"] = events[-1]["type"] if events else "CLOSED"
                 self._update_memory_on_close(trade)
                 tag = "Live" if is_live else "Paper"
-                logger.info(f"[{tag}] Closed | {trade_id} | total_pnl={trade['pnl']:+.4f}")
+                exit_type = trade["exit_type"]
+                logger.info(f"[{tag}] Closed | {trade_id} | exit={exit_type} | total_pnl={trade['pnl']:+.4f} | bars={trade.get('bars_open', 0)}")
+                try:
+                    from core.monitoring.decision_journal import journal as _journal
+                    _journal.add("close", f"{trade_symbol} {trade.get('side', '?')} closed exit={exit_type} pnl={trade['pnl']:+.4f}", symbol=trade_symbol, trade_id=trade_id, exit_type=exit_type, pnl=trade["pnl"], gross_pnl=trade.get("realized_pnl"), fees=trade.get("fees_paid"), bars_open=trade.get("bars_open"), notional=trade.get("notional"), side=trade.get("side"), is_live=is_live)
+                except Exception:
+                    pass
                 if not is_live:
                     self._stamp_symbol_cooldown(trade_symbol)
                 del self.open_trades[trade_id]
