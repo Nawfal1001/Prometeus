@@ -234,9 +234,10 @@ def _normalize_symbol_list(raw, fallback_symbol=None, all_default=False):
 
 async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int):
     from core.exchange.factory import get_exchange
+    from core.cache.market_cache import get_cached_ohlcv
     exchange = get_exchange()
     try:
-        return await exchange.get_ohlcv(symbol, timeframe, limit=limit)
+        return await get_cached_ohlcv(exchange, symbol, timeframe, limit)
     finally:
         closer = getattr(exchange, "close", None)
         if closer:
