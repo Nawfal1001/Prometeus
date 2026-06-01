@@ -37,9 +37,10 @@ def _clean_symbols(symbols):
 
 async def fetch_ohlcv(symbol, timeframe, limit):
     from core.exchange.factory import get_exchange
+    from core.cache.market_cache import get_cached_ohlcv
     ex = get_exchange()
     try:
-        return await ex.get_ohlcv(symbol, timeframe, limit=limit)
+        return await get_cached_ohlcv(ex, symbol, timeframe, limit)
     finally:
         closer = getattr(ex, "close", None)
         if closer:
@@ -49,12 +50,13 @@ async def fetch_ohlcv(symbol, timeframe, limit):
 
 async def fetch_many_ohlcv(symbols, timeframe, limit):
     from core.exchange.factory import get_exchange
+    from core.cache.market_cache import get_cached_ohlcv
     ex = get_exchange()
     data = {}
     try:
         for sym in symbols:
             try:
-                df = await ex.get_ohlcv(sym, timeframe, limit=limit)
+                df = await get_cached_ohlcv(ex, sym, timeframe, limit)
                 if df is not None and not df.empty:
                     data[sym] = df
             except Exception as e:

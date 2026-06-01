@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -87,17 +90,76 @@ def feature_key(symbol: str, timeframe: str, df: pd.DataFrame) -> str:
     return f"features:{symbol}:{timeframe}:{len(df)}:{last_idx}:{last_close:.8f}"
 
 
+OHLCV_DISK_DIR = Path(os.environ.get("PROMETEUS_OHLCV_CACHE_DIR",
+                                     str(Path(__file__).resolve().parent.parent.parent / "data" / "ohlcv_cache")))
+OHLCV_DISK_TTL_SEC = int(os.environ.get("PROMETEUS_OHLCV_DISK_TTL", "900"))
+
+
+def _disk_path_for(symbol: str, timeframe: str, limit: int) -> Path:
+    safe = hashlib.sha1(f"{symbol}|{timeframe}|{int(limit)}".encode()).hexdigest()[:16]
+    sym_tag = symbol.replace("/", "_").replace(":", "_")
+    return OHLCV_DISK_DIR / f"{sym_tag}_{timeframe}_{int(limit)}_{safe}.parquet"
+
+
+def _disk_get(symbol: str, timeframe: str, limit: int) -> Optional[pd.DataFrame]:
+    path = _disk_path_for(symbol, timeframe, limit)
+    if not path.exists():
+        return None
+    if OHLCV_DISK_TTL_SEC > 0:
+        age = time.time() - path.stat().st_mtime
+        if age > OHLCV_DISK_TTL_SEC:
+            return None
+    try:
+        df = pd.read_parquet(path)
+        if df is None or df.empty:
+            return None
+        return df
+    except Exception as e:
+        logger.debug(f"[MarketCache] disk read failed for {path.name}: {e}")
+        return None
+
+
+def _disk_set(symbol: str, timeframe: str, limit: int, df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    try:
+        OHLCV_DISK_DIR.mkdir(parents=True, exist_ok=True)
+        path = _disk_path_for(symbol, timeframe, limit)
+        df.to_parquet(path, index=True)
+    except Exception as e:
+        logger.debug(f"[MarketCache] disk write failed: {e}")
+
+
 async def get_cached_ohlcv(exchange, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
     key = ohlcv_key(symbol, timeframe, limit)
     cached = OHLCV_CACHE.get(key)
     if cached is not None:
-        logger.debug(f"[MarketCache] OHLCV hit {key}")
+        logger.debug(f"[MarketCache] OHLCV mem-hit {key}")
         return cached
+    disk = _disk_get(symbol, timeframe, limit)
+    if disk is not None:
+        logger.debug(f"[MarketCache] OHLCV disk-hit {key}")
+        OHLCV_CACHE.set(key, disk)
+        return disk
     df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
     df = normalize_ohlcv(df)
     if df is not None and not df.empty:
         OHLCV_CACHE.set(key, df)
+        _disk_set(symbol, timeframe, limit, df)
     return df
+
+
+def clear_ohlcv_cache(disk: bool = False) -> Dict[str, Any]:
+    OHLCV_CACHE.clear()
+    removed = 0
+    if disk and OHLCV_DISK_DIR.exists():
+        for p in OHLCV_DISK_DIR.glob("*.parquet"):
+            try:
+                p.unlink()
+                removed += 1
+            except Exception:
+                pass
+    return {"memory_cleared": True, "disk_files_removed": removed}
 
 
 def get_cached_features(symbol: str, timeframe: str, df: pd.DataFrame, compute_fn) -> pd.DataFrame:

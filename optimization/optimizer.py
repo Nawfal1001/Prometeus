@@ -65,6 +65,8 @@ class PrometheusOptimizer:
         self._multi_prepared_data = None
         self._mode = "single"
         self._tune_groups = tune_groups
+        self._feature_cache: dict = {}
+        self._multi_feature_cache: dict = {}
 
     def run(self, data=None, mode: str | None = None) -> dict:
         if data is not None:
@@ -132,16 +134,59 @@ class PrometheusOptimizer:
             save_user_settings(self.best_params)
             logger.info(f"[Optimizer] Applied: {self.best_params}")
 
+    INDICATOR_KEYS = ("EMA_FAST", "EMA_MID", "EMA_SLOW", "RSI_PERIOD")
+
+    def _indicator_signature(self, params: dict) -> tuple | None:
+        if not any(k in params for k in self.INDICATOR_KEYS):
+            return None
+        return tuple(int(params.get(k, getattr(cfg, k, 0)) or 0) for k in self.INDICATOR_KEYS)
+
+    def _features_for_trial(self, params: dict):
+        """Return prepared df (or multi-symbol dict) for this trial's indicator params.
+
+        When indicator tuning is off, returns the once-computed prepared data.
+        When indicator tuning is on, recomputes (and caches) features per
+        unique (EMA_FAST, EMA_MID, EMA_SLOW, RSI_PERIOD) combo so different
+        indicator settings actually take effect in the backtest.
+        """
+        sig = self._indicator_signature(params)
+        if sig is None:
+            return self._multi_prepared_data if self._mode in ("compete", "competition") else self._prepared_df
+
+        from core.models.feature_engine import compute_features
+        if self._mode in ("compete", "competition") and self._multi_raw_data:
+            cached = self._multi_feature_cache.get(sig)
+            if cached is not None:
+                return cached
+            prepared_map = {}
+            for symbol, raw in self._multi_raw_data.items():
+                try:
+                    out = compute_features(raw.copy())
+                    if out is not None and not out.empty and len(out) >= 100:
+                        prepared_map[symbol] = out
+                except Exception as e:
+                    logger.debug(f"[Optimizer] feature recompute failed for {symbol}: {e}")
+            self._multi_feature_cache[sig] = prepared_map
+            return prepared_map
+
+        cached = self._feature_cache.get(sig)
+        if cached is not None:
+            return cached
+        prepared = compute_features(self._raw_df.copy())
+        self._feature_cache[sig] = prepared
+        return prepared
+
     def _objective(self, trial: optuna.Trial) -> float:
         params = self._suggest_params(trial)
         snapshot = {k: getattr(cfg, k, None) for k in _OPT_KEYS}
         try:
             self._inject_params(params)
             if self._mode in ("compete", "competition") and self._multi_prepared_data:
-                results = AlignedMultiSymbolBacktestEngine(use_memory=False).run_competing_symbols(self._multi_prepared_data, prepared=True)
+                feat = self._features_for_trial(params) or self._multi_prepared_data
+                results = AlignedMultiSymbolBacktestEngine(use_memory=False).run_competing_symbols(feat, prepared=True)
             else:
-                prepared = self._prepared_df
-                if prepared is None or prepared.empty or len(prepared) < 100:
+                prepared = self._features_for_trial(params)
+                if prepared is None or (hasattr(prepared, "empty") and prepared.empty) or len(prepared) < 100:
                     return -1.0
                 results = BacktestEngine().walk_forward(prepared)
 
