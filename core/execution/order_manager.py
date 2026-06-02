@@ -28,6 +28,7 @@ class OrderManager:
         self._trade_counter = 0
         self.real_taker_fee = None
         self.symbol_cooldowns = {}
+        self._force_next_signal = False
         self._load_trades()
 
     def _resolve_taker_fee(self, is_live: bool) -> float:
@@ -112,6 +113,13 @@ class OrderManager:
     def _is_paper_forced(self, signal: dict) -> bool:
         return bool(self.paper and str(signal.get("reason", "")).startswith("paper_forced_from_"))
 
+    def _is_user_forced(self, signal: dict) -> bool:
+        return bool(signal.get("forced")) or str(signal.get("reason", "")) == "manual_force"
+
+    def arm_next_signal(self, enabled: bool = True) -> dict:
+        self._force_next_signal = bool(enabled)
+        return {"status": "armed" if enabled else "disarmed", "armed": self._force_next_signal}
+
     def _sizing_from_signal(self, signal: dict, price: float):
         notional = float(signal.get("notional", signal.get("position_size", 0.0)) or 0.0)
         qty = float(signal.get("qty", 0.0) or 0.0)
@@ -146,15 +154,21 @@ class OrderManager:
     async def execute_signal(self, signal: dict, current_price: float, bar_time=None) -> dict:
         if not signal.get("trade"):
             return {"status": "skipped", "reason": signal.get("reason")}
+        user_forced = self._is_user_forced(signal)
+        if self._force_next_signal and not user_forced:
+            signal["forced"] = True
+            signal.setdefault("reason", "armed_force")
+            user_forced = True
+            self._force_next_signal = False
         symbol = signal.get("symbol") or cfg.SYMBOL
-        if self.paper:
+        if self.paper and not user_forced:
             max_concurrent = int(getattr(cfg, "MAX_CONCURRENT_PAPER_TRADES", 1))
             existing_paper = [t for t in self.open_trades.values() if not t.get("is_live")]
             if any((t.get("symbol") or cfg.SYMBOL) == symbol for t in existing_paper):
                 return {"status": "blocked", "reason": "symbol_already_open", "symbol": symbol}
             if len(existing_paper) >= max(1, max_concurrent):
                 return {"status": "blocked", "reason": "concurrent_trade_limit", "open": len(existing_paper), "max": max_concurrent}
-        if self.paper:
+        if self.paper and not user_forced:
             try:
                 cooldown_until = float(self.symbol_cooldowns.get(symbol) or 0.0)
             except (TypeError, ValueError):
@@ -170,26 +184,29 @@ class OrderManager:
                 return {"status": "blocked", "reason": "live_position_already_open"}
 
         paper_forced = self._is_paper_forced(signal)
+        bypass_soft = paper_forced or user_forced
         atr_norm = float(signal.get("atr_norm", signal.get("atr", 0.002)) or 0.002)
         vol_z = float(signal.get("vol_zscore", 0) or 0)
         allowed_entry, entry_reason = self.exit_mgr.entry_allowed(atr_norm, vol_z)
-        if not allowed_entry and not paper_forced:
+        if not allowed_entry and not bypass_soft:
             return {"status": "blocked", "reason": entry_reason}
-        if not allowed_entry and paper_forced:
-            logger.info(f"[Orders] Paper forced signal bypassed exit entry filter: {entry_reason}")
+        if not allowed_entry and bypass_soft:
+            logger.info(f"[Orders] Forced signal bypassed entry filter: {entry_reason}")
 
         threshold_mult = self.risk.threshold_multiplier()
         effective_thr = cfg.FUSION_THRESHOLD * threshold_mult
-        if abs(float(signal.get("fusion_score", 0) or 0)) < effective_thr and not paper_forced:
+        if abs(float(signal.get("fusion_score", 0) or 0)) < effective_thr and not bypass_soft:
             logger.info(f"[Orders] Trade blocked by live feedback (mult={threshold_mult:.2f})")
             return {"status": "blocked", "reason": "live_feedback"}
-        if paper_forced:
-            logger.info(f"[Orders] Paper forced signal accepted | score={abs(float(signal.get('fusion_score', 0) or 0)):.4f} threshold={effective_thr:.4f}")
+        if bypass_soft:
+            logger.info(f"[Orders] Forced signal accepted | reason={signal.get('reason')} score={abs(float(signal.get('fusion_score', 0) or 0)):.4f} threshold={effective_thr:.4f}")
 
         allowed, reason = self.risk.can_trade(open_trades=self.open_trades, signal=signal)
-        if not allowed:
+        if not allowed and not user_forced:
             logger.warning(f"[Orders] Trade blocked: {reason}")
             return {"status": "blocked", "reason": reason}
+        if not allowed and user_forced:
+            logger.warning(f"[Orders] User-forced trade overrides risk gate: {reason}")
 
         if self.paper:
             return await self._paper_execute(signal, current_price, bar_time=bar_time)
@@ -458,6 +475,34 @@ class OrderManager:
             self.fusion.update_live_capital(self.risk.capital)
         tag = "Live" if is_live else "Paper"
         logger.info(f"[{tag}] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | gross={gross_pnl:+.4f} fees={fees:.4f} net={pnl:+.4f}")
+
+    async def manual_open(self, symbol: str, side: str, current_price: float,
+                          notional: float | None = None, risk_pct: float | None = None,
+                          atr_norm: float | None = None, bar_time=None) -> dict:
+        side = str(side or "").lower()
+        if side not in ("long", "short"):
+            return {"status": "error", "reason": f"invalid_side:{side}"}
+        if current_price is None or current_price <= 0:
+            return {"status": "error", "reason": "invalid_price"}
+        direction = 1 if side == "long" else -1
+        signal = {
+            "trade": True,
+            "side": side,
+            "symbol": symbol,
+            "direction": direction,
+            "fusion_score": float(direction),
+            "atr_norm": float(atr_norm) if (atr_norm and atr_norm > 0) else float(getattr(cfg, "MIN_ATR_NORM", 0.001) * 3),
+            "forced": True,
+            "reason": "manual_force",
+        }
+        if notional and notional > 0:
+            signal["notional"] = float(notional)
+            signal["position_size"] = float(notional)
+            if current_price > 0:
+                signal["qty"] = float(notional) / float(current_price)
+        elif risk_pct and risk_pct > 0:
+            signal["confidence_mult"] = float(risk_pct) / float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05) or 0.05)
+        return await self.execute_signal(signal, current_price, bar_time=bar_time)
 
     async def force_close_trade(self, trade_id: str, price: float, reason: str = "FORCED"):
         trade = self.open_trades.get(trade_id)

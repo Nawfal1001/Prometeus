@@ -8,6 +8,7 @@ import asyncio
 from pathlib import Path
 import uvicorn
 from loguru import logger
+from fastapi import Request
 from dashboard.app import app, broadcast, update_state
 from core.engine import PrometheusEngine
 import config.settings as cfg
@@ -153,6 +154,41 @@ async def control_override(action: str):
         return {"status": "stopped"}
 
     return {"status": "unknown_action", "action": action}
+
+
+@app.post("/api/trade/open")
+async def trade_open(request: Request):
+    if engine is None:
+        return {"status": "error", "reason": "engine_not_running"}
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    mode = str(body.get("mode") or "manual").lower()
+    if mode == "arm":
+        enabled = bool(body.get("enabled", True))
+        return engine.arm_next_signal(enabled)
+    symbol = body.get("symbol") or cfg.SYMBOL
+    side = str(body.get("side") or "long").lower()
+    notional = float(body.get("notional") or 0) or None
+    risk_pct = float(body.get("risk_pct") or 0) or None
+    return await engine.manual_open_trade(symbol, side, notional=notional, risk_pct=risk_pct)
+
+
+@app.post("/api/trade/close")
+async def trade_close(request: Request):
+    if engine is None:
+        return {"status": "error", "reason": "engine_not_running"}
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    trade_id = body.get("trade_id")
+    if not trade_id:
+        return {"status": "error", "reason": "trade_id_required"}
+    return await engine.manual_close_trade(str(trade_id))
 
 
 if __name__ == "__main__":
