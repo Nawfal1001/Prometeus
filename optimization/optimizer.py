@@ -29,6 +29,9 @@ _OPT_KEYS = [
     "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
     "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
     "REGIME_BLOCK_THRESHOLD", "HTF_BLOCK_THRESHOLD", "ROTATOR_MIN_SCORE",
+    "BREAKEVEN_BUFFER_PCT", "EXIT_SIGNAL_FLIP_MIN_SCORE", "EXIT_REGIME_FLIP_MIN_SCORE",
+    "PROFIT_RATCHET_ATR_MULT", "EARLY_KILL_BARS", "EARLY_KILL_SL_PCT",
+    "MAX_CONCURRENT_PAPER_TRADES",
 ]
 
 SEED_PARAMS = [
@@ -272,7 +275,20 @@ class PrometheusOptimizer:
             min_rr = trial.suggest_float("MIN_RR_RATIO", rr_low, max(rr_low + 0.05, rr_cap), step=0.05)
             tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
             tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
-            params.update({"ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult, "MIN_RR_RATIO": min_rr, "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit})
+            be_buffer = trial.suggest_float("BREAKEVEN_BUFFER_PCT", 0.0005, 0.0035, step=0.0001)
+            sig_flip = trial.suggest_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.10, 0.35, step=0.02)
+            regime_flip = trial.suggest_float("EXIT_REGIME_FLIP_MIN_SCORE", 0.20, 0.45, step=0.02)
+            ratchet_mult = trial.suggest_float("PROFIT_RATCHET_ATR_MULT", 0.30, 1.10, step=0.05)
+            early_bars = trial.suggest_int("EARLY_KILL_BARS", 1, 4)
+            early_sl_pct = trial.suggest_float("EARLY_KILL_SL_PCT", 0.50, 0.90, step=0.05)
+            params.update({"ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult,
+                           "MIN_RR_RATIO": min_rr, "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit,
+                           "BREAKEVEN_BUFFER_PCT": be_buffer,
+                           "EXIT_SIGNAL_FLIP_MIN_SCORE": sig_flip,
+                           "EXIT_REGIME_FLIP_MIN_SCORE": regime_flip,
+                           "PROFIT_RATCHET_ATR_MULT": ratchet_mult,
+                           "EARLY_KILL_BARS": early_bars,
+                           "EARLY_KILL_SL_PCT": early_sl_pct})
 
         if "thresholds" in groups:
             params["FUSION_THRESHOLD"] = trial.suggest_float("FUSION_THRESHOLD", 0.05, 0.32, step=0.01)
@@ -282,6 +298,7 @@ class PrometheusOptimizer:
 
         if "risk" in groups:
             params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005)
+            params["MAX_CONCURRENT_PAPER_TRADES"] = trial.suggest_int("MAX_CONCURRENT_PAPER_TRADES", 2, 8)
 
         if "duration" in groups:
             params["MAX_TRADE_DURATION_BARS"] = trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 54)

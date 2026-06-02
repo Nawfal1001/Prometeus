@@ -136,15 +136,99 @@ function applyOpenTrades(trades) {
     const tp1Tag = t.tp1_hit ? ' <span class="badge" style="background:#1a3a2a;color:var(--green);font-size:10px">TP1 HIT</span>' : '';
     const openedAt = t.open_time ? fmtTime(t.open_time) : '';
     const dur = t.open_time ? fmtDuration(Math.max(0, (Date.now() / 1000) - Number(t.open_time))) : '';
+    const safeId = (t.id || "").replace(/'/g, "\\'");
     return `
       <div class="trade-card ${t.side}">
-        <b>${t.side === "long" ? "▲ LONG" : "▼ SHORT"}</b> — ${t.id || "paper"} — ${t.symbol || ""}${liveTag}${tp1Tag}<br>
+        <b>${t.side === "long" ? "▲ LONG" : "▼ SHORT"}</b> — ${t.id || "paper"} — ${t.symbol || ""}${liveTag}${tp1Tag}
+        <button class="btn btn-secondary" style="float:right;padding:4px 10px;font-size:11px" onclick="manualCloseTrade('${safeId}')">✕ Close</button><br>
         Entry: ${money(t.entry_price)} ${openedAt ? `@ ${openedAt}` : ''} | Current: ${money(t.current_price || t.entry_price)} | ${dur ? `Held: ${dur}` : ''}<br>
         Size: ${money(t.size || t.notional)} | PnL: <span class="${cls}">${pnl >= 0 ? "+" : ""}$${pnl.toFixed(4)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(3)}%)</span><br>
         TP1: ${money(t.tp1)} | TP2: ${money(t.tp2 || t.take_profit)} ${t.distance_to_tp_pct != null ? `(${Number(t.distance_to_tp_pct).toFixed(3)}%)` : ""}<br>
         SL: ${money(t.trailing_sl || t.stop_loss)} ${t.distance_to_sl_pct != null ? `(${Number(t.distance_to_sl_pct).toFixed(3)}%)` : ""}
       </div>`;
   }).join("");
+}
+
+function _manualStatus(msg, isError) {
+  const el = document.getElementById("manual-trade-status");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.style.color = isError ? "var(--red)" : "var(--text-dim)";
+}
+
+async function manualOpenTrade() {
+  const symbol = (document.getElementById("manual-symbol")?.value || "BTC/USDT").trim();
+  const side = document.getElementById("manual-side")?.value || "long";
+  const notional = Number(document.getElementById("manual-notional")?.value || 0) || 0;
+  const riskPct = Number(document.getElementById("manual-risk-pct")?.value || 0) || 0;
+  _manualStatus(`Opening ${side.toUpperCase()} ${symbol}...`);
+  try {
+    const r = await fetch("/api/trade/open", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: "manual", symbol, side, notional, risk_pct: riskPct}),
+    });
+    const d = await r.json();
+    if (d.status === "filled") {
+      _manualStatus(`Filled ${d.symbol} @ ${Number(d.price).toFixed(4)} | id=${d.trade_id}`);
+    } else {
+      _manualStatus(`${d.status || "error"}: ${d.reason || JSON.stringify(d)}`, true);
+    }
+  } catch (e) {
+    _manualStatus(`Network error: ${e.message}`, true);
+  }
+}
+
+async function manualCloseTrade(tradeId) {
+  if (!tradeId) return;
+  _manualStatus(`Closing ${tradeId}...`);
+  try {
+    const r = await fetch("/api/trade/close", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({trade_id: tradeId}),
+    });
+    const d = await r.json();
+    if (d.status === "closed") {
+      _manualStatus(`Closed ${tradeId} | pnl=${Number(d.pnl).toFixed(4)}`);
+    } else {
+      _manualStatus(`${d.status || "error"}: ${d.reason || JSON.stringify(d)}`, true);
+    }
+  } catch (e) {
+    _manualStatus(`Network error: ${e.message}`, true);
+  }
+}
+
+async function armNextSignal() {
+  try {
+    const r = await fetch("/api/trade/open", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: "arm", enabled: true}),
+    });
+    const d = await r.json();
+    const tag = document.getElementById("manual-armed-tag");
+    if (tag) tag.style.display = d.armed ? "inline" : "none";
+    _manualStatus(d.armed ? "Armed — next valid signal will be taken regardless of threshold." : "Disarm requested.");
+  } catch (e) {
+    _manualStatus(`Network error: ${e.message}`, true);
+  }
+}
+
+async function disarmNextSignal() {
+  try {
+    const r = await fetch("/api/trade/open", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: "arm", enabled: false}),
+    });
+    const d = await r.json();
+    const tag = document.getElementById("manual-armed-tag");
+    if (tag) tag.style.display = d.armed ? "inline" : "none";
+    _manualStatus("Disarmed.");
+  } catch (e) {
+    _manualStatus(`Network error: ${e.message}`, true);
+  }
 }
 
 function fmtDuration(sec) {

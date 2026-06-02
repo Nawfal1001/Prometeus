@@ -71,6 +71,52 @@ class PrometheusEngine:
         logger.info("[Engine] PROMETHEUS stopped")
         journal.add("engine", "stopped")
 
+    async def _live_price_and_atr(self, symbol: str) -> tuple[float, float]:
+        try:
+            df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=80)
+            if df is None or df.empty:
+                return 0.0, 0.0
+            price = float(df["close"].iloc[-1])
+            atr_norm = 0.0
+            try:
+                feat = compute_features(df.copy())
+                if feat is not None and not feat.empty and "atr_norm" in feat.columns:
+                    atr_norm = float(feat["atr_norm"].iloc[-1] or 0.0)
+            except Exception:
+                pass
+            return price, atr_norm
+        except Exception as e:
+            logger.warning(f"[Engine] manual price fetch failed for {symbol}: {e}")
+            return 0.0, 0.0
+
+    async def manual_open_trade(self, symbol: str, side: str,
+                                notional: float | None = None,
+                                risk_pct: float | None = None) -> dict:
+        symbol = symbol or cfg.SYMBOL
+        price, atr_norm = await self._live_price_and_atr(symbol)
+        if price <= 0:
+            return {"status": "error", "reason": "no_market_data", "symbol": symbol}
+        result = await self.orders.manual_open(symbol, side, current_price=price,
+                                               notional=notional, risk_pct=risk_pct,
+                                               atr_norm=atr_norm)
+        journal.add("manual", f"open {symbol} {side} -> {result.get('status')}", symbol=symbol, side=side, result=result)
+        return result
+
+    async def manual_close_trade(self, trade_id: str) -> dict:
+        trade = self.orders.open_trades.get(trade_id)
+        if not trade:
+            return {"status": "error", "reason": "trade_not_found", "trade_id": trade_id}
+        symbol = trade.get("symbol") or cfg.SYMBOL
+        price, _ = await self._live_price_and_atr(symbol)
+        if price <= 0:
+            price = float(trade.get("current_price") or trade.get("entry_price") or 0.0)
+        result = await self.orders.force_close_trade(trade_id, price, reason="MANUAL")
+        journal.add("manual", f"close {trade_id} -> {result.get('status')}", trade_id=trade_id, result=result)
+        return result
+
+    def arm_next_signal(self, enabled: bool = True) -> dict:
+        return self.orders.arm_next_signal(enabled)
+
     def _rotator_enabled(self) -> bool:
         return bool(getattr(cfg, "AUTO_SYMBOL_SELECTION", False) and cfg.TRADING_MODE == "paper")
 
