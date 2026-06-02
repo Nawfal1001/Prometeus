@@ -220,6 +220,40 @@ async def trade_open(request: Request):
     return result
 
 
+@app.get("/api/diagnostic")
+async def diagnostic():
+    """Diagnose engine + trade-state divergence. Use this to debug
+    'engine_not_running' / Close-button issues — it reports exactly what
+    the close endpoint sees so we know which path is failing."""
+    from core.execution.order_manager import TRADES_FILE
+    import json as _json
+    info = {
+        "engine_alive": engine is not None,
+        "engine_task_done": (engine_task.done() if engine_task else None),
+        "trades_file_path": str(TRADES_FILE),
+        "trades_file_exists": TRADES_FILE.exists(),
+        "trading_mode": getattr(cfg, "TRADING_MODE", None),
+    }
+    if engine is not None:
+        try:
+            info["engine_open_trade_ids"] = list(engine.orders.open_trades.keys())
+            info["engine_capital"] = round(float(engine.orders.risk.capital), 4)
+            info["engine_running"] = bool(getattr(engine, "running", False))
+        except Exception as e:
+            info["engine_inspect_error"] = str(e)
+    if TRADES_FILE.exists():
+        try:
+            data = _json.loads(TRADES_FILE.read_text())
+            info["file_open_trade_ids"] = list((data.get("open_trades") or {}).keys())
+            info["file_capital"] = data.get("capital")
+            info["file_trade_counter"] = data.get("trade_counter")
+        except Exception as e:
+            info["file_read_error"] = str(e)
+    from dashboard.app import _state
+    info["state_open_trade_ids"] = [t.get("id") for t in (_state.get("open_trades") or [])]
+    return info
+
+
 @app.post("/api/trade/close")
 async def trade_close(request: Request):
     body = {}
@@ -231,37 +265,56 @@ async def trade_close(request: Request):
     if not trade_id:
         return {"status": "error", "reason": "trade_id_required"}
     trade_id = str(trade_id)
-    if engine is None:
-        # Engine is restarting (paper) or stopped. Fall back: close the trade
-        # offline using the persisted state so the user isn't stuck with a
-        # ghost trade. Only paper -- live exits must go through the exchange.
+    # Verbose attempt log so the failure mode is always visible.
+    attempts = []
+
+    # 1. Normal path: engine alive.
+    if engine is not None:
         try:
-            from core.execution.order_manager import OrderManager, TRADES_FILE
-            import json
-            if not TRADES_FILE.exists():
-                return {"status": "error", "reason": "engine_not_running"}
-            data = json.loads(TRADES_FILE.read_text())
-            trade = (data.get("open_trades") or {}).get(trade_id)
-            if not trade:
-                return {"status": "error", "reason": "trade_not_found_offline", "trade_id": trade_id}
-            if trade.get("is_live"):
-                return {"status": "error", "reason": "live_trade_requires_engine"}
-            om = OrderManager(exchange=None, paper=True)
-            price = float(trade.get("current_price") or trade.get("entry_price") or 0.0)
-            if price <= 0:
-                return {"status": "error", "reason": "no_price_available"}
-            result = await om.force_close_trade(trade_id, price, reason="MANUAL_OFFLINE")
-            # Refresh _state from disk
-            from dashboard.app import _state, update_state
-            update_state("open_trades", list(json.loads(TRADES_FILE.read_text()).get("open_trades", {}).values()))
-            await broadcast({"type": "state", "data": {"open_trades": _state.get("open_trades", [])}})
-            return result
+            result = await engine.manual_close_trade(trade_id)
+            attempts.append({"path": "engine", "status": result.get("status"), "reason": result.get("reason")})
+            if result.get("status") == "closed":
+                await _push_trade_state()
+                result["attempts"] = attempts
+                return result
         except Exception as e:
-            logger.warning(f"[Trade] offline close failed for {trade_id}: {e}")
-            return {"status": "error", "reason": "engine_not_running"}
-    result = await engine.manual_close_trade(str(trade_id))
-    await _push_trade_state()
-    return result
+            attempts.append({"path": "engine", "error": str(e)})
+            logger.warning(f"[Trade] engine close failed for {trade_id}: {e}")
+
+    # 2. Offline fallback (paper only): read paper_trades.json, force-close
+    #    via a throwaway OrderManager, then refresh _state.
+    try:
+        from core.execution.order_manager import OrderManager, TRADES_FILE
+        import json
+        if not TRADES_FILE.exists():
+            attempts.append({"path": "offline", "reason": "trades_file_missing"})
+            return {"status": "error", "reason": "trades_file_missing", "attempts": attempts}
+        data = json.loads(TRADES_FILE.read_text())
+        trade = (data.get("open_trades") or {}).get(trade_id)
+        if not trade:
+            attempts.append({"path": "offline", "reason": "trade_not_in_file",
+                             "file_ids": list((data.get("open_trades") or {}).keys())})
+            return {"status": "error", "reason": "trade_not_found", "attempts": attempts}
+        if trade.get("is_live"):
+            attempts.append({"path": "offline", "reason": "live_trade_requires_engine"})
+            return {"status": "error", "reason": "live_trade_requires_engine", "attempts": attempts}
+        om = OrderManager(exchange=None, paper=True)
+        price = float(trade.get("current_price") or trade.get("entry_price") or 0.0)
+        if price <= 0:
+            attempts.append({"path": "offline", "reason": "no_price_available"})
+            return {"status": "error", "reason": "no_price_available", "attempts": attempts}
+        result = await om.force_close_trade(trade_id, price, reason="MANUAL_OFFLINE")
+        attempts.append({"path": "offline", "status": result.get("status")})
+        # Refresh _state so the UI loses the closed card.
+        from dashboard.app import _state, update_state
+        update_state("open_trades", list(json.loads(TRADES_FILE.read_text()).get("open_trades", {}).values()))
+        await broadcast({"type": "state", "data": {"open_trades": _state.get("open_trades", [])}})
+        result["attempts"] = attempts
+        return result
+    except Exception as e:
+        logger.warning(f"[Trade] offline close failed for {trade_id}: {e}")
+        attempts.append({"path": "offline", "error": str(e)})
+        return {"status": "error", "reason": "offline_close_failed", "error": str(e), "attempts": attempts}
 
 
 @app.post("/api/capital")
