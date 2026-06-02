@@ -81,41 +81,64 @@ def validate_live_start() -> tuple[bool, str]:
 
 async def start_engine_task(mode: str):
     global engine, engine_task
-    try:
-        cfg.TRADING_MODE = mode
-        if hasattr(cfg, "reload_from_sources"):
-            cfg.reload_from_sources()
+    user_stopped = False
+    attempt = 0
+    backoff_sec = 10
+    max_backoff = 120
+    while not user_stopped:
+        attempt += 1
+        try:
             cfg.TRADING_MODE = mode
+            if hasattr(cfg, "reload_from_sources"):
+                cfg.reload_from_sources()
+                cfg.TRADING_MODE = mode
 
-        update_state("status", "starting")
-        await broadcast({"type": "status", "status": "starting"})
+            update_state("status", "starting")
+            await broadcast({"type": "status", "status": "starting"})
 
-        logger.info(f"[Control] Starting real engine | mode={mode} exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={cfg.SYMBOL} tf={cfg.TIMEFRAME}")
-        engine = PrometheusEngine(broadcast_fn=broadcast)
+            logger.info(f"[Control] Starting real engine | attempt={attempt} mode={mode} exchange={cfg.EXCHANGE} market={cfg.MARKET_TYPE} symbol={cfg.SYMBOL} tf={cfg.TIMEFRAME}")
+            engine = PrometheusEngine(broadcast_fn=broadcast)
 
-        update_state("status", mode)
-        await broadcast({"type": "status", "status": mode})
+            update_state("status", mode)
+            await broadcast({"type": "status", "status": mode})
 
-        await engine.start()
+            await engine.start()
+            # Clean return (engine.stop() called from elsewhere) -> user-initiated stop.
+            user_stopped = True
 
-    except asyncio.CancelledError:
-        logger.info("[Control] Engine task cancelled")
-    except Exception as e:
-        logger.exception(f"[Control] Engine failed to start/run: {e}")
-        update_state("status", "error")
-        await broadcast({"type": "status", "status": "error", "error": str(e)})
-    finally:
-        if engine:
-            try:
-                engine.stop()
-            except Exception:
-                pass
-        engine = None
-        if engine_task and engine_task.done():
-            engine_task = None
-        if cfg.TRADING_MODE != "live":
-            update_state("status", "stopped")
-            await broadcast({"type": "status", "status": "stopped"})
+        except asyncio.CancelledError:
+            logger.info("[Control] Engine task cancelled")
+            user_stopped = True
+        except Exception as e:
+            logger.exception(f"[Control] Engine crashed (attempt {attempt}): {e}")
+            update_state("status", "error")
+            await broadcast({"type": "status", "status": "error", "error": str(e), "attempt": attempt})
+            # Live mode does NOT auto-restart -- too risky without user intent.
+            if mode == "live":
+                user_stopped = True
+            else:
+                # Paper mode: restart with exponential backoff, capped.
+                wait = min(backoff_sec * (2 ** min(attempt - 1, 4)), max_backoff)
+                logger.warning(f"[Control] Paper engine will auto-restart in {wait}s (attempt {attempt + 1})")
+                update_state("status", "restarting")
+                await broadcast({"type": "status", "status": "restarting", "retry_in_sec": wait, "attempt": attempt})
+                try:
+                    await asyncio.sleep(wait)
+                except asyncio.CancelledError:
+                    user_stopped = True
+        finally:
+            if engine is not None:
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+            engine = None
+
+    if engine_task and engine_task.done():
+        engine_task = None
+    if cfg.TRADING_MODE != "live":
+        update_state("status", "stopped")
+        await broadcast({"type": "status", "status": "stopped"})
 
 
 @app.post("/api/control/{action}", include_in_schema=False)
@@ -199,8 +222,6 @@ async def trade_open(request: Request):
 
 @app.post("/api/trade/close")
 async def trade_close(request: Request):
-    if engine is None:
-        return {"status": "error", "reason": "engine_not_running"}
     body = {}
     try:
         body = await request.json()
@@ -209,6 +230,35 @@ async def trade_close(request: Request):
     trade_id = body.get("trade_id")
     if not trade_id:
         return {"status": "error", "reason": "trade_id_required"}
+    trade_id = str(trade_id)
+    if engine is None:
+        # Engine is restarting (paper) or stopped. Fall back: close the trade
+        # offline using the persisted state so the user isn't stuck with a
+        # ghost trade. Only paper -- live exits must go through the exchange.
+        try:
+            from core.execution.order_manager import OrderManager, TRADES_FILE
+            import json
+            if not TRADES_FILE.exists():
+                return {"status": "error", "reason": "engine_not_running"}
+            data = json.loads(TRADES_FILE.read_text())
+            trade = (data.get("open_trades") or {}).get(trade_id)
+            if not trade:
+                return {"status": "error", "reason": "trade_not_found_offline", "trade_id": trade_id}
+            if trade.get("is_live"):
+                return {"status": "error", "reason": "live_trade_requires_engine"}
+            om = OrderManager(exchange=None, paper=True)
+            price = float(trade.get("current_price") or trade.get("entry_price") or 0.0)
+            if price <= 0:
+                return {"status": "error", "reason": "no_price_available"}
+            result = await om.force_close_trade(trade_id, price, reason="MANUAL_OFFLINE")
+            # Refresh _state from disk
+            from dashboard.app import _state, update_state
+            update_state("open_trades", list(json.loads(TRADES_FILE.read_text()).get("open_trades", {}).values()))
+            await broadcast({"type": "state", "data": {"open_trades": _state.get("open_trades", [])}})
+            return result
+        except Exception as e:
+            logger.warning(f"[Trade] offline close failed for {trade_id}: {e}")
+            return {"status": "error", "reason": "engine_not_running"}
     result = await engine.manual_close_trade(str(trade_id))
     await _push_trade_state()
     return result
