@@ -46,14 +46,29 @@ def validate_live_start() -> tuple[bool, str]:
     if str(getattr(cfg, "ALLOW_LIVE_TRADING", "false")).lower() not in ("1", "true", "yes"):
         return False, "Live blocked: set ALLOW_LIVE_TRADING=true in Render env only after paper testing."
 
-    if exchange == "kucoin":
-        return False, "Live blocked: KuCoin connector is paper/data-only."
+    supported_live = ("binance", "kucoin", "bybit", "okx")
+    if exchange not in supported_live:
+        return False, f"Live blocked: exchange '{exchange}' has no audited live connector."
 
     if exchange == "binance" and (not getattr(cfg, "BINANCE_API_KEY", "") or not getattr(cfg, "BINANCE_SECRET", "")):
         return False, "Live blocked: Binance API key/secret missing."
 
-    if exchange not in ("binance",):
-        return False, f"Live blocked: exchange '{exchange}' has no audited live connector."
+    if exchange == "kucoin" and (
+        not getattr(cfg, "KUCOIN_API_KEY", "")
+        or not getattr(cfg, "KUCOIN_API_SECRET", "")
+        or not getattr(cfg, "KUCOIN_API_PASSWORD", "")
+    ):
+        return False, "Live blocked: KuCoin API key/secret/passphrase missing."
+
+    if exchange == "bybit" and (not getattr(cfg, "BYBIT_API_KEY", "") or not getattr(cfg, "BYBIT_SECRET", "")):
+        return False, "Live blocked: Bybit API key/secret missing."
+
+    if exchange == "okx" and (
+        not getattr(cfg, "OKX_API_KEY", "")
+        or not getattr(cfg, "OKX_API_SECRET", "")
+        or not getattr(cfg, "OKX_API_PASSWORD", "")
+    ):
+        return False, "Live blocked: OKX API key/secret/passphrase missing."
 
     if market not in ("spot", "margin", "futures"):
         return False, f"Live blocked: invalid market type '{market}'."

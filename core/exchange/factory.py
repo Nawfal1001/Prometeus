@@ -28,16 +28,27 @@ def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
             api_key=getattr(cfg, "KUCOIN_API_KEY", ""),
             secret=getattr(cfg, "KUCOIN_API_SECRET", ""),
             password=getattr(cfg, "KUCOIN_API_PASSWORD", ""),
-            testnet=False,
+            testnet=getattr(cfg, "KUCOIN_TESTNET", False),
             market_type=mtype,
         )
 
     elif exchange_name == "bybit":
-        raise NotImplementedError(
-            "Bybit connector not yet implemented.\n"
-            "1. Copy core/exchange/binance.py → bybit.py\n"
-            "2. Change ccxt.binance → ccxt.bybit\n"
-            "3. Register here"
+        from core.exchange.bybit import BybitExchange
+        return BybitExchange(
+            api_key=getattr(cfg, "BYBIT_API_KEY", ""),
+            secret=getattr(cfg, "BYBIT_SECRET", ""),
+            testnet=getattr(cfg, "BYBIT_TESTNET", False),
+            market_type=mtype,
+        )
+
+    elif exchange_name == "okx":
+        from core.exchange.okx import OkxExchange
+        return OkxExchange(
+            api_key=getattr(cfg, "OKX_API_KEY", ""),
+            secret=getattr(cfg, "OKX_API_SECRET", ""),
+            password=getattr(cfg, "OKX_API_PASSWORD", ""),
+            testnet=getattr(cfg, "OKX_TESTNET", False),
+            market_type=mtype,
         )
 
     elif exchange_name in ("alpaca", "stocks"):
@@ -51,5 +62,5 @@ def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
     else:
         raise ValueError(
             f"Unknown exchange: '{exchange_name}'. "
-            f"Options: binance, kucoin, alpaca."
+            f"Options: binance, kucoin, bybit, okx, alpaca."
         )
