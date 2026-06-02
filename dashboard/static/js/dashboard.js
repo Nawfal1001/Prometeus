@@ -174,6 +174,7 @@ async function manualOpenTrade() {
     } else {
       _manualStatus(`${d.status || "error"}: ${d.reason || JSON.stringify(d)}`, true);
     }
+    fetch("/api/state").then(r => r.json()).then(applyState).catch(() => {});
   } catch (e) {
     _manualStatus(`Network error: ${e.message}`, true);
   }
@@ -194,6 +195,7 @@ async function manualCloseTrade(tradeId) {
     } else {
       _manualStatus(`${d.status || "error"}: ${d.reason || JSON.stringify(d)}`, true);
     }
+    fetch("/api/state").then(r => r.json()).then(applyState).catch(() => {});
   } catch (e) {
     _manualStatus(`Network error: ${e.message}`, true);
   }

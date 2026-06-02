@@ -156,6 +156,25 @@ async def control_override(action: str):
     return {"status": "unknown_action", "action": action}
 
 
+async def _push_trade_state():
+    """Refresh _state from the engine and broadcast immediately so manual
+    open/close shows up in the UI without waiting for the next candle tick."""
+    if engine is None:
+        return
+    try:
+        open_trades = engine.orders.get_open_trades()
+        stats = engine.orders.get_stats()
+        trade_log = engine.orders.risk.trade_history[-50:]
+        update_state("open_trades", open_trades)
+        update_state("stats", stats)
+        update_state("trade_log", trade_log)
+        await broadcast({"type": "state", "data": {
+            "open_trades": open_trades, "stats": stats, "trade_log": trade_log,
+        }})
+    except Exception as e:
+        logger.warning(f"[Trade] state push failed: {e}")
+
+
 @app.post("/api/trade/open")
 async def trade_open(request: Request):
     if engine is None:
@@ -173,7 +192,9 @@ async def trade_open(request: Request):
     side = str(body.get("side") or "long").lower()
     notional = float(body.get("notional") or 0) or None
     risk_pct = float(body.get("risk_pct") or 0) or None
-    return await engine.manual_open_trade(symbol, side, notional=notional, risk_pct=risk_pct)
+    result = await engine.manual_open_trade(symbol, side, notional=notional, risk_pct=risk_pct)
+    await _push_trade_state()
+    return result
 
 
 @app.post("/api/trade/close")
@@ -188,7 +209,9 @@ async def trade_close(request: Request):
     trade_id = body.get("trade_id")
     if not trade_id:
         return {"status": "error", "reason": "trade_id_required"}
-    return await engine.manual_close_trade(str(trade_id))
+    result = await engine.manual_close_trade(str(trade_id))
+    await _push_trade_state()
+    return result
 
 
 if __name__ == "__main__":
