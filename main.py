@@ -214,6 +214,25 @@ async def trade_close(request: Request):
     return result
 
 
+@app.post("/api/capital")
+async def set_capital(request: Request):
+    if engine is None:
+        return {"status": "error", "reason": "engine_not_running"}
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    value = body.get("value", body.get("capital"))
+    if value is None:
+        return {"status": "error", "reason": "value_required"}
+    reset_history = bool(body.get("reset_history", False))
+    result = engine.orders.set_capital(value, reset_history=reset_history)
+    if result.get("status") == "ok":
+        await _push_trade_state()
+    return result
+
+
 if __name__ == "__main__":
     logger.info(f"Starting PROMETHEUS on port {cfg.PORT}")
     uvicorn.run("main:app", host="0.0.0.0", port=cfg.PORT, reload=False, log_level=cfg.LOG_LEVEL.lower())

@@ -55,6 +55,33 @@ async function saveSettings() {
   setTimeout(() => { msg.style.display = "none"; }, 5000);
 }
 
+async function applyCapitalToTrader(resetHistory) {
+  const form = document.getElementById("settings-form");
+  const el = form.querySelector('[name="INITIAL_CAPITAL"]');
+  const msg = document.getElementById("capital-apply-msg");
+  const value = Number(el?.value || 0);
+  if (!value || value <= 0) {
+    if (msg) { msg.textContent = "Enter a valid capital value first."; msg.style.color = "var(--red)"; }
+    return;
+  }
+  if (resetHistory && !confirm(`Set running trader capital to $${value} AND clear trade history?`)) return;
+  try {
+    const res = await fetch("/api/capital", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value, reset_history: !!resetHistory }),
+    });
+    const d = await res.json();
+    if (d.status === "ok") {
+      if (msg) { msg.textContent = `✅ Trader capital now $${Number(d.capital).toFixed(2)}${d.reset_history ? " (history cleared)" : ""}.`; msg.style.color = "var(--green)"; }
+    } else {
+      if (msg) { msg.textContent = `❌ ${d.reason || "failed"} (is the engine running?)`; msg.style.color = "var(--red)"; }
+    }
+  } catch (e) {
+    if (msg) { msg.textContent = `❌ ${e.message}`; msg.style.color = "var(--red)"; }
+  }
+}
+
 function resetSettings() {
   if (!confirm("Reset all settings to defaults? This cannot be undone.")) return;
   fetch("/api/settings", {
