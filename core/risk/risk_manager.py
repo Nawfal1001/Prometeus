@@ -48,6 +48,54 @@ class RiskManager:
 
         return True, "ok"
 
+    def apply_realized_pnl(self, pnl: float):
+        """Apply a single (possibly partial) realized PnL to capital/equity.
+        Called once per exit event so equity stays live, WITHOUT logging a
+        trade row or bumping the trade counter (those happen once per whole
+        trade in record_closed_trade)."""
+        self._reset_if_new_day()
+        self.daily_pnl += pnl
+        self.capital += pnl
+        self.peak_capital = max(self.peak_capital, self.capital)
+        self._today_peak_capital = max(self._today_peak_capital, self.capital)
+
+    def record_closed_trade(self, total_pnl: float, signal: dict):
+        """Log ONE aggregated row for a fully-closed trade (all partials
+        combined) and update per-trade counters. Capital was already updated
+        incrementally via apply_realized_pnl, so this must NOT touch it."""
+        self._reset_if_new_day()
+        self.daily_trades += 1
+        if total_pnl > 0:
+            self._consec_losses = 0
+        else:
+            self._consec_losses += 1
+        trade_no = len(self.trade_history) + 1
+        self.trade_history.append({
+            "id": signal.get("trade_id") or signal.get("id") or f"T{trade_no:04d}",
+            "symbol": signal.get("symbol"),
+            "side": signal.get("side") or signal.get("direction") or "?",
+            "entry_price": signal.get("entry_price") or signal.get("entry") or 0,
+            "exit_price": signal.get("exit_price") or signal.get("exit") or 0,
+            "exit_type": signal.get("exit_type") or "closed",
+            "pnl": round(total_pnl, 4),
+            "gross_pnl": signal.get("gross_pnl"),
+            "fees": signal.get("fees"),
+            "notional": signal.get("notional"),
+            "qty": signal.get("qty"),
+            "is_live": bool(signal.get("is_live")),
+            "opened_at": signal.get("opened_at"),
+            "closed_at": signal.get("closed_at"),
+            "duration_sec": signal.get("duration_sec"),
+            "bars_open": signal.get("bars_open"),
+            "entry_bar_time": signal.get("entry_bar_time"),
+            "date": str(date.today()),
+            "capital": round(self.capital, 4),
+            "fusion_score": signal.get("fusion_score", signal.get("score", 0)),
+            "score": signal.get("fusion_score", signal.get("score", 0)),
+        })
+        if len(self.trade_history) > 500:
+            self.trade_history = self.trade_history[-500:]
+
     def record_trade(self, pnl: float, signal: dict):
         self._reset_if_new_day()
         self.daily_trades += 1
