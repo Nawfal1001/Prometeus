@@ -120,6 +120,28 @@ class OrderManager:
         self._force_next_signal = bool(enabled)
         return {"status": "armed" if enabled else "disarmed", "armed": self._force_next_signal}
 
+    def set_capital(self, value: float, reset_history: bool = False) -> dict:
+        """Update the running trader's capital live (the value sizing actually
+        uses), since risk.capital is stateful and not re-read from cfg."""
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return {"status": "error", "reason": "invalid_value"}
+        if value <= 0:
+            return {"status": "error", "reason": "value_must_be_positive"}
+        self.risk.capital = value
+        self.risk.peak_capital = value
+        self.risk._today_peak_capital = value
+        if reset_history:
+            self.risk.trade_history = []
+            self.risk.daily_pnl = 0.0
+            self.risk.daily_trades = 0
+            self.risk._consec_losses = 0
+        self._save_trades()
+        logger.info(f"[Orders] Capital set to ${value:.2f} (reset_history={reset_history})")
+        return {"status": "ok", "capital": round(value, 4), "reset_history": reset_history,
+                "open_trades": len(self.open_trades)}
+
     def _sizing_from_signal(self, signal: dict, price: float):
         notional = float(signal.get("notional", signal.get("position_size", 0.0)) or 0.0)
         qty = float(signal.get("qty", 0.0) or 0.0)
