@@ -469,34 +469,41 @@ class OrderManager:
         trade["size_remaining"] = trade["notional_remaining"]
         trade["remaining_pct"] = max(0.0, float(trade.get("remaining_pct", 1.0)) - portion)
         trade["realized_pnl"] = round(float(trade.get("realized_pnl", 0.0)) + pnl, 4)
+        trade["gross_pnl_total"] = round(float(trade.get("gross_pnl_total", 0.0)) + gross_pnl, 4)
         trade["fees_paid"] = round(float(trade.get("fees_paid", 0.0)) + fees, 6)
-        opened_at = float(trade.get("open_time") or time.time())
-        closed_at = time.time()
-        duration_sec = round(max(0.0, closed_at - opened_at), 1)
-        self.risk.record_trade(pnl, {
-            **trade["signal"],
-            "symbol": trade.get("symbol"),
-            "trade_id": trade_id,
-            "side": trade.get("side"),
-            "entry_price": entry,
-            "exit_price": exit_price,
-            "exit_type": event["type"],
-            "portion": portion,
-            "notional": notional,
-            "qty": qty,
-            "gross_pnl": round(gross_pnl, 4),
-            "fees": round(fees, 6),
-            "is_live": is_live,
-            "opened_at": opened_at,
-            "closed_at": closed_at,
-            "duration_sec": duration_sec,
-            "bars_open": int(trade.get("bars_open", 0)),
-            "entry_bar_time": trade.get("entry_bar_time"),
-        })
+        # Apply each partial to capital/equity immediately, but DON'T log a
+        # trade row here -- the whole trade is logged once in _record_closed_trade
+        # so partial exits (TP1 + runner) no longer show as duplicate rows and
+        # win-rate / trade-count are counted per trade, not per partial.
+        self.risk.apply_realized_pnl(pnl)
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
         tag = "Live" if is_live else "Paper"
         logger.info(f"[{tag}] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | gross={gross_pnl:+.4f} fees={fees:.4f} net={pnl:+.4f}")
+
+    def _record_closed_trade(self, trade_id: str, trade: dict):
+        """Log one aggregated row for a fully-closed trade (all partials combined)."""
+        opened_at = float(trade.get("open_time") or time.time())
+        closed_at = time.time()
+        self.risk.record_closed_trade(float(trade.get("realized_pnl", 0.0)), {
+            **trade.get("signal", {}),
+            "symbol": trade.get("symbol"),
+            "trade_id": trade_id,
+            "side": trade.get("side"),
+            "entry_price": trade.get("entry_price"),
+            "exit_price": trade.get("exit_price"),
+            "exit_type": trade.get("exit_type"),
+            "notional": trade.get("notional"),
+            "qty": trade.get("qty"),
+            "gross_pnl": round(float(trade.get("gross_pnl_total", 0.0)), 4),
+            "fees": round(float(trade.get("fees_paid", 0.0)), 6),
+            "is_live": bool(trade.get("is_live")),
+            "opened_at": opened_at,
+            "closed_at": closed_at,
+            "duration_sec": round(max(0.0, closed_at - opened_at), 1),
+            "bars_open": int(trade.get("bars_open", 0)),
+            "entry_bar_time": trade.get("entry_bar_time"),
+        })
 
     async def manual_open(self, symbol: str, side: str, current_price: float,
                           notional: float | None = None, risk_pct: float | None = None,
@@ -543,6 +550,7 @@ class OrderManager:
         trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
         trade["unrealized_pnl"] = trade["pnl"]
         trade["exit_type"] = reason
+        self._record_closed_trade(trade_id, trade)
         self._update_memory_on_close(trade)
         del self.open_trades[trade_id]
         self._save_trades()
@@ -602,6 +610,7 @@ class OrderManager:
                 trade["pnl"] = round(float(trade.get("realized_pnl", 0.0)), 4)
                 trade["unrealized_pnl"] = trade["pnl"]
                 trade["exit_type"] = events[-1]["type"] if events else "CLOSED"
+                self._record_closed_trade(trade_id, trade)
                 self._update_memory_on_close(trade)
                 tag = "Live" if is_live else "Paper"
                 exit_type = trade["exit_type"]
