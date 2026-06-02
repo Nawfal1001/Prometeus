@@ -194,7 +194,17 @@ class PrometheusOptimizer:
                 results = BacktestEngine().walk_forward(prepared)
 
             if "error" in results:
-                score = -0.4 + self._param_softness_bonus(params)
+                # No-trade / error trials get a smooth "approach" gradient instead
+                # of a flat penalty, so TPE can still learn which direction produces
+                # trades. The closer max_abs is to (or above) the threshold, the
+                # higher the score — but always below any real-trade score.
+                if results.get("no_trades"):
+                    max_abs = float(results.get("max_abs", 0.0) or 0.0)
+                    thr = float(results.get("threshold", 0.17) or 0.17)
+                    closeness = max(0.0, min(1.0, max_abs / max(thr, 1e-6)))
+                    score = -0.45 + 0.30 * closeness + self._param_softness_bonus(params)
+                else:
+                    score = -0.5 + self._param_softness_bonus(params)
                 trial.report(score, step=1)
                 return score
 

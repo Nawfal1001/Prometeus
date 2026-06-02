@@ -158,7 +158,14 @@ class BacktestEngine:
         regime_bias, regime_score = self._regime_score(row)
         w_e = float(getattr(cfg, "WEIGHT_ENTRY", 0.35))
         w_r = float(getattr(cfg, "WEIGHT_REGIME", 0.20))
-        w_total = max(float(getattr(cfg, "WEIGHT_ENTRY", 0.35)) + float(getattr(cfg, "WEIGHT_REGIME", 0.20)) + float(getattr(cfg, "WEIGHT_SENTIMENT", 0.05)) + float(getattr(cfg, "WEIGHT_WHALE", 0.10)) + float(getattr(cfg, "WEIGHT_LIQUIDATION", 0.30)), 1e-9)
+        # Backtest only has entry + regime layers (sentiment/whale/liquidation are
+        # live-only data feeds). Normalize by ONLY the active layers so the fusion
+        # score reflects the entry:regime ratio and stays stable when the optimizer
+        # shifts weight toward inactive layers. Dividing by the full 5-weight sum
+        # used to collapse fusion_score toward zero whenever Optuna favored the
+        # liquidation/whale/sentiment weights, starving trades and creating a flat
+        # no-trade plateau that broke convergence.
+        w_total = max(w_e + w_r, 1e-9)
         fusion_score = float(np.clip((entry_score * w_e + regime_score * w_r) / w_total, -1, 1))
         direction = 1 if fusion_score > 0 else -1
         abs_score = abs(fusion_score)
@@ -355,9 +362,14 @@ class BacktestEngine:
             reasons[r] = reasons.get(r, 0) + 1
             abs_s.append(float(s.get("abs_score", 0.0)))
         thr = float(getattr(cfg, "FUSION_THRESHOLD", 0.17))
-        msg = f"No trades. threshold={thr:.3f}, max_abs={max(abs_s) if abs_s else 0:.3f}, avg_abs={float(np.mean(abs_s)) if abs_s else 0:.3f}, reasons={reasons}. Try FUSION_THRESHOLD=0.13–0.17"
+        max_abs = max(abs_s) if abs_s else 0.0
+        avg_abs = float(np.mean(abs_s)) if abs_s else 0.0
+        msg = f"No trades. threshold={thr:.3f}, max_abs={max_abs:.3f}, avg_abs={avg_abs:.3f}, reasons={reasons}. Try FUSION_THRESHOLD=0.13–0.17"
         logger.warning(f"[Backtest] {msg}")
-        return {"error": msg}
+        # Structured fields let the optimizer build a smooth "how close to trading"
+        # gradient instead of a flat no-trade penalty.
+        return {"error": msg, "no_trades": True, "max_abs": max_abs, "avg_abs": avg_abs, "threshold": thr,
+                "block_reasons": reasons, "total_trades": 0}
 
     def _metrics(self, trades, symbol=None):
         if not trades:
