@@ -45,6 +45,25 @@ async function saveSettings() {
       msg.textContent = `✅ Settings saved (${savedCount} values)`;
       msg.className = "save-msg ok";
       await loadSettings();
+      // Auto-apply capital to the running engine if INITIAL_CAPITAL was changed
+      if (body.INITIAL_CAPITAL) {
+        const capitalValue = Number(body.INITIAL_CAPITAL);
+        if (capitalValue > 0) {
+          try {
+            const cr = await fetch("/api/capital", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ value: capitalValue, reset_history: false }),
+            });
+            const cd = await cr.json();
+            const capitalMsg = document.getElementById("capital-apply-msg");
+            if (cd.status === "ok" && capitalMsg) {
+              capitalMsg.textContent = `✅ Live capital updated to $${Number(cd.capital).toFixed(2)}`;
+              capitalMsg.style.color = "var(--green)";
+            }
+          } catch (_) { /* engine not running — silent */ }
+        }
+      }
     }
   } catch (e) {
     msg.textContent = `❌ ${e.message}`;

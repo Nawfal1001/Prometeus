@@ -14,6 +14,7 @@ class RiskManager:
         self.daily_pnl = 0.0
         self.daily_date = date.today()
         self.capital = cfg.INITIAL_CAPITAL
+        self.initial_capital = cfg.INITIAL_CAPITAL  # fixed reference — not re-read from cfg
         self.peak_capital = cfg.INITIAL_CAPITAL
         self.trade_history = []
         self._consec_losses = 0
@@ -177,10 +178,11 @@ class RiskManager:
         return 1.0
 
     def get_stats(self) -> dict:
+        initial = self.initial_capital if self.initial_capital > 0 else 1.0
         return {
             "capital": round(self.capital, 2),
-            "initial": cfg.INITIAL_CAPITAL,
-            "total_return": round((self.capital - cfg.INITIAL_CAPITAL) / cfg.INITIAL_CAPITAL, 4),
+            "initial": round(initial, 2),
+            "total_return": round((self.capital - initial) / initial, 4),
             "daily_trades": self.daily_trades,
             "daily_pnl": round(self.daily_pnl, 2),
             "total_trades": len(self.trade_history),
