@@ -12,6 +12,8 @@ import json
 JOURNAL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "decision_journal.jsonl"
 JOURNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+_MAX_JOURNAL_BYTES = 5 * 1024 * 1024  # 5 MB
+
 
 class DecisionJournal:
     """Dashboard/debug journal with disk persistence.
@@ -46,10 +48,22 @@ class DecisionJournal:
         except Exception:
             pass
 
+    def _rotate_if_needed(self):
+        try:
+            if JOURNAL_FILE.exists() and JOURNAL_FILE.stat().st_size > _MAX_JOURNAL_BYTES:
+                lines = JOURNAL_FILE.read_text(encoding="utf-8").splitlines()
+                keep = lines[-self._events.maxlen:]
+                backup = JOURNAL_FILE.with_suffix(".jsonl.1")
+                JOURNAL_FILE.replace(backup)
+                JOURNAL_FILE.write_text("\n".join(keep) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
     def _persist(self, event: Dict[str, Any]):
         try:
             with JOURNAL_FILE.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(event, default=str) + "\n")
+            self._rotate_if_needed()
         except Exception:
             pass
 

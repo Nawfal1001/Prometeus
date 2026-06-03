@@ -810,3 +810,27 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         if websocket in _ws_clients:
             _ws_clients.remove(websocket)
+
+
+async def _ws_cleanup_task():
+    from starlette.websockets import WebSocketState
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        dead = [ws for ws in list(_ws_clients) if ws.client_state == WebSocketState.DISCONNECTED]
+        for ws in dead:
+            if ws in _ws_clients:
+                _ws_clients.remove(ws)
+        if dead:
+            logger.debug(f"[WS] Pruned {len(dead)} stale client(s), {len(_ws_clients)} remaining")
+
+
+@app.on_event("startup")
+async def _on_startup():
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+    asyncio.create_task(_ws_cleanup_task())
+
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    executor.shutdown(wait=False)
