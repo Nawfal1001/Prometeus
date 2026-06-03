@@ -59,6 +59,21 @@ class AdvancedExitManager:
     def early_kill_sl_pct(self): return float(getattr(cfg, "EARLY_KILL_SL_PCT", 0.70))
 
     @property
+    def early_exit_enabled(self): return bool(getattr(cfg, "EARLY_EXIT_ENABLED", True))
+
+    @property
+    def early_exit_min_bars(self): return int(getattr(cfg, "EARLY_EXIT_MIN_BARS", 3))
+
+    @property
+    def early_exit_max_neg_pnl_pct(self): return float(getattr(cfg, "EARLY_EXIT_MAX_NEGATIVE_PNL_PCT", -1.2))
+
+    @property
+    def early_exit_stale_bars(self): return int(getattr(cfg, "EARLY_EXIT_STALE_BARS", 2))
+
+    @property
+    def early_exit_protect_near_tp_pct(self): return float(getattr(cfg, "EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT", 0.35))
+
+    @property
     def min_atr_norm(self): return float(getattr(cfg, "MIN_ATR_NORM", 0.001))
 
     @property
@@ -133,6 +148,26 @@ class AdvancedExitManager:
                 events.append({"type": "EARLY_KILL", "price": float(close), "portion": remaining})
                 trade["remaining_pct"] = 0.0
                 return events
+
+        if (self.early_exit_enabled
+                and not trade.get("tp1_hit")
+                and bars_open >= self.early_exit_min_bars):
+            entry = float(trade["entry_price"])
+            tp1 = float(trade.get("tp1") or entry)
+            tp_distance = abs(tp1 - entry)
+            progress_to_tp = direction * (float(close) - entry) / max(tp_distance, 1e-9) if tp_distance > 0 else 0.0
+            near_tp = progress_to_tp >= self.early_exit_protect_near_tp_pct
+            if not near_tp:
+                pnl_pct = float(trade.get("unrealized_pnl_pct", 0.0) or 0.0)
+                stale_bars = int(trade.get("stale_bars", 0) or 0)
+                if pnl_pct <= self.early_exit_max_neg_pnl_pct:
+                    events.append({"type": "EARLY_EXIT_PNL", "price": float(close), "portion": remaining})
+                    trade["remaining_pct"] = 0.0
+                    return events
+                if pnl_pct < 0 and stale_bars >= self.early_exit_stale_bars:
+                    events.append({"type": "EARLY_EXIT_STALE", "price": float(close), "portion": remaining})
+                    trade["remaining_pct"] = 0.0
+                    return events
 
         if bool(getattr(cfg, "EXIT_ON_REGIME_FLIP", False)) and regime_bias is not None and regime_score is not None:
             min_flip = float(getattr(cfg, "EXIT_REGIME_FLIP_MIN_SCORE", 0.30))
