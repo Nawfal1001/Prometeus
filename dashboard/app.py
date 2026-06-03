@@ -3,6 +3,7 @@
 # ============================================================
 
 import asyncio
+import gc
 import time as _time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -293,6 +294,8 @@ async def _run_training_job(params: dict):
         if df.empty:
             raise RuntimeError("No training data fetched")
         result = await asyncio.to_thread(train_xgb_model, df)
+        del df
+        gc.collect()
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "result": result})
         _state["model_training"] = result
         await broadcast({"type": "model_training", "status": "done", "result": result})
@@ -300,6 +303,8 @@ async def _run_training_job(params: dict):
         logger.exception("Model training failed")
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "error": str(e)})
         await broadcast({"type": "model_training", "status": "error", "error": str(e)})
+    finally:
+        gc.collect()
 
 
 def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None, data=None, mode="single", tune_groups=None):
