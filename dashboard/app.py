@@ -3,7 +3,6 @@
 # ============================================================
 
 import asyncio
-import gc
 import time as _time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -268,49 +267,32 @@ async def _fetch_ohlcv(symbol: str, timeframe: str, limit: int):
                 await maybe
 
 
+async def _fetch_training_frame(symbols: list[str], timeframe: str, candles: int) -> pd.DataFrame:
+    frames = []
+    for symbol in symbols:
+        try:
+            df = await _fetch_ohlcv(symbol, timeframe, candles)
+            if df is not None and not df.empty:
+                df = df.copy()
+                df["symbol"] = symbol
+                frames.append(df)
+        except Exception as e:
+            ui_log(f"Training data fetch failed for {symbol}: {e}", "warning")
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 async def _run_training_job(params: dict):
     _model_status.update({"running": True, "started_at": datetime.utcnow().isoformat(), "finished_at": None, "error": None, "params": params, "result": None})
     try:
         from core.models.xgboost_model import train_xgb_model
-        from core.models.feature_engine import compute_features, label_data
         symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL, params.get("all_default", False))
         timeframe = params.get("timeframe") or cfg.TIMEFRAME
         candles = int(params.get("candles", 1500))
         ui_log(f"Training ML model | symbols={symbols} tf={timeframe} candles={candles}")
-
-        # Process one symbol at a time so only one wide feature DataFrame lives in
-        # memory at once; keep only the smaller labeled subset before moving on.
-        labeled_parts: list[pd.DataFrame] = []
-        for i, symbol in enumerate(symbols, 1):
-            ui_log(f"Preparing training data ({i}/{len(symbols)}): {symbol}")
-            try:
-                raw = await _fetch_ohlcv(symbol, timeframe, candles)
-                if raw is None or raw.empty:
-                    ui_log(f"No data for {symbol} — skipped", "warning")
-                    continue
-                feat = await asyncio.to_thread(compute_features, raw.copy())
-                del raw
-                labeled = await asyncio.to_thread(label_data, feat)
-                del feat
-                if not labeled.empty:
-                    labeled["symbol"] = symbol
-                    labeled_parts.append(labeled)
-            except Exception as e:
-                ui_log(f"Training data failed for {symbol}: {e}", "warning")
-            finally:
-                gc.collect()
-
-        if not labeled_parts:
+        df = await _fetch_training_frame(symbols, timeframe, candles)
+        if df.empty:
             raise RuntimeError("No training data fetched")
-
-        combined = pd.concat(labeled_parts, ignore_index=True)
-        del labeled_parts
-        gc.collect()
-
-        result = await asyncio.to_thread(train_xgb_model, combined)
-        del combined
-        gc.collect()
-
+        result = await asyncio.to_thread(train_xgb_model, df)
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "result": result})
         _state["model_training"] = result
         await broadcast({"type": "model_training", "status": "done", "result": result})

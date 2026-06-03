@@ -38,9 +38,6 @@ class XGBoostSignalModel:
     def _prepare_training_data(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return pd.DataFrame()
-        # Already featurized and labeled (e.g. from incremental training pipeline)
-        if "label" in df.columns:
-            return df
         if "symbol" not in df.columns:
             feat = compute_features(df.copy())
             return label_data(feat) if feat is not None and not feat.empty else pd.DataFrame()
