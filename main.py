@@ -132,6 +132,16 @@ async def start_engine_task(mode: str):
                     engine.stop()
                 except Exception:
                     pass
+                # Close the exchange's ccxt/aiohttp session so each restart
+                # doesn't leak a connection pool + sockets. engine.stop() only
+                # flips the run flag; without this, the auto-restart loop grows
+                # memory/file descriptors until the instance is OOM-killed.
+                ex = getattr(engine, "exchange", None)
+                if ex is not None and hasattr(ex, "close"):
+                    try:
+                        await ex.close()
+                    except Exception as e:
+                        logger.warning(f"[Control] exchange close failed: {e}")
             engine = None
 
     if engine_task and engine_task.done():
