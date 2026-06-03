@@ -200,13 +200,20 @@ async def _push_trade_state():
 
 @app.post("/api/trade/open")
 async def trade_open(request: Request):
-    if engine is None:
-        return {"status": "error", "reason": "engine_not_running"}
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
+    diag = {
+        "engine_alive": engine is not None,
+        "engine_running": bool(getattr(engine, "running", False)) if engine is not None else False,
+        "engine_task_done": (engine_task.done() if engine_task else None),
+        "trading_mode": getattr(cfg, "TRADING_MODE", None),
+    }
+    if engine is None:
+        return {"status": "error", "reason": "engine_not_running",
+                "hint": "POST /api/control/restart or click Start, then retry.", "diag": diag}
     mode = str(body.get("mode") or "manual").lower()
     if mode == "arm":
         enabled = bool(body.get("enabled", True))
@@ -215,9 +222,32 @@ async def trade_open(request: Request):
     side = str(body.get("side") or "long").lower()
     notional = float(body.get("notional") or 0) or None
     risk_pct = float(body.get("risk_pct") or 0) or None
-    result = await engine.manual_open_trade(symbol, side, notional=notional, risk_pct=risk_pct)
+    try:
+        result = await engine.manual_open_trade(symbol, side, notional=notional, risk_pct=risk_pct)
+    except Exception as e:
+        logger.warning(f"[Trade] manual_open_trade raised: {e}")
+        return {"status": "error", "reason": "manual_open_raised", "error": str(e), "diag": diag}
     await _push_trade_state()
+    if isinstance(result, dict):
+        result.setdefault("diag", diag)
     return result
+
+
+@app.post("/api/control/restart")
+async def control_restart():
+    """Restart the engine task without going through stop->start cycle.
+    Useful if engine ended up dead/None but the user wants to recover
+    without losing the dashboard session."""
+    global engine_task
+    mode = "live" if getattr(cfg, "TRADING_MODE", "paper") == "live" else "paper"
+    if engine_task and not engine_task.done():
+        engine_task.cancel()
+        try:
+            await asyncio.wait_for(engine_task, timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+    engine_task = asyncio.create_task(start_engine_task(mode))
+    return {"status": "restarting", "mode": mode}
 
 
 @app.get("/api/diagnostic")
