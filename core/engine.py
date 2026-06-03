@@ -404,7 +404,12 @@ class PrometheusEngine:
                     self.entry._load_xgb()
                     model = getattr(self.entry, "_xgb", None)
                     if model is not None and hasattr(model, "train_if_stale"):
-                        model.train_if_stale(df, max_age_hours=0)
+                        # Reuse a recent model instead of forcing a full retrain
+                        # on every startup, and run the (synchronous, CPU-heavy)
+                        # training off the event loop so it can't freeze the
+                        # websocket/HTTP server -- a forced retrain on every
+                        # auto-restart was pegging CPU and stalling health checks.
+                        await asyncio.to_thread(model.train_if_stale, df, 6)
                 self._xgb_trained_on_start = True
             except Exception as e:
                 logger.warning(f"[Engine] XGBoost startup training failed: {e}")
@@ -434,7 +439,9 @@ class PrometheusEngine:
                             self.entry._load_xgb()
                             model = getattr(self.entry, "_xgb", None)
                             if model is not None and hasattr(model, "train_if_stale"):
-                                model.train_if_stale(df, max_age_hours=6)
+                                # Off-load to a thread so a periodic retrain
+                                # doesn't block the event loop / websockets.
+                                await asyncio.to_thread(model.train_if_stale, df, 6)
                                 journal.add("ml", f"XGBoost retrain checked symbol={train_symbol}", symbol=train_symbol)
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")
