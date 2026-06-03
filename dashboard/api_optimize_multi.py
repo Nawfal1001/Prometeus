@@ -8,8 +8,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 import config.settings as cfg
-from optimization.optimizer import PrometheusOptimizer
-from optimization.walkforward_optimizer import WalkForwardOptimizer
+from optimization.process_runner import run_optimizer_subprocess
 from core.cache.market_cache import get_cached_ohlcv
 
 router = APIRouter()
@@ -70,13 +69,11 @@ async def run_multi_optimization(request: Request):
 
                     # compare / rotate mode: keep old behavior and optimize each symbol independently.
                     if wf_opt:
-                        runner = WalkForwardOptimizer(df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
-                        result = await loop.run_in_executor(None, runner.run)
+                        result = await run_optimizer_subprocess("walkforward", df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
                         result['symbol'] = symbol
                         result['rank_score'] = float(result.get('summary', {}).get('avg_profit_factor', 0)) * 100 + float(result.get('summary', {}).get('avg_win_rate', 0)) * 100
                     else:
-                        optimizer = PrometheusOptimizer(df=df, metric=metric, n_trials=trials, timeout=timeout)
-                        result = await loop.run_in_executor(None, lambda opt=optimizer: opt.run(mode='single'))
+                        result = await run_optimizer_subprocess("prometheus", df=df, metric=metric, trials=trials, timeout=timeout, mode="single")
                         result['symbol'] = symbol
                         result['rank_score'] = float(result.get('best_value', -999))
                     rows.append(result)
@@ -94,8 +91,7 @@ async def run_multi_optimization(request: Request):
             valid = {sym: df for sym, df in data_by_symbol.items() if df is not None and not df.empty}
             if not valid:
                 return JSONResponse({'error': 'No symbol data available for competing-symbol optimization', 'symbols': rows}, status_code=400)
-            optimizer = PrometheusOptimizer(df=next(iter(valid.values())), metric=metric, n_trials=trials, timeout=timeout)
-            result = await loop.run_in_executor(None, lambda: optimizer.run(valid, mode='compete'))
+            result = await run_optimizer_subprocess("prometheus", df=next(iter(valid.values())), data=valid, metric=metric, trials=trials, timeout=timeout, mode="compete")
             result.update({
                 'mode': 'competing_symbols_optimization',
                 'optimizer_mode': result.get('mode', 'compete'),

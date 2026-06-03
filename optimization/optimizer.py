@@ -5,6 +5,7 @@
 import asyncio
 import inspect
 import json
+from collections import OrderedDict
 from pathlib import Path
 
 import optuna
@@ -68,8 +69,14 @@ class PrometheusOptimizer:
         self._multi_prepared_data = None
         self._mode = "single"
         self._tune_groups = tune_groups
-        self._feature_cache: dict = {}
-        self._multi_feature_cache: dict = {}
+        # Bounded LRU caches of recomputed feature frames. Indicator-tuning
+        # signatures rarely repeat, so an unbounded cache just piles up full
+        # DataFrames (×N symbols in compete mode) and can OOM the process the
+        # live engine shares. A small cap keeps the common reuse without the
+        # multi-GB growth.
+        self._feature_cache: "OrderedDict" = OrderedDict()
+        self._multi_feature_cache: "OrderedDict" = OrderedDict()
+        self._feature_cache_max = 4
 
     def run(self, data=None, mode: str | None = None) -> dict:
         if data is not None:
@@ -160,6 +167,7 @@ class PrometheusOptimizer:
         if self._mode in ("compete", "competition") and self._multi_raw_data:
             cached = self._multi_feature_cache.get(sig)
             if cached is not None:
+                self._multi_feature_cache.move_to_end(sig)
                 return cached
             prepared_map = {}
             for symbol, raw in self._multi_raw_data.items():
@@ -170,13 +178,18 @@ class PrometheusOptimizer:
                 except Exception as e:
                     logger.debug(f"[Optimizer] feature recompute failed for {symbol}: {e}")
             self._multi_feature_cache[sig] = prepared_map
+            while len(self._multi_feature_cache) > self._feature_cache_max:
+                self._multi_feature_cache.popitem(last=False)
             return prepared_map
 
         cached = self._feature_cache.get(sig)
         if cached is not None:
+            self._feature_cache.move_to_end(sig)
             return cached
         prepared = compute_features(self._raw_df.copy())
         self._feature_cache[sig] = prepared
+        while len(self._feature_cache) > self._feature_cache_max:
+            self._feature_cache.popitem(last=False)
         return prepared
 
     def _objective(self, trial: optuna.Trial) -> float:
