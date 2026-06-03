@@ -3,6 +3,7 @@
 # ============================================================
 
 import asyncio
+import gc
 import time as _time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -294,6 +295,8 @@ async def _run_training_job(params: dict):
         if df.empty:
             raise RuntimeError("No training data fetched")
         result = await asyncio.to_thread(train_xgb_model, df)
+        del df
+        gc.collect()
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "result": result})
         _state["model_training"] = result
         await broadcast({"type": "model_training", "status": "done", "result": result})
@@ -301,6 +304,8 @@ async def _run_training_job(params: dict):
         logger.exception("Model training failed")
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "error": str(e)})
         await broadcast({"type": "model_training", "status": "error", "error": str(e)})
+    finally:
+        gc.collect()
 
 
 def _run_optimizer_sync(df, metric, trials, timeout, progress_callback=None, data=None, mode="single", tune_groups=None):
@@ -811,3 +816,27 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         if websocket in _ws_clients:
             _ws_clients.remove(websocket)
+
+
+async def _ws_cleanup_task():
+    from starlette.websockets import WebSocketState
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        dead = [ws for ws in list(_ws_clients) if ws.client_state == WebSocketState.DISCONNECTED]
+        for ws in dead:
+            if ws in _ws_clients:
+                _ws_clients.remove(ws)
+        if dead:
+            logger.debug(f"[WS] Pruned {len(dead)} stale client(s), {len(_ws_clients)} remaining")
+
+
+@app.on_event("startup")
+async def _on_startup():
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
+    asyncio.create_task(_ws_cleanup_task())
+
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    executor.shutdown(wait=False)

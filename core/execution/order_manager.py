@@ -90,6 +90,7 @@ class OrderManager:
                 "open_trades": self.open_trades,
                 "trade_counter": self._trade_counter,
                 "capital": self.risk.capital,
+                "initial_capital": self.risk.initial_capital,
                 "trade_history": self.risk.trade_history[-200:],
                 "symbol_cooldowns": self.symbol_cooldowns,
             }
@@ -104,6 +105,7 @@ class OrderManager:
                 self.open_trades = data.get("open_trades", {})
                 self._trade_counter = data.get("trade_counter", 0)
                 self.risk.capital = data.get("capital", cfg.INITIAL_CAPITAL)
+                self.risk.initial_capital = data.get("initial_capital", self.risk.capital)
                 self.risk.trade_history = data.get("trade_history", [])
                 self.symbol_cooldowns = data.get("symbol_cooldowns", {})
                 logger.info(f"[Orders] Restored {len(self.open_trades)} open trades, capital=${self.risk.capital:.2f}")
@@ -130,6 +132,7 @@ class OrderManager:
         if value <= 0:
             return {"status": "error", "reason": "value_must_be_positive"}
         self.risk.capital = value
+        self.risk.initial_capital = value
         self.risk.peak_capital = value
         self.risk._today_peak_capital = value
         if reset_history:
@@ -485,8 +488,11 @@ class OrderManager:
         """Log one aggregated row for a fully-closed trade (all partials combined)."""
         opened_at = float(trade.get("open_time") or time.time())
         closed_at = time.time()
+        signal_data = trade.get("signal") or {}
+        if not isinstance(signal_data, dict):
+            signal_data = {}
         self.risk.record_closed_trade(float(trade.get("realized_pnl", 0.0)), {
-            **trade.get("signal", {}),
+            **signal_data,
             "symbol": trade.get("symbol"),
             "trade_id": trade_id,
             "side": trade.get("side"),
