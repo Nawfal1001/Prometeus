@@ -335,10 +335,21 @@ async def trade_close(request: Request):
             return {"status": "error", "reason": "no_price_available", "attempts": attempts}
         result = await om.force_close_trade(trade_id, price, reason="MANUAL_OFFLINE")
         attempts.append({"path": "offline", "status": result.get("status")})
-        # Refresh _state so the UI loses the closed card.
-        from dashboard.app import _state, update_state
-        update_state("open_trades", list(json.loads(TRADES_FILE.read_text()).get("open_trades", {}).values()))
-        await broadcast({"type": "state", "data": {"open_trades": _state.get("open_trades", [])}})
+        # Refresh _state from the throwaway manager (force_close_trade already
+        # persisted the updated capital + trade_history to the file). Broadcast
+        # open_trades AND stats + trade_log so the UI loses the closed card,
+        # adds the closed-trade row, and reflects the new capital -- matching
+        # what _push_trade_state does on the engine path.
+        from dashboard.app import update_state
+        open_trades = om.get_open_trades()
+        stats = om.get_stats()
+        trade_log = om.risk.trade_history[-50:]
+        update_state("open_trades", open_trades)
+        update_state("stats", stats)
+        update_state("trade_log", trade_log)
+        await broadcast({"type": "state", "data": {
+            "open_trades": open_trades, "stats": stats, "trade_log": trade_log,
+        }})
         result["attempts"] = attempts
         return result
     except Exception as e:
