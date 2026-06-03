@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Sign in</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .login-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 32px 28px; width: 100%; max-width: 360px; box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+  .login-brand { font-size: 22px; font-weight: 800; color: var(--yellow); letter-spacing: 1px; text-align: center; margin-bottom: 6px; }
+  .login-sub { text-align: center; color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .login-card input { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); margin-bottom: 12px; font-size: 14px; }
+  .login-card button { width: 100%; padding: 11px; border-radius: 8px; border: 0; background: var(--blue); color: #fff; font-weight: 700; font-size: 14px; cursor: pointer; margin-top: 8px; }
+  .login-error { background: #3a1a1a; color: var(--red); padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; border: 1px solid #5a2a2a; }
+  .login-foot { color: var(--muted); font-size: 11px; text-align: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="login-brand">⚡ PROMETHEUS</div>
+  <div class="login-sub">Sign in to access the dashboard</div>
+  {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="text" name="username" placeholder="Username" required autocomplete="username" autofocus>
+    <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
+    <input type="hidden" name="next" value="{{ next or '/' }}">
+    <button type="submit">Sign in</button>
+  </form>
+  <div class="login-foot">Session expires after 24 hours of inactivity.</div>
+</div>
+</body>
+</html>

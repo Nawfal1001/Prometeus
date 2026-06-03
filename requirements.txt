@@ -46,3 +46,4 @@ optuna-dashboard==0.15.0    # Optional visual dashboard for optuna
 
 # ── Stocks (Alpaca) ──────────────────────────────────────────
 alpaca-py==0.26.0           # Official Alpaca SDK for stocks/crypto
+itsdangerous==2.1.2

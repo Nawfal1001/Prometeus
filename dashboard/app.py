@@ -31,6 +31,27 @@ from core.cache.market_cache import get_cached_ohlcv
 BASE_DIR = Path(__file__).parent
 ROOT_DIR = BASE_DIR.parent
 app = FastAPI(title="PROMETHEUS v4")
+
+# --- Auth + session ---------------------------------------------------------
+try:
+    from starlette.middleware.sessions import SessionMiddleware
+    from dashboard.auth import AuthMiddleware, register_auth_routes, auth_enabled
+    _session_secret = str(getattr(cfg, "DASHBOARD_SESSION_SECRET", "") or "")
+    if not _session_secret:
+        import secrets as _secrets
+        _session_secret = _secrets.token_urlsafe(32)
+        logger.warning("[Auth] DASHBOARD_SESSION_SECRET not set — generated ephemeral secret. Sessions will be invalidated on restart.")
+    app.add_middleware(SessionMiddleware, secret_key=_session_secret, session_cookie="prometheus_session", max_age=int(float(getattr(cfg, "DASHBOARD_SESSION_TTL_HOURS", 24)) * 3600), same_site="lax", https_only=False)
+    app.add_middleware(AuthMiddleware)
+    register_auth_routes(app)
+    if auth_enabled():
+        logger.info("[Auth] Dashboard authentication ENABLED")
+    else:
+        logger.info("[Auth] Dashboard authentication disabled (DASHBOARD_USERNAME/PASSWORD not set)")
+except Exception as _auth_e:
+    logger.warning(f"[Auth] auth bootstrap failed: {_auth_e}")
+# ---------------------------------------------------------------------------
+
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.include_router(scanner_router)
@@ -78,7 +99,7 @@ _opt_status = {
 }
 _model_status = {"running": False, "started_at": None, "finished_at": None, "result": None, "error": None, "params": {}}
 DEFAULT_CRYPTO_TRAIN_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "ADA/USDT"]
-_SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET", "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY", "POLYGON_KEY", "COINALYZE_KEY", "KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_API_PASSWORD"}
+_SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET", "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY", "POLYGON_KEY", "COINALYZE_KEY", "KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_API_PASSWORD", "DASHBOARD_PASSWORD", "DASHBOARD_SESSION_SECRET"}
 
 
 def _broadcast_from_any_thread(data: dict):
@@ -767,6 +788,15 @@ async def apply_optimization_params(request: Request):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    try:
+        from dashboard.auth import auth_enabled
+        if auth_enabled():
+            sess = websocket.scope.get("session") or {}
+            if not sess.get("authed"):
+                await websocket.close(code=4401)
+                return
+    except Exception:
+        pass
     await websocket.accept()
     _ws_clients.append(websocket)
     try:

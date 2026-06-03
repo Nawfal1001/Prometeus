@@ -323,3 +323,18 @@ function colorize(id, val) {
 }
 
 fetch("/api/state").then(r => r.json()).then(applyState).catch(() => {});
+
+// ── Auth: inject Sign out link if auth is enabled ─────────────
+(function injectLogout(){
+  fetch("/api/auth/status").then(r => r.json()).then(d => {
+    if (!d || !d.enabled) return;
+    const nav = document.querySelector(".nav-links");
+    if (!nav || nav.querySelector('a[href="/logout"]')) return;
+    const a = document.createElement("a");
+    a.href = "/logout";
+    a.title = "Sign out" + (d.user ? " (" + d.user + ")" : "");
+    a.textContent = "Sign out";
+    a.style.color = "var(--red)";
+    nav.appendChild(a);
+  }).catch(() => {});
+})();
