@@ -22,6 +22,7 @@ from optimization.optimizer import PrometheusOptimizer
 from optimization.walkforward_optimizer import WalkForwardOptimizer
 from optimization.quality_signal_optimizer import QualitySignalOptimizer
 from optimization.live_robustness_optimizer import LiveRobustnessOptimizer
+from optimization.process_runner import run_optimizer_subprocess
 from dashboard.api_scanner import router as scanner_router
 from dashboard.api_backtest_multi import router as backtest_multi_router
 from dashboard.api_optimize_multi import router as optimize_multi_router
@@ -329,7 +330,7 @@ async def _run_quality_optimization_job(params: dict):
         if df is None or df.empty:
             raise RuntimeError("No data returned from exchange")
 
-        result = await loop.run_in_executor(executor, lambda: _run_quality_optimizer_sync(df, trials, timeout, progress_callback))
+        result = await run_optimizer_subprocess("quality", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, trials=trials, timeout=timeout)
         result.update({"mode": "signal_quality", "timeframe": timeframe, "candles": candles, "trials": trials, "timeout": timeout})
 
         if params.get("auto_apply") and result.get("best_params"):
@@ -388,7 +389,7 @@ async def _run_live_robustness_optimization_job(params: dict):
             df = await _fetch_ohlcv(symbol, timeframe, candles)
             if df is None or df.empty:
                 raise RuntimeError("No data returned from exchange")
-            result = await loop.run_in_executor(executor, lambda: _run_live_robustness_optimizer_sync(df, trials, timeout, progress_callback, mode="single"))
+            result = await run_optimizer_subprocess("live_robustness", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, trials=trials, timeout=timeout, mode="single")
         else:
             symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
             ui_log(f"Live robustness optimization starting | mode={run_mode} symbols={symbols} tf={timeframe} trials={trials}")
@@ -413,7 +414,7 @@ async def _run_live_robustness_optimization_job(params: dict):
                         await maybe
             if not data_by_symbol:
                 raise RuntimeError("No symbol data returned from exchange")
-            result = await loop.run_in_executor(executor, lambda: _run_live_robustness_optimizer_sync(next(iter(data_by_symbol.values())), trials, timeout, progress_callback, data=data_by_symbol, mode="compete"))
+            result = await run_optimizer_subprocess("live_robustness", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=next(iter(data_by_symbol.values())), data=data_by_symbol, trials=trials, timeout=timeout, mode="compete")
             result.update({"optimizer_mode": "compete", "selection_logic": "live_paper_rotator_robustness", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
 
         if _opt_status.get("cancel_requested"):
@@ -480,7 +481,7 @@ async def _run_optimization_job(params: dict):
                 raise RuntimeError("No data returned from exchange")
             _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
             await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
-            result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback, mode="single", tune_groups=tune_groups))
+            result = await run_optimizer_subprocess("prometheus", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, metric=metric, trials=trials, timeout=timeout, mode="single", tune_groups=tune_groups)
         else:
             symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
             ui_log(f"Optimization starting | mode={run_mode} symbols={symbols} metric={metric} trials={trials}")
@@ -509,7 +510,7 @@ async def _run_optimization_job(params: dict):
             await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
             if run_mode in ("compete", "competition"):
                 first_df = next(iter(data_by_symbol.values()))
-                result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(first_df, metric, trials, timeout, progress_callback, data=data_by_symbol, mode="compete", tune_groups=tune_groups))
+                result = await run_optimizer_subprocess("prometheus", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=first_df, data=data_by_symbol, metric=metric, trials=trials, timeout=timeout, mode="compete", tune_groups=tune_groups)
                 result.update({"mode": "competing_symbols_optimization", "optimizer_mode": "compete", "selection_logic": "aligned_paper_rotator_selector", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
             else:
                 rows = []
@@ -521,10 +522,10 @@ async def _run_optimization_job(params: dict):
                     _opt_status.update({"progress": progress, "current_step": idx - 1, "total_steps": len(data_by_symbol)})
                     await broadcast({"type": "optimization", "status": "progress", "progress": progress})
                     if wf_opt:
-                        res = await loop.run_in_executor(executor, lambda d=df: _run_walkforward_sync(d, train_bars, test_bars, step_bars, trials, metric, timeout))
+                        res = await run_optimizer_subprocess("walkforward", is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
                         res["rank_score"] = float(res.get("summary", {}).get("avg_profit_factor", 0)) * 100 + float(res.get("summary", {}).get("avg_win_rate", 0)) * 100
                     else:
-                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, progress_callback, mode="single", tune_groups=tune_groups))
+                        res = await run_optimizer_subprocess("prometheus", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, metric=metric, trials=trials, timeout=timeout, mode="single", tune_groups=tune_groups)
                         res["rank_score"] = float(res.get("best_value", -999))
                     res["symbol"] = symbol
                     rows.append(res)
