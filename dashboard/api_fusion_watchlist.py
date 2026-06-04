@@ -192,16 +192,52 @@ async def get_daily_picks(request: Request):
 
         from core.exchange.factory import get_exchange
         from core.scanner.multi_symbol_scanner import MultiSymbolScanner
+        from core.exchange.fusionmarkets import FusionMarketsExchange, _NON_CRYPTO_BASES
 
         exchange = get_exchange()
+
+        # Build the symbol list in the format the exchange understands.
+        # FusionMarketsExchange natively accepts cTrader symbols (no slash).
+        # Binance/KuCoin fallbacks require slash format and only carry crypto.
+        ctrader_symbols = list(candidates.keys())
+        if isinstance(exchange, FusionMarketsExchange):
+            scan_symbols = ctrader_symbols
+            sym_remap: dict[str, str] = {}   # public → cTrader; empty = no remap
+        else:
+            sym_remap = {}
+            for ct in ctrader_symbols:
+                s = ct.upper()
+                for quote in ("USDT", "USD"):
+                    if s.endswith(quote):
+                        base = s[: -len(quote)]
+                        if base not in _NON_CRYPTO_BASES:
+                            sym_remap[f"{base}/USDT"] = ct
+                        break
+            if not sym_remap:
+                return JSONResponse(
+                    {"error": "Fusion Markets credentials not configured and no public crypto symbols match the selected filters."},
+                    status_code=503,
+                )
+            scan_symbols = list(sym_remap.keys())
+
         try:
             scanner = MultiSymbolScanner(
                 exchange=exchange,
-                symbols=list(candidates.keys()),
+                symbols=scan_symbols,
                 timeframe=timeframe,
                 limit=limit,
             )
             result = await scanner.scan()
+
+            # Remap public symbol names back to cTrader names so the
+            # enrichment loop can find them in `candidates`.
+            if sym_remap:
+                for row in result.get("symbols", []):
+                    pub = row.get("symbol", "")
+                    if pub in sym_remap:
+                        row["exchange_symbol"] = pub
+                        row["symbol"] = sym_remap[pub]
+
         finally:
             closer = getattr(exchange, "close", None)
             if callable(closer):
