@@ -32,6 +32,19 @@ def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
             market_type=mtype,
         )
 
+    elif exchange_name in ("fusion", "fusionmarkets", "fusion_markets", "ctrader"):
+        from core.exchange.fusionmarkets import FusionMarketsExchange
+        return FusionMarketsExchange(
+            client_id=getattr(cfg, "FUSION_CTRADER_CLIENT_ID", ""),
+            client_secret=getattr(cfg, "FUSION_CTRADER_CLIENT_SECRET", ""),
+            access_token=getattr(cfg, "FUSION_CTRADER_ACCESS_TOKEN", ""),
+            refresh_token=getattr(cfg, "FUSION_CTRADER_REFRESH_TOKEN", ""),
+            account_id=getattr(cfg, "FUSION_CTRADER_ACCOUNT_ID", ""),
+            host=getattr(cfg, "FUSION_CTRADER_HOST", "demo.ctraderapi.com"),
+            port=getattr(cfg, "FUSION_CTRADER_PORT", 5035),
+            market_type=mtype,
+        )
+
     elif exchange_name == "bybit":
         raise NotImplementedError(
             "Bybit connector not yet implemented.\n"
@@ -51,5 +64,5 @@ def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
     else:
         raise ValueError(
             f"Unknown exchange: '{exchange_name}'. "
-            f"Options: binance, kucoin, alpaca."
+            f"Options: binance, kucoin, fusionmarkets, alpaca."
         )
