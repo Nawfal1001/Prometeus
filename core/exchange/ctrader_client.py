@@ -377,14 +377,21 @@ def timeframe_to_seconds(timeframe: str) -> int:
     raise ValueError(f"Unsupported timeframe: {timeframe}")
 
 
-def normalize_ctrader_volume(volume: float, symbol_meta: dict) -> int:
-    raw = float(volume or 0)
+def normalize_ctrader_volume(base_units: float, symbol_meta: dict) -> int:
+    """Convert base-asset units to cTrader centilots (volume = lots × 100).
+
+    cTrader API volumes are expressed as lots × 100.
+    lotSize from symbol metadata is the number of base-asset units per 1 lot
+    (e.g. 1 for BTCUSD, 100000 for EURUSD). Defaults to 1 for crypto CFDs.
+    """
+    raw = float(base_units or 0)
     if raw <= 0:
         raise ValueError("cTrader volume must be positive")
+    lot_size = float(symbol_meta.get("lotSize", 1) or 1)
     min_volume = int(symbol_meta.get("minVolume", symbol_meta.get("min_volume", 1)) or 1)
     step = int(symbol_meta.get("stepVolume", symbol_meta.get("step_volume", 1)) or 1)
-    vol = int(round(raw))
-    vol = max(vol, min_volume)
+    centilots = (raw / lot_size) * 100.0
+    vol = max(int(round(centilots)), min_volume)
     if step > 1:
         vol = int(round(vol / step) * step)
     return max(vol, min_volume)

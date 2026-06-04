@@ -175,7 +175,22 @@ class FusionMarketsExchange(BaseExchange):
         if self._paper_fallback_enabled():
             return {"status": "paper_noop", "symbol": symbol}
         ctrader_symbol = normalize_ctrader_symbol(symbol)
-        return await self.client.close_position(ctrader_symbol)
+        positions = await self.client.get_positions()
+        try:
+            sym_meta = await self.client.resolve_symbol(ctrader_symbol)
+            sid = int(sym_meta.get("symbolId") or sym_meta.get("id") or 0)
+        except Exception:
+            sid = 0
+        pos = next(
+            (p for p in positions if int(p.get("symbol_id") or 0) == sid),
+            positions[0] if positions else None,
+        )
+        if not pos:
+            return {"status": "no_position", "symbol": symbol}
+        position_id = str(pos.get("position_id") or "")
+        # pos["volume"] is stored in lots; cTrader close needs centilots (lots × 100)
+        volume_centilots = max(1, int(round(float(pos.get("volume", 0) or 0) * 100)))
+        return await self.client.close_position(ctrader_symbol, position_id=position_id, volume=volume_centilots)
 
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         logger.warning("[FusionMarkets/cTrader] leverage is configured broker-side/account-side")
