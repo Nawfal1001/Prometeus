@@ -1,12 +1,5 @@
 # ============================================================
 #  PROMETHEUS — Fusion Markets cTrader Open API Connector
-#
-#  Designed for Render/Linux. It does not require MT5.
-#  cTrader Open API uses WebSocket + protobuf messages.
-#
-#  This file registers the Fusion Markets/cTrader connector safely.
-#  Real cTrader request/response handling still needs to be implemented
-#  before live trading is enabled.
 # ============================================================
 
 from __future__ import annotations
@@ -16,15 +9,21 @@ import pandas as pd
 from loguru import logger
 
 from core.exchange.base_exchange import BaseExchange
+from core.exchange.ctrader_client import (
+    CTraderCredentials,
+    CTraderOpenAPIClient,
+    CTraderProtocolNotReady,
+    normalize_ctrader_symbol,
+    timeframe_to_ctrader_period,
+)
 import config.settings as cfg
 
 
 class FusionMarketsExchange(BaseExchange):
-    """Fusion Markets connector via cTrader Open API scaffold.
+    """Fusion Markets connector via cTrader Open API.
 
-    The connector loads cTrader credentials and account config, but blocks
-    market-data and order execution until the protobuf client layer is built
-    and audited. This avoids accidental fake-live trading.
+    This adapter matches the Prometheus BaseExchange interface and delegates
+    broker-specific work to CTraderOpenAPIClient.
     """
 
     def __init__(
@@ -48,6 +47,17 @@ class FusionMarketsExchange(BaseExchange):
         self.account_id = str(account_id or "")
         self.host = host or "demo.ctraderapi.com"
         self.port = int(port or 5035)
+        self.client = CTraderOpenAPIClient(
+            CTraderCredentials(
+                client_id=client_id,
+                client_secret=client_secret,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                account_id=self.account_id,
+                host=self.host,
+                port=self.port,
+            )
+        )
         logger.info(
             "[FusionMarkets/cTrader] Connector configured | "
             f"host={self.host}:{self.port} account_loaded={bool(self.account_id)} "
@@ -57,21 +67,21 @@ class FusionMarketsExchange(BaseExchange):
     def has_required_credentials(self) -> bool:
         return all([self.client_id, self.client_secret, self.access_token, self.account_id])
 
-    def _not_ready(self, method: str):
-        raise NotImplementedError(
-            f"Fusion Markets cTrader Open API method '{method}' is not implemented yet. "
-            "The connector is registered, but live execution is blocked until protobuf "
-            "Open API request/response handling is completed and tested."
-        )
+    async def health(self) -> dict:
+        return await self.client.health()
 
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-        self._not_ready("get_ohlcv")
+        ctrader_symbol = normalize_ctrader_symbol(symbol)
+        timeframe_to_ctrader_period(timeframe)
+        return await self.client.get_trendbars(ctrader_symbol, timeframe, int(limit))
 
     async def get_orderbook(self, symbol: str, depth: int = 20) -> dict:
-        self._not_ready("get_orderbook")
+        ctrader_symbol = normalize_ctrader_symbol(symbol)
+        return await self.client.get_orderbook(ctrader_symbol, int(depth))
 
     async def get_ticker(self, symbol: str) -> dict:
-        self._not_ready("get_ticker")
+        ctrader_symbol = normalize_ctrader_symbol(symbol)
+        return await self.client.get_ticker(ctrader_symbol)
 
     async def get_funding_rate(self, symbol: str) -> float:
         return 0.0
@@ -80,10 +90,10 @@ class FusionMarketsExchange(BaseExchange):
         return 0.0
 
     async def get_balance(self) -> dict:
-        self._not_ready("get_balance")
+        return await self.client.get_balance()
 
     async def get_positions(self) -> list:
-        self._not_ready("get_positions")
+        return await self.client.get_positions()
 
     async def place_order(
         self,
@@ -96,20 +106,30 @@ class FusionMarketsExchange(BaseExchange):
         take_profit: Optional[float] = None,
         leverage: int = 1,
     ) -> dict:
-        self._not_ready("place_order")
+        if str(order_type).lower() not in ("market", "market_order"):
+            raise NotImplementedError("Fusion/cTrader currently supports market order adapter only")
+        ctrader_symbol = normalize_ctrader_symbol(symbol)
+        return await self.client.place_market_order(
+            symbol=ctrader_symbol,
+            side=side,
+            volume=float(size),
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
-        self._not_ready("cancel_order")
+        raise NotImplementedError("Fusion/cTrader cancel_order requires order-id protobuf implementation")
 
     async def close_position(self, symbol: str) -> dict:
-        self._not_ready("close_position")
+        ctrader_symbol = normalize_ctrader_symbol(symbol)
+        return await self.client.close_position(ctrader_symbol)
 
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
-        logger.warning("[FusionMarkets/cTrader] set_leverage is not supported by scaffold")
+        logger.warning("[FusionMarkets/cTrader] leverage is configured broker-side/account-side")
         return False
 
     async def get_taker_fee(self, symbol: str) -> float:
         return float(getattr(cfg, "FUSION_TAKER_FEE", 0.0) or 0.0)
 
     async def close(self):
-        return None
+        await self.client.close()
