@@ -148,11 +148,13 @@ def validate_live_start() -> tuple[bool, str]:
     elif exchange not in ("binance",):
         return False, f"Live blocked: exchange '{exchange}' has no audited live connector."
 
-    if market not in ("spot", "margin", "futures"):
+    if market not in ("spot", "margin", "futures", "stocks"):
         return False, f"Live blocked: invalid market type '{market}'."
 
-    if not symbol or "/" not in symbol:
-        return False, "Live blocked: invalid trading symbol."
+    if not symbol:
+        return False, "Live blocked: trading symbol not configured."
+    if market != "stocks" and "/" not in symbol:
+        return False, "Live blocked: invalid trading symbol (missing '/')."
 
     if _safe_float("INITIAL_CAPITAL", 0) <= 0:
         return False, "Live blocked: INITIAL_CAPITAL must be positive."
