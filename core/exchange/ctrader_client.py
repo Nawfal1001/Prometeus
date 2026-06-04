@@ -62,6 +62,12 @@ class CTraderCodec:
     def encode_close_position(self, account_id: str, position_id: str, volume: int) -> bytes:
         raise CTraderProtocolNotReady("protobuf codec missing: close position")
 
+    def encode_trader_req(self, account_id: str) -> bytes:
+        raise CTraderProtocolNotReady("protobuf codec missing: trader req")
+
+    def encode_reconcile(self, account_id: str) -> bytes:
+        raise CTraderProtocolNotReady("protobuf codec missing: reconcile")
+
     def parse(self, payload: bytes) -> dict:
         raise CTraderProtocolNotReady("protobuf codec missing: parser")
 
@@ -258,10 +264,39 @@ class CTraderOpenAPIClient:
         self._protocol_guard("get_orderbook")
 
     async def get_balance(self) -> dict:
-        self._protocol_guard("get_balance")
+        if not self.codec.protocol_ready:
+            self._protocol_guard("get_balance")
+        msg = await self._request(
+            self.codec.encode_trader_req(self.credentials.account_id),
+            expect="ProtoOATraderRes",
+        )
+        trader = msg.get("trader", msg)
+        # cTrader reports monetary values in cents (×100)
+        balance = float(trader.get("balance", 0) or 0) / 100.0
+        equity = float(trader.get("equity", trader.get("balance", 0)) or balance * 100) / 100.0
+        currency = str(trader.get("depositAssetId", "") or "USD")
+        return {"balance": balance, "equity": equity, "currency": currency, "total_equity": equity}
 
     async def get_positions(self) -> list[dict]:
-        self._protocol_guard("get_positions")
+        if not self.codec.protocol_ready:
+            self._protocol_guard("get_positions")
+        msg = await self._request(
+            self.codec.encode_reconcile(self.credentials.account_id),
+            expect="ProtoOAReconcileRes",
+        )
+        result = []
+        for p in msg.get("position", []):
+            trade_data = p.get("tradeData", {}) if isinstance(p.get("tradeData"), dict) else {}
+            result.append({
+                "position_id": p.get("positionId"),
+                "symbol_id": trade_data.get("symbolId"),
+                "side": "buy" if trade_data.get("tradeSide") == 1 else "sell",
+                "volume": float(trade_data.get("volume", 0) or 0) / 100.0,
+                "entry_price": float(p.get("price", 0) or 0),
+                "swap": float(p.get("swap", 0) or 0) / 100.0,
+                "commission": float(p.get("commission", 0) or 0) / 100.0,
+            })
+        return result
 
     async def place_market_order(self, symbol: str, side: str, volume: float, stop_loss: float | None = None, take_profit: float | None = None) -> dict:
         if not self.codec.protocol_ready:

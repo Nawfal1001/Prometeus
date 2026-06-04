@@ -27,6 +27,8 @@ class OpenApiPyCodec(CTraderCodec):
                 ProtoOAGetTrendbarsReq,
                 ProtoOANewOrderReq,
                 ProtoOAClosePositionReq,
+                ProtoOATraderReq,
+                ProtoOAReconcileReq,
                 ProtoOAOrderType,
                 ProtoOATradeSide,
             )
@@ -39,6 +41,8 @@ class OpenApiPyCodec(CTraderCodec):
             self.ProtoOAGetTrendbarsReq = ProtoOAGetTrendbarsReq
             self.ProtoOANewOrderReq = ProtoOANewOrderReq
             self.ProtoOAClosePositionReq = ProtoOAClosePositionReq
+            self.ProtoOATraderReq = ProtoOATraderReq
+            self.ProtoOAReconcileReq = ProtoOAReconcileReq
             self.ProtoOAOrderType = ProtoOAOrderType
             self.ProtoOATradeSide = ProtoOATradeSide
             self.protocol_ready = True
@@ -100,6 +104,18 @@ class OpenApiPyCodec(CTraderCodec):
         req.ctidTraderAccountId = int(account_id)
         req.positionId = int(position_id)
         req.volume = int(volume)
+        return self._pack(req)
+
+    def encode_trader_req(self, account_id: str) -> bytes:
+        self._ensure_ready()
+        req = self.ProtoOATraderReq()
+        req.ctidTraderAccountId = int(account_id)
+        return self._pack(req)
+
+    def encode_reconcile(self, account_id: str) -> bytes:
+        self._ensure_ready()
+        req = self.ProtoOAReconcileReq()
+        req.ctidTraderAccountId = int(account_id)
         return self._pack(req)
 
     def parse(self, payload: bytes) -> dict[str, Any]:
