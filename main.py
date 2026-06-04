@@ -9,6 +9,7 @@ from pathlib import Path
 import uvicorn
 from loguru import logger
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from dashboard.app import app, broadcast, update_state
 from core.engine import PrometheusEngine
 import config.settings as cfg
@@ -37,6 +38,88 @@ def _safe_float(name: str, default: float = 0.0) -> float:
         return default
 
 
+def _public_url_from_request(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}".rstrip("/")
+
+
+@app.get("/api/ctrader/config")
+async def ctrader_config():
+    if hasattr(cfg, "reload_from_sources"):
+        cfg.reload_from_sources()
+    return {
+        "exchange": getattr(cfg, "EXCHANGE", ""),
+        "market_type": getattr(cfg, "MARKET_TYPE", ""),
+        "host": getattr(cfg, "FUSION_CTRADER_HOST", ""),
+        "port": getattr(cfg, "FUSION_CTRADER_PORT", ""),
+        "account_id_loaded": bool(getattr(cfg, "FUSION_CTRADER_ACCOUNT_ID", "")),
+        "client_id_loaded": bool(getattr(cfg, "FUSION_CTRADER_CLIENT_ID", "")),
+        "client_secret_loaded": bool(getattr(cfg, "FUSION_CTRADER_CLIENT_SECRET", "")),
+        "access_token_loaded": bool(getattr(cfg, "FUSION_CTRADER_ACCESS_TOKEN", "")),
+        "refresh_token_loaded": bool(getattr(cfg, "FUSION_CTRADER_REFRESH_TOKEN", "")),
+        "symbol": getattr(cfg, "SYMBOL", ""),
+        "symbols": getattr(cfg, "SYMBOLS", []),
+    }
+
+
+@app.get("/api/ctrader/oauth/url")
+async def ctrader_oauth_url(request: Request):
+    if hasattr(cfg, "reload_from_sources"):
+        cfg.reload_from_sources()
+    from core.exchange.ctrader_oauth import build_authorization_url
+    client_id = getattr(cfg, "FUSION_CTRADER_CLIENT_ID", "")
+    if not client_id:
+        return {"status": "error", "reason": "FUSION_CTRADER_CLIENT_ID missing"}
+    redirect_uri = f"{_public_url_from_request(request)}/api/ctrader/oauth/callback"
+    return {
+        "status": "ok",
+        "redirect_uri": redirect_uri,
+        "authorization_url": build_authorization_url(client_id=client_id, redirect_uri=redirect_uri),
+    }
+
+
+@app.get("/api/ctrader/oauth/callback")
+async def ctrader_oauth_callback(request: Request, code: str | None = None, error: str | None = None):
+    if error:
+        return JSONResponse({"status": "error", "error": error})
+    if not code:
+        return JSONResponse({"status": "error", "reason": "missing_code"})
+    if hasattr(cfg, "reload_from_sources"):
+        cfg.reload_from_sources()
+    from core.exchange.ctrader_oauth import exchange_code_for_tokens
+    client_id = getattr(cfg, "FUSION_CTRADER_CLIENT_ID", "")
+    client_secret = getattr(cfg, "FUSION_CTRADER_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return JSONResponse({"status": "error", "reason": "client_id_or_secret_missing"})
+    redirect_uri = f"{_public_url_from_request(request)}/api/ctrader/oauth/callback"
+    result = await exchange_code_for_tokens(client_id, client_secret, code, redirect_uri)
+    return JSONResponse({
+        "status": result.get("status"),
+        "redirect_uri_used": redirect_uri,
+        "message": "Copy accessToken and refreshToken into Render env vars, then redeploy. Do not share them.",
+        "token_response": result.get("response"),
+    })
+
+
+@app.post("/api/ctrader/oauth/refresh")
+async def ctrader_oauth_refresh():
+    if hasattr(cfg, "reload_from_sources"):
+        cfg.reload_from_sources()
+    from core.exchange.ctrader_oauth import refresh_access_token
+    client_id = getattr(cfg, "FUSION_CTRADER_CLIENT_ID", "")
+    client_secret = getattr(cfg, "FUSION_CTRADER_CLIENT_SECRET", "")
+    refresh_token = getattr(cfg, "FUSION_CTRADER_REFRESH_TOKEN", "")
+    if not all([client_id, client_secret, refresh_token]):
+        return {"status": "error", "reason": "client_id_secret_or_refresh_token_missing"}
+    result = await refresh_access_token(client_id, client_secret, refresh_token)
+    return {
+        "status": result.get("status"),
+        "message": "Copy refreshed tokens into Render env vars if returned. Do not share them.",
+        "token_response": result.get("response"),
+    }
+
+
 def validate_live_start() -> tuple[bool, str]:
     """Hard safety gate before real-money trading."""
     exchange = str(getattr(cfg, "EXCHANGE", "")).lower()
@@ -51,6 +134,9 @@ def validate_live_start() -> tuple[bool, str]:
 
     if exchange == "binance" and (not getattr(cfg, "BINANCE_API_KEY", "") or not getattr(cfg, "BINANCE_SECRET", "")):
         return False, "Live blocked: Binance API key/secret missing."
+
+    if exchange in ("fusion", "fusionmarkets", "fusion_markets", "ctrader"):
+        return False, "Live blocked: Fusion/cTrader connector is registered but not audited for live order execution yet."
 
     if exchange not in ("binance",):
         return False, f"Live blocked: exchange '{exchange}' has no audited live connector."
@@ -103,7 +189,6 @@ async def start_engine_task(mode: str):
             await broadcast({"type": "status", "status": mode})
 
             await engine.start()
-            # Clean return (engine.stop() called from elsewhere) -> user-initiated stop.
             user_stopped = True
 
         except asyncio.CancelledError:
@@ -113,11 +198,9 @@ async def start_engine_task(mode: str):
             logger.exception(f"[Control] Engine crashed (attempt {attempt}): {e}")
             update_state("status", "error")
             await broadcast({"type": "status", "status": "error", "error": str(e), "attempt": attempt})
-            # Live mode does NOT auto-restart -- too risky without user intent.
             if mode == "live":
                 user_stopped = True
             else:
-                # Paper mode: restart with exponential backoff, capped.
                 wait = min(backoff_sec * (2 ** min(attempt - 1, 4)), max_backoff)
                 logger.warning(f"[Control] Paper engine will auto-restart in {wait}s (attempt {attempt + 1})")
                 update_state("status", "restarting")
@@ -132,10 +215,6 @@ async def start_engine_task(mode: str):
                     engine.stop()
                 except Exception:
                     pass
-                # Close the exchange's ccxt/aiohttp session so each restart
-                # doesn't leak a connection pool + sockets. engine.stop() only
-                # flips the run flag; without this, the auto-restart loop grows
-                # memory/file descriptors until the instance is OOM-killed.
                 ex = getattr(engine, "exchange", None)
                 if ex is not None and hasattr(ex, "close"):
                     try:
@@ -190,8 +269,6 @@ async def control_override(action: str):
 
 
 async def _push_trade_state():
-    """Refresh _state from the engine and broadcast immediately so manual
-    open/close shows up in the UI without waiting for the next candle tick."""
     if engine is None:
         return
     try:
@@ -245,9 +322,6 @@ async def trade_open(request: Request):
 
 @app.post("/api/control/restart")
 async def control_restart():
-    """Restart the engine task without going through stop->start cycle.
-    Useful if engine ended up dead/None but the user wants to recover
-    without losing the dashboard session."""
     global engine_task
     mode = "live" if getattr(cfg, "TRADING_MODE", "paper") == "live" else "paper"
     if engine_task and not engine_task.done():
@@ -262,9 +336,6 @@ async def control_restart():
 
 @app.get("/api/diagnostic")
 async def diagnostic():
-    """Diagnose engine + trade-state divergence. Use this to debug
-    'engine_not_running' / Close-button issues — it reports exactly what
-    the close endpoint sees so we know which path is failing."""
     from core.execution.order_manager import TRADES_FILE
     import json as _json
     info = {
@@ -305,10 +376,8 @@ async def trade_close(request: Request):
     if not trade_id:
         return {"status": "error", "reason": "trade_id_required"}
     trade_id = str(trade_id)
-    # Verbose attempt log so the failure mode is always visible.
     attempts = []
 
-    # 1. Normal path: engine alive.
     if engine is not None:
         try:
             result = await engine.manual_close_trade(trade_id)
@@ -321,8 +390,6 @@ async def trade_close(request: Request):
             attempts.append({"path": "engine", "error": str(e)})
             logger.warning(f"[Trade] engine close failed for {trade_id}: {e}")
 
-    # 2. Offline fallback (paper only): read paper_trades.json, force-close
-    #    via a throwaway OrderManager, then refresh _state.
     try:
         from core.execution.order_manager import OrderManager, TRADES_FILE
         import json
@@ -345,11 +412,6 @@ async def trade_close(request: Request):
             return {"status": "error", "reason": "no_price_available", "attempts": attempts}
         result = await om.force_close_trade(trade_id, price, reason="MANUAL_OFFLINE")
         attempts.append({"path": "offline", "status": result.get("status")})
-        # Refresh _state from the throwaway manager (force_close_trade already
-        # persisted the updated capital + trade_history to the file). Broadcast
-        # open_trades AND stats + trade_log so the UI loses the closed card,
-        # adds the closed-trade row, and reflects the new capital -- matching
-        # what _push_trade_state does on the engine path.
         from dashboard.app import update_state
         open_trades = om.get_open_trades()
         stats = om.get_stats()
@@ -389,8 +451,6 @@ async def set_capital(request: Request):
 
 @app.post("/api/capital/sync")
 async def sync_capital():
-    """Pull live capital from the exchange and seed risk.capital. Only valid
-    in live mode; paper returns skipped."""
     if engine is None:
         return {"status": "error", "reason": "engine_not_running"}
     result = await engine.orders.sync_capital_from_exchange()
