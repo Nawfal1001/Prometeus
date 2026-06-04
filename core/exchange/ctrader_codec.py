@@ -26,6 +26,7 @@ class OpenApiPyCodec(CTraderCodec):
                 ProtoOASymbolsListReq,
                 ProtoOAGetTrendbarsReq,
                 ProtoOANewOrderReq,
+                ProtoOAClosePositionReq,
                 ProtoOAOrderType,
                 ProtoOATradeSide,
             )
@@ -37,6 +38,7 @@ class OpenApiPyCodec(CTraderCodec):
             self.ProtoOASymbolsListReq = ProtoOASymbolsListReq
             self.ProtoOAGetTrendbarsReq = ProtoOAGetTrendbarsReq
             self.ProtoOANewOrderReq = ProtoOANewOrderReq
+            self.ProtoOAClosePositionReq = ProtoOAClosePositionReq
             self.ProtoOAOrderType = ProtoOAOrderType
             self.ProtoOATradeSide = ProtoOATradeSide
             self.protocol_ready = True
@@ -93,7 +95,12 @@ class OpenApiPyCodec(CTraderCodec):
         return self._pack(req)
 
     def encode_close_position(self, account_id: str, position_id: str, volume: int) -> bytes:
-        raise CTraderProtocolNotReady("close_position codec not implemented yet; requires ProtoOAClosePositionReq mapping")
+        self._ensure_ready()
+        req = self.ProtoOAClosePositionReq()
+        req.ctidTraderAccountId = int(account_id)
+        req.positionId = int(position_id)
+        req.volume = int(volume)
+        return self._pack(req)
 
     def parse(self, payload: bytes) -> dict[str, Any]:
         self._ensure_ready()

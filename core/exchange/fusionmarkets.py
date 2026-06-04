@@ -16,6 +16,7 @@ from core.exchange.ctrader_client import (
     normalize_ctrader_symbol,
     timeframe_to_ctrader_period,
 )
+from core.exchange.ctrader_codec import AutoCTraderCodec
 import config.settings as cfg
 
 
@@ -49,6 +50,7 @@ class FusionMarketsExchange(BaseExchange):
         self.account_id = str(account_id or "")
         self.host = host or "demo.ctraderapi.com"
         self.port = int(port or 5035)
+        self._codec = AutoCTraderCodec()
         self.client = CTraderOpenAPIClient(
             CTraderCredentials(
                 client_id=client_id,
@@ -58,7 +60,8 @@ class FusionMarketsExchange(BaseExchange):
                 account_id=self.account_id,
                 host=self.host,
                 port=self.port,
-            )
+            ),
+            codec=self._codec,
         )
         self._paper_data_exchange = None
         logger.info(

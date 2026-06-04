@@ -136,9 +136,16 @@ def validate_live_start() -> tuple[bool, str]:
         return False, "Live blocked: Binance API key/secret missing."
 
     if exchange in ("fusion", "fusionmarkets", "fusion_markets", "ctrader"):
-        return False, "Live blocked: Fusion/cTrader connector is registered but not audited for live order execution yet."
+        missing = [k for k in ("FUSION_CTRADER_CLIENT_ID", "FUSION_CTRADER_CLIENT_SECRET",
+                               "FUSION_CTRADER_ACCESS_TOKEN", "FUSION_CTRADER_ACCOUNT_ID")
+                   if not getattr(cfg, k, "")]
+        if missing:
+            return False, f"Live blocked: Fusion/cTrader credentials missing: {', '.join(missing)}"
+        host = str(getattr(cfg, "FUSION_CTRADER_HOST", ""))
+        if "demo" in host.lower():
+            return False, "Live blocked: FUSION_CTRADER_HOST is still pointing to demo server. Set it to live.ctraderapi.com."
 
-    if exchange not in ("binance",):
+    elif exchange not in ("binance",):
         return False, f"Live blocked: exchange '{exchange}' has no audited live connector."
 
     if market not in ("spot", "margin", "futures"):

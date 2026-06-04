@@ -283,8 +283,18 @@ class CTraderOpenAPIClient:
             "fee_currency": msg.get("commissionCurrency"),
         }
 
-    async def close_position(self, symbol: str) -> dict:
-        self._protocol_guard("close_position")
+    async def close_position(self, symbol: str, position_id: str = "", volume: int = 0) -> dict:
+        if not self.codec.protocol_ready:
+            self._protocol_guard("close_position")
+        msg = await self._request(
+            self.codec.encode_close_position(self.credentials.account_id, str(position_id), int(volume)),
+            expect="execution_event",
+        )
+        return {
+            "position_id": position_id,
+            "symbol": symbol,
+            "status": msg.get("status", "closed"),
+        }
 
 
 def normalize_ctrader_symbol(symbol: str) -> str:
