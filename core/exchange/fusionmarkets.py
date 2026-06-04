@@ -22,8 +22,10 @@ import config.settings as cfg
 class FusionMarketsExchange(BaseExchange):
     """Fusion Markets connector via cTrader Open API.
 
-    This adapter matches the Prometheus BaseExchange interface and delegates
-    broker-specific work to CTraderOpenAPIClient.
+    Safe mode rule:
+    - live execution remains blocked in main.py until audited.
+    - in paper mode, missing cTrader protobuf support can fallback to KuCoin
+      public data so existing Prometheus paper workflows are not broken.
     """
 
     def __init__(
@@ -58,6 +60,7 @@ class FusionMarketsExchange(BaseExchange):
                 port=self.port,
             )
         )
+        self._paper_data_exchange = None
         logger.info(
             "[FusionMarkets/cTrader] Connector configured | "
             f"host={self.host}:{self.port} account_loaded={bool(self.account_id)} "
@@ -67,21 +70,59 @@ class FusionMarketsExchange(BaseExchange):
     def has_required_credentials(self) -> bool:
         return all([self.client_id, self.client_secret, self.access_token, self.account_id])
 
+    def _paper_fallback_enabled(self) -> bool:
+        return str(getattr(cfg, "TRADING_MODE", "paper")).lower() == "paper" and str(
+            getattr(cfg, "FUSION_PAPER_DATA_FALLBACK", "true")
+        ).lower() in ("1", "true", "yes")
+
+    def _to_public_crypto_symbol(self, symbol: str) -> str:
+        s = str(symbol or "").upper().replace("/", "").replace("-", "").replace("_", "")
+        for quote in ("USDT", "USD"):
+            if s.endswith(quote):
+                base = s[: -len(quote)]
+                return f"{base}/USDT"
+        return symbol
+
+    def _fallback_exchange(self):
+        if self._paper_data_exchange is None:
+            from core.exchange.kucoin import KucoinExchange
+            self._paper_data_exchange = KucoinExchange(api_key="", secret="", password="", testnet=False, market_type="spot")
+            logger.warning("[FusionMarkets/cTrader] Using KuCoin public data fallback for paper mode")
+        return self._paper_data_exchange
+
     async def health(self) -> dict:
-        return await self.client.health()
+        h = await self.client.health()
+        h["paper_data_fallback"] = self._paper_fallback_enabled()
+        return h
 
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
         ctrader_symbol = normalize_ctrader_symbol(symbol)
         timeframe_to_ctrader_period(timeframe)
-        return await self.client.get_trendbars(ctrader_symbol, timeframe, int(limit))
+        try:
+            return await self.client.get_trendbars(ctrader_symbol, timeframe, int(limit))
+        except CTraderProtocolNotReady as e:
+            if self._paper_fallback_enabled():
+                logger.warning(f"[FusionMarkets/cTrader] {e}; falling back to public data for paper mode")
+                return await self._fallback_exchange().get_ohlcv(self._to_public_crypto_symbol(symbol), timeframe, limit=int(limit))
+            raise
 
     async def get_orderbook(self, symbol: str, depth: int = 20) -> dict:
         ctrader_symbol = normalize_ctrader_symbol(symbol)
-        return await self.client.get_orderbook(ctrader_symbol, int(depth))
+        try:
+            return await self.client.get_orderbook(ctrader_symbol, int(depth))
+        except CTraderProtocolNotReady:
+            if self._paper_fallback_enabled():
+                return await self._fallback_exchange().get_orderbook(self._to_public_crypto_symbol(symbol), depth=int(depth))
+            raise
 
     async def get_ticker(self, symbol: str) -> dict:
         ctrader_symbol = normalize_ctrader_symbol(symbol)
-        return await self.client.get_ticker(ctrader_symbol)
+        try:
+            return await self.client.get_ticker(ctrader_symbol)
+        except CTraderProtocolNotReady:
+            if self._paper_fallback_enabled():
+                return await self._fallback_exchange().get_ticker(self._to_public_crypto_symbol(symbol))
+            raise
 
     async def get_funding_rate(self, symbol: str) -> float:
         return 0.0
@@ -90,9 +131,14 @@ class FusionMarketsExchange(BaseExchange):
         return 0.0
 
     async def get_balance(self) -> dict:
+        if self._paper_fallback_enabled():
+            equity = float(getattr(cfg, "INITIAL_CAPITAL", 0) or 0)
+            return {"USDT": equity, "total_equity": equity}
         return await self.client.get_balance()
 
     async def get_positions(self) -> list:
+        if self._paper_fallback_enabled():
+            return []
         return await self.client.get_positions()
 
     async def place_order(
@@ -106,6 +152,8 @@ class FusionMarketsExchange(BaseExchange):
         take_profit: Optional[float] = None,
         leverage: int = 1,
     ) -> dict:
+        if self._paper_fallback_enabled():
+            raise RuntimeError("Fusion/cTrader paper mode must use OrderManager paper execution, not broker place_order")
         if str(order_type).lower() not in ("market", "market_order"):
             raise NotImplementedError("Fusion/cTrader currently supports market order adapter only")
         ctrader_symbol = normalize_ctrader_symbol(symbol)
@@ -121,6 +169,8 @@ class FusionMarketsExchange(BaseExchange):
         raise NotImplementedError("Fusion/cTrader cancel_order requires order-id protobuf implementation")
 
     async def close_position(self, symbol: str) -> dict:
+        if self._paper_fallback_enabled():
+            return {"status": "paper_noop", "symbol": symbol}
         ctrader_symbol = normalize_ctrader_symbol(symbol)
         return await self.client.close_position(ctrader_symbol)
 
@@ -133,3 +183,5 @@ class FusionMarketsExchange(BaseExchange):
 
     async def close(self):
         await self.client.close()
+        if self._paper_data_exchange is not None and hasattr(self._paper_data_exchange, "close"):
+            await self._paper_data_exchange.close()
