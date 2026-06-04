@@ -122,6 +122,47 @@ class OrderManager:
         self._force_next_signal = bool(enabled)
         return {"status": "armed" if enabled else "disarmed", "armed": self._force_next_signal}
 
+    async def sync_capital_from_exchange(self, force: bool = False) -> dict:
+        """Read the live exchange balance and seed risk.capital from it.
+
+        Only meaningful for live mode -- paper trading has no exchange-side
+        balance to sync from (KuCoin connector explicitly returns paper_only).
+        Designed to fail soft: if the call errors or returns an obviously
+        invalid balance, the current risk.capital is preserved so a transient
+        exchange hiccup never wipes the internal accounting.
+        """
+        if self.paper and not force:
+            return {"status": "skipped", "reason": "paper_mode"}
+        if self.exchange is None:
+            return {"status": "skipped", "reason": "no_exchange"}
+        try:
+            bal = await self.exchange.get_balance()
+        except Exception as e:
+            logger.warning(f"[Orders] Capital sync failed (exchange error): {e}")
+            return {"status": "error", "reason": "exchange_error", "error": str(e)}
+        if not isinstance(bal, dict):
+            return {"status": "error", "reason": "bad_balance_shape"}
+        # KuCoin's stub returns paper_only=True even though we hit it in live
+        # mode -- skip rather than zero out a real running capital.
+        if bal.get("paper_only"):
+            return {"status": "skipped", "reason": "connector_paper_only"}
+        # Prefer total_equity (includes unrealized PnL) over free cash. Both
+        # connectors that support live (Binance, Alpaca) populate both keys.
+        equity = float(bal.get("total_equity") or bal.get("USDT") or bal.get("USD") or 0.0)
+        if equity <= 0:
+            logger.warning(f"[Orders] Capital sync skipped: exchange reported zero/negative equity ({bal})")
+            return {"status": "skipped", "reason": "zero_equity", "balance": bal}
+        prev = float(self.risk.capital)
+        self.risk.capital = equity
+        if self.risk.peak_capital < equity:
+            self.risk.peak_capital = equity
+        if self.risk._today_peak_capital < equity:
+            self.risk._today_peak_capital = equity
+        self._save_trades()
+        logger.info(f"[Orders] Capital synced from exchange: ${prev:.2f} -> ${equity:.2f}")
+        return {"status": "ok", "capital": round(equity, 4), "previous": round(prev, 4),
+                "raw_balance": bal}
+
     def set_capital(self, value: float, reset_history: bool = False) -> dict:
         """Update the running trader's capital live (the value sizing actually
         uses), since risk.capital is stateful and not re-read from cfg."""
