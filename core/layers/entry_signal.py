@@ -99,7 +99,10 @@ class EntrySignal:
             boost = 1.0 + (vol_regime - 1.0) * 0.5
             score = avg * boost
         else:
-            score = avg * vol_regime
+            # Floor at 0.70 — prevent truly quiet markets from cutting signal
+            # by more than 30%; genuinely dead vol (< 0.7) is already blocked
+            # by the MIN_ATR_NORM entry gate in order_manager.
+            score = avg * max(vol_regime, 0.70)
 
         return float(np.clip(score, -1, 1))
 

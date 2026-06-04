@@ -154,7 +154,7 @@ def validate_live_start() -> tuple[bool, str]:
     if not symbol:
         return False, "Live blocked: trading symbol not configured."
     if market != "stocks" and "/" not in symbol:
-        return False, "Live blocked: invalid trading symbol."
+        return False, "Live blocked: invalid trading symbol (missing '/')."
 
     if _safe_float("INITIAL_CAPITAL", 0) <= 0:
         return False, "Live blocked: INITIAL_CAPITAL must be positive."
