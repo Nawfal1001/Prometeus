@@ -15,6 +15,7 @@
 .badge-crypto   {background:#1a3a1a;color:#7ee87e}
 .badge-commodity{background:#3a2a00;color:#f0c040}
 .badge-index    {background:#2a0a3a;color:#c87ee8}
+.badge-stock    {background:#1a2a3a;color:#7eb8e8}
 .class-filter-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px}
 .class-check{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem}
 .score-bar{display:inline-block;width:60px;height:6px;border-radius:3px;background:var(--border);vertical-align:middle;margin-right:6px;overflow:hidden}
@@ -70,6 +71,8 @@ td.rank-col{font-weight:700;color:var(--accent)}
         <option value="london_open">London Open (07–12 UTC)</option>
         <option value="overlap" selected>London / NY Overlap (13–17 UTC)</option>
         <option value="ny">New York (14–20 UTC)</option>
+        <option value="eu_stocks">EU Stocks (07:00–15:30 UTC)</option>
+        <option value="us_stocks">US Stocks (13:30–20:00 UTC)</option>
       </select>
       <span class="hint">Instruments not active in this session are excluded.</span>
     </div>
@@ -96,6 +99,7 @@ td.rank-col{font-weight:700;color:var(--accent)}
         <label class="class-check"><input type="checkbox" id="cls-crypto"    checked> <span class="badge badge-crypto">Crypto</span> Crypto CFD</label>
         <label class="class-check"><input type="checkbox" id="cls-commodity" checked> <span class="badge badge-commodity">Commodity</span> Commodities</label>
         <label class="class-check"><input type="checkbox" id="cls-index"     checked> <span class="badge badge-index">Index</span> Indices</label>
+        <label class="class-check"><input type="checkbox" id="cls-stock"     checked> <span class="badge badge-stock">Stock</span> Stock CFDs</label>
       </div>
     </div>
 
@@ -164,6 +168,7 @@ const CLASS_BADGE = {
   crypto:    '<span class="badge badge-crypto">Crypto</span>',
   commodity: '<span class="badge badge-commodity">Commodity</span>',
   index:     '<span class="badge badge-index">Index</span>',
+  stock:     '<span class="badge badge-stock">Stock</span>',
 };
 
 // ── UTC clock ─────────────────────────────────────────────────────────────
@@ -179,10 +184,12 @@ updateClock();
 
 // ── session chips ─────────────────────────────────────────────────────────
 const SESSIONS = {
-  asian:       {label:'Asian',           hours:[0,8]},
-  london_open: {label:'London Open',     hours:[7,12]},
-  overlap:     {label:'London/NY Overlap',hours:[13,17]},
-  ny:          {label:'New York',        hours:[14,20]},
+  asian:       {label:'Asian',             hours:[0,8]},
+  london_open: {label:'London Open',       hours:[7,12]},
+  overlap:     {label:'London/NY Overlap', hours:[13,17]},
+  ny:          {label:'New York',          hours:[14,20]},
+  eu_stocks:   {label:'EU Stocks',         hours:[7,16]},
+  us_stocks:   {label:'US Stocks',         hours:[13,20]},
 };
 
 function renderSessionBar(){
@@ -199,7 +206,7 @@ setInterval(renderSessionBar, 60000);
 // ── auto-detect current session ───────────────────────────────────────────
 function autoSelectSession(){
   const h = new Date().getUTCHours();
-  const priority = ['overlap','london_open','ny','asian'];
+  const priority = ['overlap','us_stocks','london_open','eu_stocks','ny','asian'];
   for(const k of priority){
     const v = SESSIONS[k];
     if(h >= v.hours[0] && h < v.hours[1]){
@@ -235,7 +242,7 @@ async function runPicks(){
   const session  = document.getElementById('session-select').value;
   const tf       = document.getElementById('tf-select').value;
   const limit    = parseInt(document.getElementById('limit-input').value) || 400;
-  const classes  = ['forex','crypto','commodity','index']
+  const classes  = ['forex','crypto','commodity','index','stock']
                     .filter(c => document.getElementById('cls-'+c)?.checked);
 
   if(!classes.length){

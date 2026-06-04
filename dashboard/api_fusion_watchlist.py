@@ -63,6 +63,33 @@ FUSION_UNIVERSE: dict[str, dict] = {
                "aliases": ["GER40", "DE40", "GER30", "DAX"]},
     "AUS200": {"class": "index",     "display": "ASX 200",      "sessions": ["asian"],
                "aliases": ["AUS200", "AU200", "SPXAUSD"]},
+    # US Stock CFDs — trade during NYSE/NASDAQ regular hours (13:30–20:00 UTC)
+    # Symbol names on cTrader are typically just the ticker (no suffix)
+    "AAPL":   {"class": "stock",     "display": "Apple",        "sessions": ["us_stocks"],
+               "aliases": ["AAPL", "AAPL.US"]},
+    "MSFT":   {"class": "stock",     "display": "Microsoft",    "sessions": ["us_stocks"],
+               "aliases": ["MSFT", "MSFT.US"]},
+    "NVDA":   {"class": "stock",     "display": "Nvidia",       "sessions": ["us_stocks"],
+               "aliases": ["NVDA", "NVDA.US"]},
+    "TSLA":   {"class": "stock",     "display": "Tesla",        "sessions": ["us_stocks"],
+               "aliases": ["TSLA", "TSLA.US"]},
+    "AMZN":   {"class": "stock",     "display": "Amazon",       "sessions": ["us_stocks"],
+               "aliases": ["AMZN", "AMZN.US"]},
+    "GOOGL":  {"class": "stock",     "display": "Alphabet",     "sessions": ["us_stocks"],
+               "aliases": ["GOOGL", "GOOG", "GOOGL.US"]},
+    "META":   {"class": "stock",     "display": "Meta",         "sessions": ["us_stocks"],
+               "aliases": ["META", "META.US", "FB"]},
+    "AMD":    {"class": "stock",     "display": "AMD",          "sessions": ["us_stocks"],
+               "aliases": ["AMD", "AMD.US"]},
+    "NFLX":   {"class": "stock",     "display": "Netflix",      "sessions": ["us_stocks"],
+               "aliases": ["NFLX", "NFLX.US"]},
+    "JPM":    {"class": "stock",     "display": "JPMorgan",     "sessions": ["us_stocks"],
+               "aliases": ["JPM", "JPM.US"]},
+    # EU Stock CFDs — trade during EU exchange hours (07:00–15:30 UTC)
+    "ASML":   {"class": "stock",     "display": "ASML",         "sessions": ["eu_stocks"],
+               "aliases": ["ASML", "ASML.EU", "ASML.NL"]},
+    "SAP":    {"class": "stock",     "display": "SAP",          "sessions": ["eu_stocks"],
+               "aliases": ["SAP", "SAP.EU", "SAP.DE"]},
 }
 
 SESSION_WINDOWS: dict[str, dict] = {
@@ -70,6 +97,8 @@ SESSION_WINDOWS: dict[str, dict] = {
     "london_open": {"label": "London Open (07–12 UTC)",         "hours": (7, 12)},
     "overlap":     {"label": "London / NY Overlap (13–17 UTC)", "hours": (13, 17)},
     "ny":          {"label": "New York (14–20 UTC)",            "hours": (14, 20)},
+    "us_stocks":   {"label": "US Stocks (13:30–20:00 UTC)",     "hours": (13, 20)},
+    "eu_stocks":   {"label": "EU Stocks (07:00–15:30 UTC)",     "hours": (7,  16)},
 }
 
 CLASS_LABELS = {
@@ -77,6 +106,7 @@ CLASS_LABELS = {
     "crypto":    "Crypto",
     "commodity": "Commodity",
     "index":     "Index",
+    "stock":     "Stock",
 }
 
 # Optimal ATR-norm ranges per asset class.
@@ -87,8 +117,9 @@ CLASS_LABELS = {
 _CLASS_ATR_OPTIMAL: dict[str, tuple[float, float]] = {
     "forex":     (0.001, 0.010),   # 0.1–1.0 %
     "crypto":    (0.002, 0.015),   # 0.2–1.5 %
-    "commodity": (0.002, 0.060),   # 0.2–6.0 % (covers metals to natural gas)
+    "commodity": (0.002, 0.060),   # 0.2–6.0 % (metals to natural gas)
     "index":     (0.003, 0.025),   # 0.3–2.5 %
+    "stock":     (0.005, 0.035),   # 0.5–3.5 % (AAPL ~1 %, TSLA/NVDA ~3–4 %)
 }
 
 
