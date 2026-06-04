@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
@@ -163,9 +164,18 @@ async def get_daily_picks(request: Request):
     try:
         body = await request.json()
         session = str(body.get("session") or "overlap")
-        classes = body.get("classes") or list(CLASS_LABELS.keys())
+        raw_classes = body.get("classes")
+        if isinstance(raw_classes, list):
+            classes = raw_classes
+        elif raw_classes is None:
+            classes = list(CLASS_LABELS.keys())
+        else:
+            classes = list(CLASS_LABELS.keys())
         timeframe = str(body.get("timeframe") or "1h")
-        limit = int(body.get("limit") or 400)
+        try:
+            limit = int(body.get("limit") or 400)
+        except (TypeError, ValueError):
+            limit = 400
 
         if session not in SESSION_WINDOWS:
             return JSONResponse({"error": f"Unknown session '{session}'"}, status_code=400)
@@ -184,13 +194,23 @@ async def get_daily_picks(request: Request):
         from core.scanner.multi_symbol_scanner import MultiSymbolScanner
 
         exchange = get_exchange()
-        scanner = MultiSymbolScanner(
-            exchange=exchange,
-            symbols=list(candidates.keys()),
-            timeframe=timeframe,
-            limit=limit,
-        )
-        result = await scanner.scan()
+        try:
+            scanner = MultiSymbolScanner(
+                exchange=exchange,
+                symbols=list(candidates.keys()),
+                timeframe=timeframe,
+                limit=limit,
+            )
+            result = await scanner.scan()
+        finally:
+            closer = getattr(exchange, "close", None)
+            if callable(closer):
+                try:
+                    maybe = closer()
+                    if asyncio.iscoroutine(maybe):
+                        await maybe
+                except Exception:
+                    pass
 
         # Enrich rows with universe metadata and recalibrate the vol_quality
         # score using class-appropriate ATR bands so commodities (Natural Gas,
