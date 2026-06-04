@@ -387,6 +387,18 @@ async def set_capital(request: Request):
     return result
 
 
+@app.post("/api/capital/sync")
+async def sync_capital():
+    """Pull live capital from the exchange and seed risk.capital. Only valid
+    in live mode; paper returns skipped."""
+    if engine is None:
+        return {"status": "error", "reason": "engine_not_running"}
+    result = await engine.orders.sync_capital_from_exchange()
+    if result.get("status") == "ok":
+        await _push_trade_state()
+    return result
+
+
 if __name__ == "__main__":
     logger.info(f"Starting PROMETHEUS on port {cfg.PORT}")
     uvicorn.run("main:app", host="0.0.0.0", port=cfg.PORT, reload=False, log_level=cfg.LOG_LEVEL.lower())

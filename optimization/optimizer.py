@@ -353,6 +353,17 @@ class PrometheusOptimizer:
         ter = float(results.get("time_exit_rate", 0) or 0)
         tp1 = float(results.get("tp1_hit_rate", 0) or 0)
 
+        # PF hard gate: realistic edge needs PF > ~1.3 to survive live slippage
+        # and fees. Anything below is overfitting / gaming the score function
+        # via high win-rate-with-tiny-wins. Configurable via OPTUNA_MIN_PF.
+        # A trial with weak PF returns a small negative score immediately so
+        # TPE learns to avoid that region instead of converging on it.
+        min_pf = float(getattr(cfg, "OPTUNA_MIN_PF", 1.3))
+        if n >= 10 and pf > 0 and pf < min_pf:
+            # Smooth gradient toward the gate, so the optimizer can learn to
+            # climb toward higher PF rather than seeing a flat penalty.
+            return -0.3 + 0.25 * (pf / min_pf) - 0.05 * max(0.0, dd - 0.10)
+
         # Trade-volume factor: monotonic, strongest gradient in the 30-100 trade
         # range so the optimizer is actively pushed to find configs that trade a
         # lot, not just "few-but-clean" setups.
