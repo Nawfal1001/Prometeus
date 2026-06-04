@@ -323,7 +323,9 @@ class PrometheusEngine:
                 if self._rotator_enabled():
                     ranked = await self._autoscan()
                     await self._manage_open_trades_rotator()
-                    if self.orders.get_open_trades():
+                    max_concurrent = int(getattr(cfg, "MAX_CONCURRENT_PAPER_TRADES", 3))
+                    open_paper = [t for t in self.orders.open_trades.values() if not t.get("is_live")]
+                    if len(open_paper) >= max_concurrent:
                         await self._broadcast_state(ranked[0]["price"] if ranked else 0, ranked[0]["signal"] if ranked else {}, ranked[0]["layer_scores"] if ranked else {}, ranked[0]["regime"] if ranked else {})
                         await asyncio.sleep(15)
                         continue
@@ -344,7 +346,6 @@ class PrometheusEngine:
                             logger.info(f"[Rotator] opened {sig.get('side')} {item['symbol']} score={item.get('final_score', 0):.3f}")
                             self.telegram.signal_alert(sig, item["price"])
                             self.fusion.reload_weights()
-                            break
                     await self._broadcast_state(ranked[0]["price"] if ranked else 0, ranked[0]["signal"] if ranked else {}, ranked[0]["layer_scores"] if ranked else {}, ranked[0]["regime"] if ranked else {})
                     await asyncio.sleep(15)
                     continue
