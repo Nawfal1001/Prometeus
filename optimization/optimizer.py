@@ -35,6 +35,12 @@ _OPT_KEYS = [
 ]
 
 SEED_PARAMS = [
+    # 3x-growth seed: matches the manually-tuned config (wide stop, asymmetric
+    # TP, equal split) so TPE explores around the strategy we actually run live.
+    dict(FUSION_THRESHOLD=0.28, MIN_RR_RATIO=2.5, ATR_SL_MULT=1.5, ATR_TP1_MULT=2.0, ATR_TP2_MULT=4.0,
+         TP1_EXIT_PCT=0.50, TP2_EXIT_PCT=0.50, MAX_TRADE_DURATION_BARS=36, EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
+         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=40, ROTATOR_MIN_SCORE=0.28, WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.20),
     dict(FUSION_THRESHOLD=0.19, MIN_RR_RATIO=1.8, ATR_SL_MULT=1.2, ATR_TP1_MULT=1.2, ATR_TP2_MULT=2.2,
          TP1_EXIT_PCT=0.65, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=28, EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
          MAX_RISK_PER_TRADE=0.035, MAX_TRADES_PER_DAY=6, ROTATOR_MIN_SCORE=0.15, WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
@@ -275,13 +281,13 @@ class PrometheusOptimizer:
             params.update({"WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5})
 
         if "exits" in groups:
-            sl_mult = trial.suggest_float("ATR_SL_MULT", 0.75, 1.9, step=0.05)
-            tp1_mult = trial.suggest_float("ATR_TP1_MULT", 0.65, 1.8, step=0.05)
+            sl_mult = trial.suggest_float("ATR_SL_MULT", 0.90, 2.10, step=0.05)
+            tp1_mult = trial.suggest_float("ATR_TP1_MULT", 1.00, 2.60, step=0.05)
             min_tp2 = round(max(sl_mult * 1.15, tp1_mult + 0.15), 2)
-            max_tp2 = max(min_tp2 + 0.25, 3.4)
+            max_tp2 = max(min_tp2 + 0.25, 5.20)
             tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.05)
-            rr_cap = max(1.05, min(2.6, tp2_mult / max(sl_mult, 1e-9)))
-            rr_low = min(1.0, rr_cap - 0.01)
+            rr_cap = max(1.05, min(3.40, tp2_mult / max(sl_mult, 1e-9)))
+            rr_low = min(1.30, rr_cap - 0.01)
             min_rr = trial.suggest_float("MIN_RR_RATIO", rr_low, max(rr_low + 0.05, rr_cap), step=0.05)
             tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
             tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
@@ -307,7 +313,7 @@ class PrometheusOptimizer:
             params["ROTATOR_MIN_SCORE"] = trial.suggest_float("ROTATOR_MIN_SCORE", 0.00, 0.45, step=0.02)
 
         if "risk" in groups:
-            params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.01, 0.04, step=0.005)
+            params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.02, 0.06, step=0.005)
             params["MAX_CONCURRENT_PAPER_TRADES"] = trial.suggest_int("MAX_CONCURRENT_PAPER_TRADES", 2, 8)
 
         if "duration" in groups:

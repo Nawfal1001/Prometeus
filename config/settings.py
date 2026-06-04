@@ -244,7 +244,7 @@ def reload_from_sources():
 
     OPTUNA_TRIALS = get_int("OPTUNA_TRIALS", 60)
     OPTUNA_TIMEOUT_SEC = get_int("OPTUNA_TIMEOUT_SEC", 420)
-    OPTUNA_METRIC = get("OPTUNA_METRIC", "composite")
+    OPTUNA_METRIC = get("OPTUNA_METRIC", "target_150")
     OPTUNA_DATA_CANDLES = get_int("OPTUNA_DATA_CANDLES", 1500)
     OPTUNA_TIMEFRAME = get("OPTUNA_TIMEFRAME", TIMEFRAME)
     OPTUNA_PRUNING = get_bool("OPTUNA_PRUNING", "true")
