@@ -15,48 +15,61 @@ import config.settings as cfg
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
-# Fusion Markets instrument universe
-# Symbols are in cTrader format (no slash) — normalize_ctrader_symbol()
-# passes them through unchanged, and the KuCoin fallback handles crypto.
+# Fusion Markets instrument universe.
+# Symbols are in cTrader format (no slash).  The "aliases" list contains
+# alternative names that different cTrader brokers may use — check your
+# Fusion Markets terminal if a symbol scan returns "symbol not found".
 # ---------------------------------------------------------------------------
 FUSION_UNIVERSE: dict[str, dict] = {
     # Forex
-    "EURUSD": {"class": "forex",     "display": "EUR/USD",    "sessions": ["london_open", "overlap", "ny"]},
-    "GBPUSD": {"class": "forex",     "display": "GBP/USD",    "sessions": ["london_open", "overlap", "ny"]},
-    "USDJPY": {"class": "forex",     "display": "USD/JPY",    "sessions": ["asian", "london_open", "overlap", "ny"]},
-    "AUDUSD": {"class": "forex",     "display": "AUD/USD",    "sessions": ["asian", "london_open"]},
-    "NZDUSD": {"class": "forex",     "display": "NZD/USD",    "sessions": ["asian", "london_open"]},
-    "USDCAD": {"class": "forex",     "display": "USD/CAD",    "sessions": ["london_open", "overlap", "ny"]},
-    "USDCHF": {"class": "forex",     "display": "USD/CHF",    "sessions": ["london_open", "overlap", "ny"]},
-    "EURGBP": {"class": "forex",     "display": "EUR/GBP",    "sessions": ["london_open", "overlap"]},
-    "EURJPY": {"class": "forex",     "display": "EUR/JPY",    "sessions": ["asian", "london_open", "overlap"]},
-    "GBPJPY": {"class": "forex",     "display": "GBP/JPY",    "sessions": ["asian", "london_open", "overlap"]},
-    # Crypto CFDs (24/7 but session-weighted for liquidity)
-    "BTCUSD": {"class": "crypto",    "display": "BTC/USD",    "sessions": ["asian", "london_open", "overlap", "ny"]},
-    "ETHUSD": {"class": "crypto",    "display": "ETH/USD",    "sessions": ["asian", "london_open", "overlap", "ny"]},
-    "LTCUSD": {"class": "crypto",    "display": "LTC/USD",    "sessions": ["asian", "london_open", "overlap", "ny"]},
-    "XRPUSD": {"class": "crypto",    "display": "XRP/USD",    "sessions": ["asian", "london_open", "overlap", "ny"]},
+    "EURUSD": {"class": "forex",     "display": "EUR/USD",      "sessions": ["london_open", "overlap", "ny"]},
+    "GBPUSD": {"class": "forex",     "display": "GBP/USD",      "sessions": ["london_open", "overlap", "ny"]},
+    "USDJPY": {"class": "forex",     "display": "USD/JPY",      "sessions": ["asian", "london_open", "overlap", "ny"]},
+    "AUDUSD": {"class": "forex",     "display": "AUD/USD",      "sessions": ["asian", "london_open"]},
+    "NZDUSD": {"class": "forex",     "display": "NZD/USD",      "sessions": ["asian", "london_open"]},
+    "USDCAD": {"class": "forex",     "display": "USD/CAD",      "sessions": ["london_open", "overlap", "ny"]},
+    "USDCHF": {"class": "forex",     "display": "USD/CHF",      "sessions": ["london_open", "overlap", "ny"]},
+    "EURGBP": {"class": "forex",     "display": "EUR/GBP",      "sessions": ["london_open", "overlap"]},
+    "EURJPY": {"class": "forex",     "display": "EUR/JPY",      "sessions": ["asian", "london_open", "overlap"]},
+    "GBPJPY": {"class": "forex",     "display": "GBP/JPY",      "sessions": ["asian", "london_open", "overlap"]},
+    # Crypto CFDs (24/7, session-weighted for liquidity peaks)
+    "BTCUSD": {"class": "crypto",    "display": "BTC/USD",      "sessions": ["asian", "london_open", "overlap", "ny"]},
+    "ETHUSD": {"class": "crypto",    "display": "ETH/USD",      "sessions": ["asian", "london_open", "overlap", "ny"]},
+    "LTCUSD": {"class": "crypto",    "display": "LTC/USD",      "sessions": ["asian", "london_open", "overlap", "ny"]},
+    "XRPUSD": {"class": "crypto",    "display": "XRP/USD",      "sessions": ["asian", "london_open", "overlap", "ny"]},
     # Commodities
-    "XAUUSD": {"class": "commodity", "display": "Gold/USD",      "sessions": ["london_open", "overlap", "ny"]},
-    "XAGUSD": {"class": "commodity", "display": "Silver/USD",    "sessions": ["london_open", "overlap", "ny"]},
-    "XPTUSD": {"class": "commodity", "display": "Platinum/USD",  "sessions": ["london_open", "overlap", "ny"]},
-    "USOIL":  {"class": "commodity", "display": "WTI Crude",     "sessions": ["london_open", "overlap", "ny"]},
-    "UKOIL":  {"class": "commodity", "display": "Brent Crude",   "sessions": ["london_open", "overlap", "ny"]},
-    "NATGAS": {"class": "commodity", "display": "Natural Gas",   "sessions": ["london_open", "overlap", "ny"]},
-    "COPPER": {"class": "commodity", "display": "Copper",        "sessions": ["london_open", "overlap", "ny"]},
-    # Indices
-    "SPX500": {"class": "index",     "display": "S&P 500",    "sessions": ["overlap", "ny"]},
-    "NAS100": {"class": "index",     "display": "Nasdaq 100", "sessions": ["overlap", "ny"]},
-    "UK100":  {"class": "index",     "display": "FTSE 100",   "sessions": ["london_open", "overlap"]},
-    "GER40":  {"class": "index",     "display": "DAX 40",     "sessions": ["london_open", "overlap"]},
-    "AUS200": {"class": "index",     "display": "ASX 200",    "sessions": ["asian"]},
+    "XAUUSD": {"class": "commodity", "display": "Gold",         "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["GOLD", "XAUUSD"]},
+    "XAGUSD": {"class": "commodity", "display": "Silver",       "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["SILVER", "XAGUSD"]},
+    "XPTUSD": {"class": "commodity", "display": "Platinum",     "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["PLATINUM", "XPTUSD"]},
+    "USOIL":  {"class": "commodity", "display": "WTI Crude",    "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["USOIL", "WTICOUSD", "USOUSD", "CRUDEOIL"]},
+    "UKOIL":  {"class": "commodity", "display": "Brent Crude",  "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["UKOIL", "BRENTOIL", "UKOILUSD"]},
+    "NATGAS": {"class": "commodity", "display": "Natural Gas",  "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["NATGAS", "XNGUSD", "NGAS"]},
+    "COPPER": {"class": "commodity", "display": "Copper",       "sessions": ["london_open", "overlap", "ny"],
+               "aliases": ["COPPER", "COPPERUSD", "HG"]},
+    # Indices — naming varies significantly by broker
+    "SPX500": {"class": "index",     "display": "S&P 500",      "sessions": ["overlap", "ny"],
+               "aliases": ["SPX500", "US500", "SP500", "S&P500"]},
+    "NAS100": {"class": "index",     "display": "Nasdaq 100",   "sessions": ["overlap", "ny"],
+               "aliases": ["NAS100", "US100", "USTEC", "NASDAQ100"]},
+    "UK100":  {"class": "index",     "display": "FTSE 100",     "sessions": ["london_open", "overlap"],
+               "aliases": ["UK100", "FTSE", "FTSE100"]},
+    "GER40":  {"class": "index",     "display": "DAX 40",       "sessions": ["london_open", "overlap"],
+               "aliases": ["GER40", "DE40", "GER30", "DAX"]},
+    "AUS200": {"class": "index",     "display": "ASX 200",      "sessions": ["asian"],
+               "aliases": ["AUS200", "AU200", "SPXAUSD"]},
 }
 
 SESSION_WINDOWS: dict[str, dict] = {
-    "asian":       {"label": "Asian (00–08 UTC)",              "hours": (0,  8)},
-    "london_open": {"label": "London Open (07–12 UTC)",        "hours": (7,  12)},
-    "overlap":     {"label": "London / NY Overlap (13–17 UTC)","hours": (13, 17)},
-    "ny":          {"label": "New York (14–20 UTC)",           "hours": (14, 20)},
+    "asian":       {"label": "Asian (00–08 UTC)",               "hours": (0,  8)},
+    "london_open": {"label": "London Open (07–12 UTC)",         "hours": (7, 12)},
+    "overlap":     {"label": "London / NY Overlap (13–17 UTC)", "hours": (13, 17)},
+    "ny":          {"label": "New York (14–20 UTC)",            "hours": (14, 20)},
 }
 
 CLASS_LABELS = {
@@ -65,6 +78,29 @@ CLASS_LABELS = {
     "commodity": "Commodity",
     "index":     "Index",
 }
+
+# Optimal ATR-norm ranges per asset class.
+# The generic scanner uses crypto-calibrated thresholds (0.002–0.015).
+# Commodities and forex have different volatility profiles:
+#   Natural Gas can move 5–8 % daily (atr_norm ~0.05+) — normal, not bad.
+#   Forex major pairs move 0.2–0.8 % daily — much tighter than crypto.
+_CLASS_ATR_OPTIMAL: dict[str, tuple[float, float]] = {
+    "forex":     (0.001, 0.010),   # 0.1–1.0 %
+    "crypto":    (0.002, 0.015),   # 0.2–1.5 %
+    "commodity": (0.002, 0.060),   # 0.2–6.0 % (covers metals to natural gas)
+    "index":     (0.003, 0.025),   # 0.3–2.5 %
+}
+
+
+def _vol_quality_for_class(atr_norm: float, asset_class: str) -> float:
+    lo, hi = _CLASS_ATR_OPTIMAL.get(asset_class, (0.002, 0.015))
+    if atr_norm <= 0 or atr_norm < lo / 2:
+        return 0.0
+    if lo <= atr_norm <= hi:
+        return 1.0
+    if atr_norm <= hi * 2:
+        return 0.65
+    return 0.25
 
 
 def _active_sessions(now_h: int) -> list[str]:
@@ -85,6 +121,7 @@ async def get_universe():
             "class_label": CLASS_LABELS.get(info["class"], info["class"]),
             "sessions": [SESSION_WINDOWS[s]["label"] for s in info["sessions"]],
             "active_now": bool(active.intersection(info["sessions"])),
+            "aliases": info.get("aliases", [sym]),
         })
     return {"universe": items, "total": len(items),
             "active_sessions": [SESSION_WINDOWS[s]["label"] for s in active]}
@@ -124,15 +161,38 @@ async def get_daily_picks(request: Request):
         )
         result = await scanner.scan()
 
-        # Enrich each row with universe metadata
-        for row in result.get("symbols", []):
+        # Enrich rows with universe metadata and recalibrate the vol_quality
+        # score using class-appropriate ATR bands so commodities (Natural Gas,
+        # Oil) are not penalised for their wider but normal volatility range.
+        rows = result.get("symbols", [])
+        for row in rows:
             sym = row.get("symbol", "")
             meta = candidates.get(sym, {})
-            row["asset_class"] = meta.get("class", "unknown")
-            row["class_label"] = CLASS_LABELS.get(meta.get("class", ""), "?")
+            asset_class = meta.get("class", "crypto")
+            row["asset_class"] = asset_class
+            row["class_label"] = CLASS_LABELS.get(asset_class, "?")
             row["display_symbol"] = meta.get("display", sym)
             row["active_sessions"] = [SESSION_WINDOWS[s]["label"] for s in meta.get("sessions", [])]
+            row["aliases"] = meta.get("aliases", [sym])
 
+            if not row.get("error"):
+                atr_norm = float(row.get("atr_norm", 0) or 0)
+                old_vq = float(row.get("vol_quality", 0) or 0)
+                new_vq = _vol_quality_for_class(atr_norm, asset_class)
+                if new_vq != old_vq:
+                    delta = (new_vq - old_vq) * 0.15  # vol_quality weight = 0.15
+                    new_rank = float(row.get("rank_score", 0) or 0) + delta
+                    row["rank_score"] = round(new_rank, 5)
+                    row["display_score"] = round(max(0.0, min(new_rank * 100.0, 100.0)), 1)
+                    row["vol_quality"] = round(new_vq, 3)
+
+        # Re-sort after ATR adjustment
+        rows.sort(key=lambda x: float(x.get("rank_score", -999) or -999), reverse=True)
+        result["symbols"] = rows
+        result["best"] = next(
+            (r for r in rows if r.get("tradable") and not r.get("error")),
+            rows[0] if rows else None,
+        )
         result["session"] = session
         result["session_label"] = session_meta["label"]
         result["scan_time_utc"] = now.strftime("%Y-%m-%d %H:%M UTC")
