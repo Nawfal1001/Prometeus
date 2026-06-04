@@ -254,12 +254,12 @@ def reload_from_sources():
     LIQUIDATION_GRAVITY_MIN = get_float("LIQUIDATION_GRAVITY_MIN", 0.3)
     LIQUIDATION_PROXIMITY_PCT = get_float("LIQUIDATION_PROXIMITY_PCT", 0.02)
 
-    OPTUNA_TRIALS = get_int("OPTUNA_TRIALS", 60)
-    OPTUNA_TIMEOUT_SEC = get_int("OPTUNA_TIMEOUT_SEC", 420)
+    OPTUNA_TRIALS = get_int("OPTUNA_TRIALS", 80)
+    OPTUNA_TIMEOUT_SEC = get_int("OPTUNA_TIMEOUT_SEC", 600)
     OPTUNA_METRIC = get("OPTUNA_METRIC", "composite")
     OPTUNA_DATA_CANDLES = get_int("OPTUNA_DATA_CANDLES", 1500)
     OPTUNA_TIMEFRAME = get("OPTUNA_TIMEFRAME", TIMEFRAME)
-    OPTUNA_PRUNING = get_bool("OPTUNA_PRUNING", "true")
+    OPTUNA_PRUNING = get_bool("OPTUNA_PRUNING", "false")
     global OPTUNA_MIN_PF
     OPTUNA_MIN_PF = get_float("OPTUNA_MIN_PF", 1.3)
     global OPTUNA_TUNE_INDICATORS, OPTUNA_TUNE_GROUPS, REGIME_DEAD_ZONE
@@ -267,7 +267,10 @@ def reload_from_sources():
     global PROFIT_RATCHET_ATR_MULT, EARLY_KILL_ENABLED, EARLY_KILL_BARS, EARLY_KILL_SL_PCT
     global LIQUIDATION_VETO_THRESHOLD, LIQUIDATION_SOFT_PENALTY_THRESHOLD, LIQUIDATION_HARD_VETO_THRESHOLD, LIQUIDATION_PENALTY_FACTOR
     OPTUNA_TUNE_INDICATORS = get_bool("OPTUNA_TUNE_INDICATORS", "false")
-    OPTUNA_TUNE_GROUPS = get("OPTUNA_TUNE_GROUPS", "weights,exits,thresholds,risk,duration")
+    # Default groups are exits+thresholds+duration (9+4+1 = 14 dims).
+    # Removed "weights" (normalization distorts TPE's model) and "risk"
+    # (risk sizing is better set manually).  Add them back via settings if wanted.
+    OPTUNA_TUNE_GROUPS = get("OPTUNA_TUNE_GROUPS", "exits,thresholds,duration")
     REGIME_DEAD_ZONE = get_float("REGIME_DEAD_ZONE", 0.0)
     EXIT_ON_REGIME_FLIP = get_bool("EXIT_ON_REGIME_FLIP", "true")
     EXIT_REGIME_FLIP_MIN_SCORE = get_float("EXIT_REGIME_FLIP_MIN_SCORE", 0.30)
