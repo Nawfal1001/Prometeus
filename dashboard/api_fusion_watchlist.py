@@ -37,9 +37,13 @@ FUSION_UNIVERSE: dict[str, dict] = {
     "LTCUSD": {"class": "crypto",    "display": "LTC/USD",    "sessions": ["asian", "london_open", "overlap", "ny"]},
     "XRPUSD": {"class": "crypto",    "display": "XRP/USD",    "sessions": ["asian", "london_open", "overlap", "ny"]},
     # Commodities
-    "XAUUSD": {"class": "commodity", "display": "Gold/USD",   "sessions": ["london_open", "overlap", "ny"]},
-    "XAGUSD": {"class": "commodity", "display": "Silver/USD", "sessions": ["london_open", "overlap", "ny"]},
-    "USOIL":  {"class": "commodity", "display": "US Oil",     "sessions": ["london_open", "overlap", "ny"]},
+    "XAUUSD": {"class": "commodity", "display": "Gold/USD",      "sessions": ["london_open", "overlap", "ny"]},
+    "XAGUSD": {"class": "commodity", "display": "Silver/USD",    "sessions": ["london_open", "overlap", "ny"]},
+    "XPTUSD": {"class": "commodity", "display": "Platinum/USD",  "sessions": ["london_open", "overlap", "ny"]},
+    "USOIL":  {"class": "commodity", "display": "WTI Crude",     "sessions": ["london_open", "overlap", "ny"]},
+    "UKOIL":  {"class": "commodity", "display": "Brent Crude",   "sessions": ["london_open", "overlap", "ny"]},
+    "NATGAS": {"class": "commodity", "display": "Natural Gas",   "sessions": ["london_open", "overlap", "ny"]},
+    "COPPER": {"class": "commodity", "display": "Copper",        "sessions": ["london_open", "overlap", "ny"]},
     # Indices
     "SPX500": {"class": "index",     "display": "S&P 500",    "sessions": ["overlap", "ny"]},
     "NAS100": {"class": "index",     "display": "Nasdaq 100", "sessions": ["overlap", "ny"]},

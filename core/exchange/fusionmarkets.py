@@ -19,6 +19,22 @@ from core.exchange.ctrader_client import (
 from core.exchange.ctrader_codec import AutoCTraderCodec
 import config.settings as cfg
 
+# Base-currency prefixes that identify non-crypto instruments.
+# These must NOT be forwarded to the KuCoin public-data fallback because
+# KuCoin has no spot pairs for metals, forex, indices, or energy.
+_NON_CRYPTO_BASES = frozenset({
+    # Metals / precious metals
+    "XAU", "XAG", "XPT", "XPD",
+    # Energy
+    "USO", "UKO", "NGAS", "NATGAS", "BRENT", "WTI",
+    # Forex base currencies
+    "EUR", "GBP", "AUD", "NZD", "CAD", "CHF", "JPY",
+    # Indices
+    "SPX", "NAS", "UK1", "GER", "AUS", "DOW", "NIK", "HSI", "CAC", "DAX",
+    # Soft commodities / metals
+    "COPPER", "WHEAT", "CORN", "COFFEE", "SUGAR",
+})
+
 
 class FusionMarketsExchange(BaseExchange):
     """Fusion Markets connector via cTrader Open API.
@@ -78,13 +94,20 @@ class FusionMarketsExchange(BaseExchange):
             getattr(cfg, "FUSION_PAPER_DATA_FALLBACK", "true")
         ).lower() in ("1", "true", "yes")
 
-    def _to_public_crypto_symbol(self, symbol: str) -> str:
+    def _to_public_crypto_symbol(self, symbol: str) -> str | None:
+        """Return a KuCoin-compatible symbol, or None if the instrument is not a crypto pair.
+
+        Commodities (XAUUSD, USOIL…), forex (EURUSD…), and indices (SPX500…)
+        must NOT fall through to KuCoin — the converted symbols don't exist there.
+        """
         s = str(symbol or "").upper().replace("/", "").replace("-", "").replace("_", "")
         for quote in ("USDT", "USD"):
             if s.endswith(quote):
                 base = s[: -len(quote)]
+                if base in _NON_CRYPTO_BASES:
+                    return None
                 return f"{base}/USDT"
-        return symbol
+        return None  # no USD suffix → definitely not a crypto pair
 
     def _fallback_exchange(self):
         if self._paper_data_exchange is None:
@@ -104,9 +127,10 @@ class FusionMarketsExchange(BaseExchange):
         try:
             return await self.client.get_trendbars(ctrader_symbol, timeframe, int(limit))
         except CTraderProtocolNotReady as e:
-            if self._paper_fallback_enabled():
-                logger.warning(f"[FusionMarkets/cTrader] {e}; falling back to public data for paper mode")
-                return await self._fallback_exchange().get_ohlcv(self._to_public_crypto_symbol(symbol), timeframe, limit=int(limit))
+            pub = self._to_public_crypto_symbol(ctrader_symbol)
+            if pub and self._paper_fallback_enabled():
+                logger.warning(f"[FusionMarkets/cTrader] {e}; falling back to KuCoin for {pub}")
+                return await self._fallback_exchange().get_ohlcv(pub, timeframe, limit=int(limit))
             raise
 
     async def get_orderbook(self, symbol: str, depth: int = 20) -> dict:
@@ -114,8 +138,9 @@ class FusionMarketsExchange(BaseExchange):
         try:
             return await self.client.get_orderbook(ctrader_symbol, int(depth))
         except CTraderProtocolNotReady:
-            if self._paper_fallback_enabled():
-                return await self._fallback_exchange().get_orderbook(self._to_public_crypto_symbol(symbol), depth=int(depth))
+            pub = self._to_public_crypto_symbol(ctrader_symbol)
+            if pub and self._paper_fallback_enabled():
+                return await self._fallback_exchange().get_orderbook(pub, depth=int(depth))
             raise
 
     async def get_ticker(self, symbol: str) -> dict:
@@ -123,8 +148,9 @@ class FusionMarketsExchange(BaseExchange):
         try:
             return await self.client.get_ticker(ctrader_symbol)
         except CTraderProtocolNotReady:
-            if self._paper_fallback_enabled():
-                return await self._fallback_exchange().get_ticker(self._to_public_crypto_symbol(symbol))
+            pub = self._to_public_crypto_symbol(ctrader_symbol)
+            if pub and self._paper_fallback_enabled():
+                return await self._fallback_exchange().get_ticker(pub)
             raise
 
     async def get_funding_rate(self, symbol: str) -> float:
