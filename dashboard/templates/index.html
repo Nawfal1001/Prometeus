@@ -20,6 +20,7 @@
     <a href="/train">Train ML</a>
     <a href="/log-trade">Trade Logs</a>
     <a href="/health-dashboard">Health</a>
+    <a href="/fx">FX / Non-crypto</a>
     <a href="/settings">Settings</a>
   </div>
   <div class="nav-status">
@@ -60,6 +61,20 @@
       <div class="stat-card"><div class="stat-label">Rank Score</div><div class="stat-value" id="best-score">—</div><div class="stat-sub" id="best-confidence">Confidence: —</div></div>
       <div class="stat-card"><div class="stat-label">Risk / Reward</div><div class="stat-value" id="best-rr">—</div><div class="stat-sub" id="best-price">Price: —</div></div>
       <div class="stat-card"><div class="stat-label">Actions</div><button class="btn btn-primary" onclick="quickScan()">🔎 Quick Scan</button><a class="btn btn-secondary" href="/scan" style="margin-left:8px">Open Scanner</a></div>
+    </div>
+  </div>
+
+  <!-- FX / Non-crypto engine status — only shown when NON_CRYPTO_ENABLED -->
+  <div class="card mt" id="fx-status-card" style="display:none">
+    <div class="card-header">🌐 FX / Non-crypto Engine <span id="fx-running-badge" class="badge badge-stopped" style="margin-left:8px">STOPPED</span></div>
+    <div class="stats-grid" style="padding:16px">
+      <div class="stat-card"><div class="stat-label">FX Capital</div><div class="stat-value" id="fx-capital">—</div><div class="stat-sub" id="fx-pnl">—</div></div>
+      <div class="stat-card"><div class="stat-label">FX Open Trades</div><div class="stat-value" id="fx-open-count">0</div><div class="stat-sub" id="fx-symbols">—</div></div>
+      <div class="stat-card"><div class="stat-label">FX Closed Trades</div><div class="stat-value" id="fx-closed-count">0</div><div class="stat-sub" id="fx-timeframe">—</div></div>
+      <div class="stat-card"><div class="stat-label">Actions</div><a class="btn btn-primary" href="/fx">Open FX Dashboard</a></div>
+    </div>
+    <div id="fx-open-trades-wrap" style="padding:0 16px 16px;display:none">
+      <table class="trade-table"><thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Size</th><th>Score</th></tr></thead><tbody id="fx-open-trades-body"></tbody></table>
     </div>
   </div>
 
@@ -129,6 +144,39 @@ applySignal = function(sig) { _origApplySignal(sig); if (!sig) return; var conf 
 function renderRotatorRanked(rows){if(!Array.isArray(rows)||!rows.length)return;var normalized=rows.map(function(r){var fusion=Number(r.fusion_score);return {symbol:r.symbol,side:r.side,tradable:!!r.trade,rank_score:Number(r.score),confidence:Number(r.confidence),fusion_score:Number.isFinite(fusion)?fusion:undefined,risk_reward:Number(r.rr_ratio||r.risk_reward),price:Number(r.price||r.last_price),reason:r.reason}});renderScanSummary({symbols:normalized,results:normalized})}
 applyState = function(state) { _origApplyState(state); var htfBadge = document.getElementById('htf-badge'); if (htfBadge && state.htf_bias !== undefined) { htfBadge.style.display = ''; if (state.htf_bias === 1) { htfBadge.textContent = '4H: BULL'; htfBadge.style.background = '#1a3a2a'; htfBadge.style.color = 'var(--green)'; } else if (state.htf_bias === -1) { htfBadge.textContent = '4H: BEAR'; htfBadge.style.background = '#3a1a1a'; htfBadge.style.color = 'var(--red)'; } else { htfBadge.textContent = '4H: NEUTRAL'; htfBadge.style.background = 'var(--bg3)'; htfBadge.style.color = 'var(--muted)'; } } if(state.scan)renderScanSummary(state.scan); if(state.rotator_ranked)renderRotatorRanked(state.rotator_ranked); };
 loadUniverseSettings();
+
+async function loadFxStatus() {
+  try {
+    const r = await fetch('/api/fx/state');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.enabled) return;
+    const card = document.getElementById('fx-status-card');
+    if (card) card.style.display = 'block';
+    const badge = document.getElementById('fx-running-badge');
+    if (badge) {
+      badge.textContent = d.running ? 'RUNNING' : 'STOPPED';
+      badge.className = 'badge ' + (d.running ? 'badge-live' : 'badge-stopped');
+    }
+    _set('fx-capital', '$' + Number(d.capital || 0).toFixed(2));
+    _set('fx-pnl', (d.pnl >= 0 ? '+' : '') + Number(d.pnl || 0).toFixed(4) + ' P&L');
+    _set('fx-open-count', d.open_count || 0);
+    _set('fx-closed-count', d.closed_count || 0);
+    const syms = Array.isArray(d.symbols) ? d.symbols.slice(0, 5).join(', ') : '—';
+    _set('fx-symbols', syms + (d.timeframe ? ' · ' + d.timeframe : ''));
+    _set('fx-timeframe', 'Timeframe: ' + (d.timeframe || '1h'));
+    const wrap = document.getElementById('fx-open-trades-wrap');
+    if (wrap && d.open_trades && d.open_trades.length) {
+      wrap.style.display = 'block';
+      const rows = d.open_trades.map(t =>
+        `<tr><td>${t.symbol || '—'}</td><td class="${t.side === 'long' ? 'pnl-pos' : 'pnl-neg'}">${(t.side || '').toUpperCase()}</td><td>${Number(t.entry || 0).toFixed(5)}</td><td>${t.size || '—'}</td><td>${Number(t.score || 0).toFixed(2)}</td></tr>`
+      ).join('');
+      _set('fx-open-trades-body', rows);
+    }
+  } catch(e) {}
+}
+loadFxStatus();
+setInterval(loadFxStatus, 30000);
 </script>
 </body>
 </html>

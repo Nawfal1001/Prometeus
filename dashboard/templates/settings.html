@@ -7,7 +7,7 @@
 <style>.textarea{min-height:78px;width:100%;resize:vertical}.full{grid-column:1/-1}</style>
 </head>
 <body>
-<nav class="navbar"><div class="nav-brand">⚡ PROMETHEUS</div><div class="nav-links"><a href="/">Dashboard</a><a href="/scan">Scanner</a><a href="/fusion-watchlist">Fusion Watchlist</a><a href="/backtest">Backtest</a><a href="/optimize">Optimize</a><a href="/robust-optimize">Robust</a><a href="/lab">Lab</a><a href="/train">Train ML</a><a href="/log-trade">Trade Logs</a><a href="/health-dashboard">Health</a><a href="/settings" class="active">Settings</a></div><div class="nav-status"><span id="status-badge" class="badge badge-stopped">STOPPED</span></div></nav>
+<nav class="navbar"><div class="nav-brand">⚡ PROMETHEUS</div><div class="nav-links"><a href="/">Dashboard</a><a href="/scan">Scanner</a><a href="/fusion-watchlist">Fusion Watchlist</a><a href="/backtest">Backtest</a><a href="/optimize">Optimize</a><a href="/robust-optimize">Robust</a><a href="/lab">Lab</a><a href="/train">Train ML</a><a href="/log-trade">Trade Logs</a><a href="/health-dashboard">Health</a><a href="/fx">FX / Non-crypto</a><a href="/settings" class="active">Settings</a></div><div class="nav-status"><span id="status-badge" class="badge badge-stopped">STOPPED</span></div></nav>
 <div class="container">
   <div class="settings-header"><h1>⚙️ Settings</h1><div><button class="btn btn-secondary" type="button" onclick="loadSettings()">↻ Reload</button><button class="btn btn-primary" type="button" onclick="saveSettings()">💾 Save All</button></div></div>
   <div id="save-msg" class="save-msg" style="display:none"></div>
@@ -200,6 +200,31 @@
     </div></div>
 
     <!-- ================================================================ -->
+    <!-- FX / Non-crypto Engine -->
+    <!-- ================================================================ -->
+    <div class="settings-section"><div class="section-title">🌐 FX / Non-crypto Engine</div><div class="settings-grid">
+      <div class="field-group full"><label>Enable FX Engine</label><select name="NON_CRYPTO_ENABLED"><option value="false">Disabled</option><option value="true">Enabled — runs parallel alongside crypto engine</option></select><span class="hint">When enabled, a second engine trades forex, commodities, indices, and stocks with a regime-led weight profile.</span></div>
+      <div class="field-group full"><label>FX Symbols</label><textarea class="textarea" name="NON_CRYPTO_SYMBOLS" placeholder="EURUSD,GBPUSD,USDJPY,XAUUSD,USOIL,SPX500,NAS100"></textarea><span class="hint">Comma-separated list. Uses cTrader symbol names if Fusion Markets is selected.</span></div>
+      <div class="field-group"><label>FX Timeframe</label><select name="NON_CRYPTO_TIMEFRAME"><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="4h">4 hour</option></select></div>
+      <div class="field-group"><label>FX Fusion Threshold</label><input type="number" name="NON_CRYPTO_FUSION_THRESHOLD" min="0" max="1" step="0.01"><span class="hint">Default 0.20 (looser than crypto).</span></div>
+      <div class="field-group"><label>FX Max Risk Per Trade</label><input type="number" name="NON_CRYPTO_MAX_RISK_PER_TRADE" min="0.001" max="0.20" step="0.001"></div>
+      <div class="field-group"><label>FX ATR SL Mult</label><input type="number" name="NON_CRYPTO_ATR_SL_MULT" min="0.5" max="5" step="0.1"></div>
+      <div class="field-group"><label>FX ATR TP1 Mult</label><input type="number" name="NON_CRYPTO_ATR_TP1_MULT" min="0.5" max="10" step="0.1"></div>
+      <div class="field-group"><label>FX ATR TP2 Mult</label><input type="number" name="NON_CRYPTO_ATR_TP2_MULT" min="0.5" max="15" step="0.1"></div>
+      <div class="section-title" style="font-size:13px;padding:8px 0 4px;color:var(--muted)">FX Signal Weights (must sum to 1.0)</div>
+      <div class="field-group"><label>Regime Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_REGIME" min="0" max="1" step="0.01" class="fx-weight-input"></div>
+      <div class="field-group"><label>Entry Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_ENTRY" min="0" max="1" step="0.01" class="fx-weight-input"></div>
+      <div class="field-group"><label>Liquidation Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_LIQUIDATION" min="0" max="1" step="0.01" class="fx-weight-input"></div>
+      <div class="field-group"><label>Whale Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_WHALE" min="0" max="1" step="0.01" class="fx-weight-input"></div>
+      <div class="field-group"><label>Sentiment Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_SENTIMENT" min="0" max="1" step="0.01" class="fx-weight-input"><span class="hint">Keep at 0.00 — sentiment layer returns 0 for non-crypto.</span></div>
+      <div class="field-group"><label>FX Weight Sum</label><div class="weight-sum">Sum: <b id="fx-weight-sum">1.00</b></div></div>
+      <div class="section-title" style="font-size:13px;padding:8px 0 4px;color:var(--muted)">FX Optuna / Optimizer</div>
+      <div class="field-group"><label>Optuna Trials</label><input type="number" name="NON_CRYPTO_OPTUNA_TRIALS" min="1" max="500" step="1"></div>
+      <div class="field-group"><label>Timeout Seconds</label><input type="number" name="NON_CRYPTO_OPTUNA_TIMEOUT_SEC" min="30" max="7200" step="30"></div>
+      <div class="field-group"><label>Metric</label><input name="NON_CRYPTO_OPTUNA_METRIC" placeholder="target_150"></div>
+    </div></div>
+
+    <!-- ================================================================ -->
     <!-- System -->
     <!-- ================================================================ -->
     <div class="settings-section"><div class="section-title">⚙️ System</div><div class="settings-grid">
@@ -218,9 +243,9 @@ const boolKeys=new Set([
   'ALERT_ON_SIGNAL','ALERT_ON_TRADE','ALERT_ON_DAILY_SUMMARY','ALERT_ON_OPTIMIZATION',
   'EXIT_ON_REGIME_FLIP','EXIT_ON_SIGNAL_FLIP','PAPER_CONSERVATIVE_SAME_BAR','PAPER_FORCE_TRADE_ON_SIGNAL',
   'LIVE_CAPITAL_AUTOSYNC','TRADE_STOCKS_ONLY_HOURS','XGB_USE_OPTUNA_TUNING','XGB_USE_SCALE_POS_WEIGHT',
-  'EARLY_KILL_ENABLED','HTF_REQUIRES_LTF_CONFIRMATION','OPTUNA_TUNE_INDICATORS'
+  'EARLY_KILL_ENABLED','HTF_REQUIRES_LTF_CONFIRMATION','OPTUNA_TUNE_INDICATORS','NON_CRYPTO_ENABLED'
 ]);
-const listKeys=new Set(['SYMBOLS','PAPER_SYMBOLS']);
+const listKeys=new Set(['SYMBOLS','PAPER_SYMBOLS','NON_CRYPTO_SYMBOLS']);
 
 function updateMarketUI(){
   const ex = document.getElementById('exchange-select')?.value;
@@ -236,6 +261,8 @@ async function saveSettings(){try{const payload=collectSettings();const res=awai
 async function normalizeWeights(){const res=await fetch('/api/settings/normalize_weights',{method:'POST'});if(res.ok)await loadSettings();}
 function updateWeightSum(){const sum=[...document.querySelectorAll('.weight-input')].reduce((a,e)=>a+(parseFloat(e.value)||0),0);const el=document.getElementById('weight-sum');if(el){el.textContent=sum.toFixed(2);el.className=Math.abs(sum-1)<0.01?'green':'yellow';}}
 document.querySelectorAll('.weight-input').forEach(e=>e.addEventListener('input',updateWeightSum));
+function updateFxWeightSum(){const sum=[...document.querySelectorAll('.fx-weight-input')].reduce((a,e)=>a+(parseFloat(e.value)||0),0);const el=document.getElementById('fx-weight-sum');if(el){el.textContent=sum.toFixed(2);el.className=Math.abs(sum-1)<0.01?'green':'yellow';}}
+document.querySelectorAll('.fx-weight-input').forEach(e=>e.addEventListener('input',updateFxWeightSum));
 loadSettings();
 updateMarketUI();
 </script>

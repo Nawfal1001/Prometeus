@@ -170,6 +170,48 @@ async def fx_optimize(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# FX engine state (open trades, capital, running status)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/fx/state")
+async def fx_state():
+    import json as _json
+    from pathlib import Path
+    import main as _main
+
+    fx_trades_file = Path(__file__).parent.parent / "data" / "fx_paper_trades.json"
+    trades: list = []
+    if fx_trades_file.exists():
+        try:
+            raw = _json.loads(fx_trades_file.read_text())
+            trades = raw if isinstance(raw, list) else []
+        except Exception:
+            trades = []
+
+    open_trades = [t for t in trades if not t.get("exit_time")]
+    closed_trades = [t for t in trades if t.get("exit_time")]
+
+    capital = getattr(cfg, "INITIAL_CAPITAL", 50.0)
+    pnl = sum(float(t.get("pnl", 0)) for t in closed_trades)
+    final_capital = capital + pnl
+
+    fx_task = getattr(_main, "_fx_engine_task", None)
+    running = fx_task is not None and not fx_task.done()
+
+    return {
+        "enabled": bool(getattr(cfg, "NON_CRYPTO_ENABLED", False)),
+        "running": running,
+        "open_trades": open_trades,
+        "open_count": len(open_trades),
+        "closed_count": len(closed_trades),
+        "capital": round(final_capital, 2),
+        "pnl": round(pnl, 4),
+        "symbols": getattr(cfg, "NON_CRYPTO_SYMBOLS", []),
+        "timeframe": getattr(cfg, "NON_CRYPTO_TIMEFRAME", "1h"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Train non-crypto XGBoost model
 # ---------------------------------------------------------------------------
 
