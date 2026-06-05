@@ -9,6 +9,7 @@ from loguru import logger
 from core.risk.risk_manager import RiskManager
 from core.risk.position_sizer import size_from_atr_risk
 from core.execution.exit_manager import AdvancedExitManager
+from core.asset_class import classify_symbol
 import config.settings as cfg
 
 TRADES_FILE = Path(__file__).parent.parent.parent / "data" / "paper_trades.json"
@@ -32,6 +33,12 @@ class OrderManager:
         from pathlib import Path as _Path
         self._trades_file = _Path(trades_file) if trades_file else TRADES_FILE
         self._load_trades()
+        # Register with the cross-engine portfolio risk view (item 13).
+        try:
+            from core.risk.portfolio import portfolio_risk
+            portfolio_risk.register(self)
+        except Exception as e:
+            logger.debug(f"[Orders] portfolio register skipped: {e}")
 
     def _resolve_taker_fee(self, is_live: bool) -> float:
         if self.real_taker_fee and self.real_taker_fee > 0:
@@ -284,6 +291,17 @@ class OrderManager:
         if not allowed and user_forced:
             logger.warning(f"[Orders] User-forced trade overrides risk gate: {reason}")
 
+        # Portfolio-level multi-asset risk ceiling across crypto + FX engines.
+        if not user_forced:
+            try:
+                from core.risk.portfolio import portfolio_risk
+                p_ok, p_reason = portfolio_risk.check(symbol, signal, capital=self.risk.capital)
+                if not p_ok:
+                    logger.info(f"[Orders] Portfolio gate blocked {symbol}: {p_reason}")
+                    return {"status": "blocked", "reason": p_reason}
+            except Exception as e:
+                logger.debug(f"[Orders] portfolio gate skipped: {e}")
+
         if self.paper:
             return await self._paper_execute(signal, current_price, bar_time=bar_time)
         return await self._live_execute(signal, current_price, bar_time=bar_time)
@@ -312,6 +330,7 @@ class OrderManager:
         trade = {
             "id": trade_id,
             "symbol": symbol,
+            "asset_class": classify_symbol(symbol),
             "side": signal["side"],
             "direction": direction,
             "entry_price": entry_price,
@@ -369,11 +388,18 @@ class OrderManager:
         symbol = signal.get("symbol") or cfg.SYMBOL
         levels = self._build_exit_levels(signal, price, direction)
 
+        # Send the size in the unit THIS connector expects (item 12): CCXT
+        # futures want base qty, Alpaca wants USD notional. Default to qty.
+        try:
+            size_unit = self.exchange.order_size_unit()
+        except Exception:
+            size_unit = "qty"
+        order_size = notional if size_unit == "notional" else qty
         result = await self.exchange.place_order(
             symbol=symbol,
             side="buy" if direction == 1 else "sell",
             order_type="market",
-            size=qty,
+            size=order_size,
             stop_loss=levels.stop_loss,
             leverage=cfg.LEVERAGE,
         )
@@ -392,6 +418,7 @@ class OrderManager:
         trade = {
             "id": trade_id,
             "symbol": symbol,
+            "asset_class": classify_symbol(symbol),
             "side": signal["side"],
             "direction": direction,
             "entry_price": filled_price,

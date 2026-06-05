@@ -219,6 +219,18 @@ def reload_from_sources():
     MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 40)
     MAX_CONSEC_LOSSES = get_int("MAX_CONSEC_LOSSES", 4)
 
+    # ── Portfolio-level multi-asset risk (across crypto + FX engines) ────────
+    #  Loose defaults so today's crypto-only book never trips these; they only
+    #  bite once both engines run in parallel.
+    global PORTFOLIO_RISK_ENABLED, MAX_OPEN_TRADES_TOTAL, MAX_OPEN_TRADES_PER_CLASS
+    global MAX_PORTFOLIO_RISK, MAX_RISK_PER_SYMBOL, MAX_NET_DIR_RISK_PER_CLASS
+    PORTFOLIO_RISK_ENABLED = get_bool("PORTFOLIO_RISK_ENABLED", "true")
+    MAX_OPEN_TRADES_TOTAL = get_int("MAX_OPEN_TRADES_TOTAL", 12)
+    MAX_OPEN_TRADES_PER_CLASS = get_int("MAX_OPEN_TRADES_PER_CLASS", 6)
+    MAX_PORTFOLIO_RISK = get_float("MAX_PORTFOLIO_RISK", 0.20)
+    MAX_RISK_PER_SYMBOL = get_float("MAX_RISK_PER_SYMBOL", 0.06)
+    MAX_NET_DIR_RISK_PER_CLASS = get_float("MAX_NET_DIR_RISK_PER_CLASS", 0.12)
+
     FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.28)
     MIN_RR_RATIO = get_float("MIN_RR_RATIO", 2.5)
 
