@@ -36,23 +36,6 @@ class BinanceExchange(BaseExchange):
 
         logger.info(f"[Binance] Connector ready | market={market_type} | ccxt_type={ccxt_type} | testnet={testnet} | key_loaded={bool(api_key)}")
 
-    def capabilities(self) -> dict:
-        is_derivatives = self.market_type in ["futures", "margin"]
-        return {
-            "name": self.name,
-            "asset_classes": ["crypto"],
-            "live_trading": bool(self.api_key and self.secret),
-            "paper_trading": True,
-            "shorting": is_derivatives,
-            "leverage": is_derivatives,
-            "funding": self.market_type == "futures",
-            "open_interest": self.market_type == "futures",
-            "orderbook": True,
-            "order_size_mode": "base_qty",
-            "market_type": self.market_type,
-            "testnet": bool(self.testnet),
-        }
-
     def _normalize_symbol(self, symbol: str) -> str:
         symbol = self._to_ccxt_symbol(symbol)
         # Add Binance futures settlement suffix if confirmed in loaded markets
