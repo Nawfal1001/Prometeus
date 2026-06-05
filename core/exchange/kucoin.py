@@ -32,9 +32,11 @@ class KucoinExchange(BaseExchange):
         logger.info(f"[KuCoin] Ready | market={self.market_type} | data/paper-only")
 
     def _normalize_symbol(self, symbol: str) -> str:
-        if self.market_type in ("futures", "future", "swap") and ":" not in symbol:
-            if symbol.endswith("/USDT"):
-                return f"{symbol}:USDT"
+        symbol = self._to_ccxt_symbol(symbol)
+        # Add KuCoin futures settlement suffix: BTC/USDT → BTC/USDT:USDT
+        if self.market_type in ("futures", "future", "swap") and ":" not in symbol and "/" in symbol:
+            quote = symbol.split("/")[1]
+            return f"{symbol}:{quote}"
         return symbol
 
     def _timeframe_ms(self, timeframe: str) -> int:

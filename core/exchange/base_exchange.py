@@ -111,6 +111,28 @@ class BaseExchange(ABC):
 
     # ── Utilities ─────────────────────────────────────────────
 
+    @staticmethod
+    def _to_ccxt_symbol(symbol: str) -> str:
+        """Normalize any symbol format to CCXT slash notation.
+
+        Handles Bybit perpetual style (BTCUSD → BTC/USDT),
+        plain pair style (BTCUSDT → BTC/USDT), and passthrough
+        for already-correct formats (BTC/USDT or BTC/USDT:USDT).
+        """
+        if "/" in symbol:
+            return symbol
+        if symbol.endswith("USDT"):
+            return f"{symbol[:-4]}/USDT"
+        if symbol.endswith("USDC"):
+            return f"{symbol[:-4]}/USDC"
+        if symbol.endswith("USD"):
+            return f"{symbol[:-3]}/USDT"
+        if symbol.endswith("BTC"):
+            return f"{symbol[:-3]}/BTC"
+        if symbol.endswith("ETH"):
+            return f"{symbol[:-3]}/ETH"
+        return symbol
+
     def get_name(self) -> str:
         return self.name
 

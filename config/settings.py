@@ -155,8 +155,8 @@ def reload_from_sources():
     ALPACA_PAPER = get_bool("ALPACA_PAPER", "true")
 
     SYMBOL = get("SYMBOL", "BTC/USDT")
-    SYMBOLS = get_list("SYMBOLS", SYMBOL)
-    PAPER_SYMBOLS = get_list("PAPER_SYMBOLS", ",".join(SYMBOLS or [SYMBOL]))
+    SYMBOLS = get_list("SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT")
+    PAPER_SYMBOLS = get_list("PAPER_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT")
     TIMEFRAME = get("TIMEFRAME", "30m")
     LEVERAGE = get_int("LEVERAGE", 3)
     INITIAL_CAPITAL = get_float("INITIAL_CAPITAL", 50)

@@ -37,8 +37,10 @@ class BinanceExchange(BaseExchange):
         logger.info(f"[Binance] Connector ready | market={market_type} | ccxt_type={ccxt_type} | testnet={testnet} | key_loaded={bool(api_key)}")
 
     def _normalize_symbol(self, symbol: str) -> str:
-        if self.market_type == "futures" and ":" not in symbol and symbol.endswith("/USDT"):
-            futures_symbol = f"{symbol}:USDT"
+        symbol = self._to_ccxt_symbol(symbol)
+        # Add Binance futures settlement suffix if confirmed in loaded markets
+        if self.market_type == "futures" and ":" not in symbol and "/" in symbol:
+            futures_symbol = f"{symbol}:{symbol.split('/')[1]}"
             if hasattr(self._client, "markets") and self._client.markets and futures_symbol in self._client.markets:
                 return futures_symbol
         return symbol
