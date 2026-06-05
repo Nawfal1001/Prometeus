@@ -31,24 +31,6 @@ class KucoinExchange(BaseExchange):
 
         logger.info(f"[KuCoin] Ready | market={self.market_type} | data/paper-only")
 
-    def capabilities(self) -> dict:
-        is_derivatives = self.market_type in ("futures", "future", "swap")
-        return {
-            "name": self.name,
-            "asset_classes": ["crypto"],
-            "live_trading": False,
-            "paper_trading": True,
-            "data_only": True,
-            "shorting": False,
-            "leverage": False,
-            "funding": is_derivatives,
-            "open_interest": is_derivatives,
-            "orderbook": True,
-            "order_size_mode": "paper_only",
-            "market_type": self.market_type,
-            "testnet": bool(self.testnet),
-        }
-
     def _normalize_symbol(self, symbol: str) -> str:
         symbol = self._to_ccxt_symbol(symbol)
         # Add KuCoin futures settlement suffix: BTC/USDT → BTC/USDT:USDT
