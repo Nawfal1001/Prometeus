@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — FX / Non-crypto</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.class-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600;letter-spacing:.5px}
+.class-forex{background:#1a3a5c;color:#4da6ff}
+.class-commodity{background:#3a2a00;color:#ffc947}
+.class-index{background:#1a3a1a;color:#4dcc7a}
+.class-stock{background:#2d1a3a;color:#c47aff}
+.class-crypto{background:#1a2a3a;color:#7ab8ff}
+.session-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.session-active{background:#4dcc7a}
+.session-inactive{background:#555}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scan">Crypto Scanner</a>
+    <a href="/fx" class="active">FX / Non-crypto</a>
+    <a href="/fusion-watchlist">Watchlist</a>
+    <a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a>
+    <a href="/lab">Lab</a>
+    <a href="/train">Train ML</a>
+    <a href="/settings">Settings</a>
+  </div>
+</nav>
+
+<div class="container">
+<h1>🌐 FX / Non-crypto Scanner</h1>
+<p style="color:var(--muted);margin-bottom:20px">
+  Separate signal engine for forex, commodities, indices, and stocks.
+  Uses a regime-led weight profile (Regime 30 % · Entry 40 % · Liquidation 20 % · Whale 10 %)
+  with per-class ATR thresholds and session gating.
+  The crypto Fear &amp; Greed index is excluded.
+</p>
+
+<!-- Scanner config -->
+<div class="card">
+  <div class="card-header">Scanner Config</div>
+  <div class="settings-grid" style="padding:20px">
+    <div class="field-group">
+      <label>Symbols (comma-separated, cTrader format)</label>
+      <input id="fx-symbols" value="EURUSD,GBPUSD,USDJPY,XAUUSD,USOIL,SPX500,NAS100" style="width:100%">
+    </div>
+    <div class="field-group">
+      <label>Timeframe</label>
+      <select id="fx-timeframe">
+        <option>15m</option>
+        <option>30m</option>
+        <option value="1h" selected>1h</option>
+        <option>4h</option>
+        <option>1d</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>Candles per symbol</label>
+      <input id="fx-limit" type="number" value="500" min="100" max="2000" step="100">
+    </div>
+  </div>
+  <div style="padding:0 20px 20px">
+    <button class="btn btn-primary" onclick="runScan()">📡 Run FX Scan</button>
+    <button class="btn" onclick="loadUniverse()" style="margin-left:8px">🌐 Load Universe</button>
+    <span id="fx-status" style="margin-left:12px;color:var(--muted)"></span>
+  </div>
+</div>
+
+<!-- Scan results -->
+<div class="card mt">
+  <div class="card-header">🏆 Ranked Opportunities</div>
+  <div style="overflow-x:auto">
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>#</th><th>Symbol</th><th>Class</th><th>Session</th>
+        <th>Side</th><th>Tradable</th><th>Score/100</th><th>Confidence</th>
+        <th>Fusion</th><th>RR</th><th>ATR</th><th>Vol</th><th>Price</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody id="fx-scan-body"></tbody>
+  </table>
+  </div>
+</div>
+
+<!-- Backtest panel -->
+<div class="card mt">
+  <div class="card-header">📈 Single-symbol Backtest</div>
+  <div class="settings-grid" style="padding:20px">
+    <div class="field-group">
+      <label>Symbol</label>
+      <input id="bt-symbol" value="EURUSD">
+    </div>
+    <div class="field-group">
+      <label>Timeframe</label>
+      <select id="bt-timeframe">
+        <option>30m</option><option value="1h" selected>1h</option><option>4h</option><option>1d</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>Candles</label>
+      <input id="bt-limit" type="number" value="1500" min="400" max="5000" step="100">
+    </div>
+  </div>
+  <div style="padding:0 20px 20px">
+    <button class="btn btn-primary" onclick="runBacktest()">🔬 Run Backtest</button>
+    <span id="bt-status" style="margin-left:12px;color:var(--muted)"></span>
+  </div>
+  <div id="bt-results" style="padding:0 20px 20px;display:none">
+    <pre id="bt-json" style="font-size:12px;background:var(--card-bg);padding:12px;border-radius:6px;overflow-x:auto;max-height:300px"></pre>
+  </div>
+</div>
+
+<!-- Optimize panel -->
+<div class="card mt">
+  <div class="card-header">⚙️ Non-crypto Optimizer (Optuna)</div>
+  <div class="settings-grid" style="padding:20px">
+    <div class="field-group">
+      <label>Symbol(s) — comma-separated for compete mode</label>
+      <input id="opt-symbols" value="EURUSD,XAUUSD,SPX500">
+    </div>
+    <div class="field-group">
+      <label>Timeframe</label>
+      <select id="opt-timeframe">
+        <option>30m</option><option value="1h" selected>1h</option><option>4h</option><option>1d</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>Trials</label>
+      <input id="opt-trials" type="number" value="50" min="10" max="300">
+    </div>
+    <div class="field-group" style="align-items:center">
+      <label><input type="checkbox" id="opt-apply"> Apply best params when done</label>
+    </div>
+  </div>
+  <div style="padding:0 20px 20px">
+    <button class="btn btn-primary" onclick="runOptimize()">🧬 Run FX Optimizer</button>
+    <span id="opt-status" style="margin-left:12px;color:var(--muted)"></span>
+  </div>
+  <div id="opt-results" style="padding:0 20px 20px;display:none">
+    <pre id="opt-json" style="font-size:12px;background:var(--card-bg);padding:12px;border-radius:6px;overflow-x:auto;max-height:300px"></pre>
+  </div>
+</div>
+
+<!-- Train non-crypto XGBoost -->
+<div class="card mt">
+  <div class="card-header">🤖 Train Non-crypto ML Model</div>
+  <p style="padding:12px 20px 0;color:var(--muted);font-size:13px">
+    Trains a separate XGBoost model on the symbols below.
+    Does not overwrite the crypto model.
+  </p>
+  <div class="settings-grid" style="padding:12px 20px">
+    <div class="field-group">
+      <label>Training symbols</label>
+      <input id="train-symbols" value="EURUSD,GBPUSD,XAUUSD,SPX500,NAS100" style="width:100%">
+    </div>
+    <div class="field-group">
+      <label>Timeframe</label>
+      <select id="train-timeframe">
+        <option>30m</option><option value="1h" selected>1h</option><option>4h</option>
+      </select>
+    </div>
+    <div class="field-group">
+      <label>Candles per symbol</label>
+      <input id="train-limit" type="number" value="2000" min="500" max="5000" step="100">
+    </div>
+  </div>
+  <div style="padding:0 20px 20px">
+    <button class="btn btn-primary" onclick="runTrain()">🤖 Train Model</button>
+    <span id="train-status" style="margin-left:12px;color:var(--muted)"></span>
+  </div>
+</div>
+
+<!-- Universe (loaded on demand) -->
+<div id="universe-section" style="display:none">
+<div class="card mt">
+  <div class="card-header">🌐 FusionMarkets Universe</div>
+  <div style="overflow-x:auto">
+  <table class="trade-table">
+    <thead><tr><th>Symbol</th><th>Display</th><th>Class</th><th>Sessions</th><th>Active Now</th><th>Aliases</th></tr></thead>
+    <tbody id="universe-body"></tbody>
+  </table>
+  </div>
+</div>
+</div>
+
+</div><!-- .container -->
+
+<script>
+function fmt(v,d=4){return Number.isFinite(Number(v))?Number(v).toFixed(d):'—'}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function pct100(v){return Number.isFinite(Number(v))?Number(v).toFixed(1)+'%':'—'}
+function rank100(v){return Number.isFinite(Number(v))?(Math.max(0,Math.min(1,Number(v)))*100).toFixed(1):'—'}
+
+const CLASS_BADGE = {
+  forex:     '<span class="class-badge class-forex">FX</span>',
+  commodity: '<span class="class-badge class-commodity">Commodity</span>',
+  index:     '<span class="class-badge class-index">Index</span>',
+  stock:     '<span class="class-badge class-stock">Stock</span>',
+  crypto:    '<span class="class-badge class-crypto">Crypto</span>',
+};
+
+function classBadge(c){return CLASS_BADGE[c]||`<span class="class-badge">${esc(c)}</span>`}
+
+function sessionDot(active){
+  const cls = active ? 'session-active' : 'session-inactive';
+  const label = active ? 'Active' : 'Closed';
+  return `<span class="session-dot ${cls}"></span>${label}`;
+}
+
+async function runScan(){
+  const symbols = document.getElementById('fx-symbols').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const timeframe = document.getElementById('fx-timeframe').value;
+  const limit = parseInt(document.getElementById('fx-limit').value)||500;
+  const st = document.getElementById('fx-status');
+  st.textContent = 'Scanning…';
+  try {
+    const res = await fetch('/api/fx/scan',{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify({symbols,timeframe,limit})});
+    const data = await res.json();
+    if(!res.ok||data.error){st.textContent='Error: '+(data.error||res.status);return;}
+    const rows = data.symbols||[];
+    const ok = rows.filter(r=>!r.error).length;
+    const tradable = rows.filter(r=>r.tradable).length;
+    const best = data.best;
+    st.textContent = `Done — ${ok} scanned, ${tradable} tradable, best: ${best?.symbol||'none'}`;
+    document.getElementById('fx-scan-body').innerHTML = rows.map((r,i) =>
+      `<tr>
+        <td>#${i+1}</td>
+        <td><b>${esc(r.symbol)}</b></td>
+        <td>${classBadge(r.asset_class||'crypto')}</td>
+        <td>${sessionDot(r.session_active!==false)}</td>
+        <td style="color:${r.side==='long'?'var(--green)':r.side==='short'?'var(--red)':'var(--muted)'}">${esc(r.side||'—')}</td>
+        <td>${r.tradable?'✅':'—'}</td>
+        <td>${rank100(r.rank_score)}</td>
+        <td>${pct100(r.confidence)}</td>
+        <td>${fmt(r.fusion_score,3)}</td>
+        <td>${fmt(r.risk_reward,2)}</td>
+        <td>${fmt(r.atr_norm,5)}</td>
+        <td>${fmt(r.vol_ratio,2)}</td>
+        <td>${fmt(r.price,r.price>100?2:5)}</td>
+        <td style="max-width:280px;white-space:normal;color:${r.error?'var(--red)':'var(--muted)'}">${esc(r.error||r.reason||'ok')}</td>
+      </tr>`
+    ).join('');
+  } catch(e){st.textContent='Error: '+e.message;}
+}
+
+async function runBacktest(){
+  const symbol = document.getElementById('bt-symbol').value.trim()||'EURUSD';
+  const timeframe = document.getElementById('bt-timeframe').value;
+  const limit = parseInt(document.getElementById('bt-limit').value)||1500;
+  const st = document.getElementById('bt-status');
+  st.textContent = 'Running…';
+  document.getElementById('bt-results').style.display='none';
+  try {
+    const res = await fetch('/api/fx/backtest',{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify({symbol,timeframe,limit})});
+    const data = await res.json();
+    if(!res.ok||data.error){st.textContent='Error: '+(data.error||res.status);return;}
+    const s = `${symbol} | trades:${data.n_trades||0} | WR:${fmt(data.win_rate,1)}% | PF:${fmt(data.profit_factor,2)} | MaxDD:${fmt(data.max_drawdown,1)}% | Final:$${fmt(data.final_capital,2)}`;
+    st.textContent = s;
+    document.getElementById('bt-json').textContent = JSON.stringify(data,null,2);
+    document.getElementById('bt-results').style.display='block';
+  } catch(e){st.textContent='Error: '+e.message;}
+}
+
+async function runOptimize(){
+  const rawSyms = document.getElementById('opt-symbols').value.trim();
+  const symbols = rawSyms.split(',').map(s=>s.trim()).filter(Boolean);
+  const timeframe = document.getElementById('opt-timeframe').value;
+  const n_trials = parseInt(document.getElementById('opt-trials').value)||50;
+  const apply_best = document.getElementById('opt-apply').checked;
+  const st = document.getElementById('opt-status');
+  st.textContent = 'Optimizing… (this may take several minutes)';
+  document.getElementById('opt-results').style.display='none';
+  try {
+    const body = symbols.length>1
+      ? {symbols,timeframe,n_trials,apply_best}
+      : {symbol:symbols[0],timeframe,n_trials,apply_best};
+    const res = await fetch('/api/fx/optimize',{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify(body)});
+    const data = await res.json();
+    if(!res.ok||data.error){st.textContent='Error: '+(data.error||res.status);return;}
+    st.textContent = `Done — best score: ${fmt(data.best_value,4)} in ${data.n_trials||'?'} trials`;
+    document.getElementById('opt-json').textContent = JSON.stringify(data,null,2);
+    document.getElementById('opt-results').style.display='block';
+  } catch(e){st.textContent='Error: '+e.message;}
+}
+
+async function runTrain(){
+  const rawSyms = document.getElementById('train-symbols').value.trim();
+  const symbols = rawSyms.split(',').map(s=>s.trim()).filter(Boolean);
+  const timeframe = document.getElementById('train-timeframe').value;
+  const limit = parseInt(document.getElementById('train-limit').value)||2000;
+  const st = document.getElementById('train-status');
+  st.textContent = 'Training… (fetching data, may take a minute)';
+  try {
+    const res = await fetch('/api/fx/train',{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify({symbols,timeframe,limit})});
+    const data = await res.json();
+    if(!res.ok||data.error){st.textContent='Error: '+(data.error||res.status);return;}
+    st.textContent = `Trained on ${data.rows} rows across ${(data.symbols||[]).length} symbols`;
+  } catch(e){st.textContent='Error: '+e.message;}
+}
+
+async function loadUniverse(){
+  const st = document.getElementById('fx-status');
+  st.textContent = 'Loading universe…';
+  try {
+    const res = await fetch('/api/fx/universe');
+    const data = await res.json();
+    const rows = (data.universe||[]);
+    document.getElementById('universe-body').innerHTML = rows.map(r =>
+      `<tr>
+        <td><b>${esc(r.symbol)}</b></td>
+        <td>${esc(r.display)}</td>
+        <td>${classBadge(r.class)}</td>
+        <td style="font-size:12px;color:var(--muted)">${(r.sessions||[]).join(', ')}</td>
+        <td>${sessionDot(r.active_now)}</td>
+        <td style="font-size:11px;color:var(--muted)">${(r.aliases||[]).join(', ')}</td>
+      </tr>`
+    ).join('');
+    document.getElementById('universe-section').style.display='block';
+    st.textContent = `${rows.length} instruments loaded`;
+  } catch(e){st.textContent='Error: '+e.message;}
+}
+</script>
+</body>
+</html>

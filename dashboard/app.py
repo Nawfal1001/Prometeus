@@ -29,6 +29,7 @@ from dashboard.api_backtest_multi import router as backtest_multi_router
 from dashboard.api_optimize_multi import router as optimize_multi_router
 from dashboard.api_lab import router as lab_router
 from dashboard.api_fusion_watchlist import router as fusion_watchlist_router
+from dashboard.api_fx import router as fx_router
 from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
@@ -62,6 +63,7 @@ app.include_router(backtest_multi_router)
 app.include_router(optimize_multi_router)
 app.include_router(lab_router)
 app.include_router(fusion_watchlist_router)
+app.include_router(fx_router)
 
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()
@@ -594,6 +596,11 @@ async def dashboard(request: Request):
 @app.get("/scan", response_class=HTMLResponse)
 async def scan_page(request: Request):
     return templates.TemplateResponse("scan.html", {"request": request})
+
+
+@app.get("/fx", response_class=HTMLResponse)
+async def fx_page(request: Request):
+    return templates.TemplateResponse("fx.html", {"request": request})
 
 
 @app.get("/fusion-watchlist", response_class=HTMLResponse)
