@@ -224,6 +224,8 @@ class PrometheusEngine:
         # stale candles, wide spreads are common and would produce garbage
         # signals). For crypto it is advisory-only so existing behaviour is
         # unchanged — a healthy 24/7 feed never trips the lenient thresholds.
+        # Kept as a local (not an instance attr) so parallel scanning is safe.
+        _dq_dict = None
         try:
             from core import data_quality as _dq
             _q = _dq.check(symbol, df, self._tf, orderbook=orderbook,
@@ -232,7 +234,7 @@ class PrometheusEngine:
                 journal.autoscan(symbol, reason=f"data_quality:{_q.reason}")
                 logger.debug(f"[Engine] {symbol} skipped — data_quality={_q.reason}")
                 return None
-            self._last_data_quality = _q.as_dict()
+            _dq_dict = _q.as_dict()
         except Exception as e:
             logger.debug(f"[Engine] data-quality check skipped for {symbol}: {e}")
 
@@ -276,7 +278,7 @@ class PrometheusEngine:
             "vol_zscore": vol_zscore,
             "recent_high": recent_high,
             "recent_low": recent_low,
-            "data_quality": getattr(self, "_last_data_quality", None),
+            "data_quality": _dq_dict,
         })
         # Prefer the scores fusion actually used (correct for the non-crypto
         # availability-aware path); fall back to the locally computed floats.
@@ -321,25 +323,66 @@ class PrometheusEngine:
             layer_sources=layer_sources_live,
         )
 
+    def _validate_symbols(self, symbols: list[str]) -> list[str]:
+        """Drop symbols the current exchange can't serve (item 8).
+
+        Validates each SymbolProfile against the connector's capabilities()
+        before it ever reaches a scan/trade. Result is cached per exchange so
+        the check runs once, not every autoscan.
+        """
+        try:
+            caps = self.exchange.capabilities()
+        except Exception:
+            return symbols  # connector without caps → don't filter
+        cache_key = getattr(caps, "name", "") + ("|live" if not self.paper else "|paper")
+        if getattr(self, "_symbols_validated_for", None) == cache_key and getattr(self, "_valid_symbols", None):
+            return self._valid_symbols
+        from core.symbol_profile import SymbolProfile
+        from core.exchange.capabilities import validate_profile
+        live = not self.paper
+        ok: list[str] = []
+        for sym in symbols:
+            prof = SymbolProfile.from_symbol(sym, live_enabled=live, paper_enabled=self.paper)
+            problems = validate_profile(caps, prof, live=live)
+            if problems:
+                logger.warning(f"[Engine] {sym} unsupported on {caps.name}: {problems[0]}")
+                journal.autoscan(sym, reason=f"unsupported_on_{caps.name}")
+            else:
+                ok.append(sym)
+        self._symbols_validated_for = cache_key
+        self._valid_symbols = ok or symbols  # never strand the engine with nothing
+        return self._valid_symbols
+
+    async def _scan_one(self, symbol: str, sem):
+        async with sem:
+            try:
+                item = await self._symbol_signal(symbol)
+            except Exception as e:
+                logger.warning(f"[Rotator] scan failed for {symbol}: {e}")
+                journal.autoscan(symbol, reason=f"scan_failed: {e}")
+                return None
+            if not item:
+                return None
+            sig = item["signal"]
+            base_score = abs(float(sig.get("fusion_score", 0.0) or 0.0))
+            journal.autoscan(symbol, score=base_score, trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=None, fusion_score=sig.get("fusion_score"), confidence=sig.get("confidence"), risk_amount=sig.get("risk_amount"), notional=sig.get("notional"))
+            return {**item, "score": base_score}
+
     async def _autoscan(self, force: bool = False):
         now = time.time()
         interval = int(getattr(cfg, "AUTOSCAN_INTERVAL_SEC", 900))
         if not force and now - self._last_autoscan < interval and self._rotator_ranked:
             return self._rotator_ranked
-        journal.add("autoscan_start", f"autoscan started symbols={len(self._symbols())}", symbols=self._symbols(), interval=interval)
-        candidates = []
-        for symbol in self._symbols():
-            try:
-                item = await self._symbol_signal(symbol)
-                if not item:
-                    continue
-                sig = item["signal"]
-                base_score = abs(float(sig.get("fusion_score", 0.0) or 0.0))
-                journal.autoscan(symbol, score=base_score, trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=None, fusion_score=sig.get("fusion_score"), confidence=sig.get("confidence"), risk_amount=sig.get("risk_amount"), notional=sig.get("notional"))
-                candidates.append({**item, "score": base_score})
-            except Exception as e:
-                logger.warning(f"[Rotator] scan failed for {symbol}: {e}")
-                journal.autoscan(symbol, reason=f"scan_failed: {e}")
+        symbols = self._validate_symbols(self._symbols())
+        journal.add("autoscan_start", f"autoscan started symbols={len(symbols)}", symbols=symbols, interval=interval)
+        # Bounded concurrency (item 7): scan symbols in parallel but cap the
+        # number of simultaneous API calls so we don't trip exchange rate
+        # limits. Per-symbol layer state is keyed by symbol, so parallel scans
+        # of distinct symbols are safe.
+        limit = max(1, int(getattr(cfg, "SCAN_CONCURRENCY", 4)))
+        sem = asyncio.Semaphore(limit)
+        results = await asyncio.gather(*[self._scan_one(s, sem) for s in symbols])
+        candidates = [r for r in results if r]
         ranked = self.selector.rank(candidates)
         ranked = ranked[: int(getattr(cfg, "AUTOSCAN_TOP_N", 5))]
         for r in ranked:
