@@ -8,6 +8,7 @@
 import numpy as np
 from loguru import logger
 import config.settings as cfg
+from core.asset_class import is_crypto
 from core.layers.api_confirmations import coinanalyse_derivatives_pressure
 
 
@@ -26,7 +27,7 @@ class LiquidationGravity:
       - wick clusters
       - volume around liquidity zones
 
-    CoinAnalyze is optional confirmation, not a hard dependency.
+    CoinAnalyze is optional crypto-derivatives confirmation, not a hard dependency.
     """
 
     def __init__(self):
@@ -37,7 +38,7 @@ class LiquidationGravity:
 
     def update(self, current_price: float, symbol: str = "BTC", df=None) -> dict:
         clusters = self._ohlcv_liquidity_clusters(df, current_price)
-        ca = coinanalyse_derivatives_pressure(symbol)
+        ca = coinanalyse_derivatives_pressure(symbol) if is_crypto(symbol) else None
 
         if not clusters:
             api_score = float(ca.get("score", 0.0)) if isinstance(ca, dict) else 0.0
