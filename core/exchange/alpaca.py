@@ -141,17 +141,28 @@ class AlpacaExchange(BaseExchange):
             clean     = symbol.split("/")[0].upper()
             alpaca_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
-            # Stocks: convert size (USDT) to shares
-            ticker    = await self.get_ticker(symbol)
-            price_now = ticker.get("last", 1)
-            shares    = max(1, int(size / price_now))
-
-            req = MarketOrderRequest(
-                symbol       = clean,
-                qty          = shares,
-                side         = alpaca_side,
-                time_in_force = TimeInForce.DAY,
-            )
+            # `size` is a USD NOTIONAL (ORDER_SIZE_UNIT == "notional").
+            # Alpaca accepts notional natively for long market orders and
+            # fills fractionally — no lossy share rounding. Shorts cannot be
+            # fractional/notional on Alpaca, so convert to whole shares.
+            notional = float(size)
+            if side == "buy":
+                req = MarketOrderRequest(
+                    symbol        = clean,
+                    notional      = round(notional, 2),
+                    side          = alpaca_side,
+                    time_in_force = TimeInForce.DAY,
+                )
+            else:
+                ticker    = await self.get_ticker(symbol)
+                price_now = float(ticker.get("last") or 0) or 1.0
+                shares    = max(1, int(notional / price_now))
+                req = MarketOrderRequest(
+                    symbol        = clean,
+                    qty           = shares,
+                    side          = alpaca_side,
+                    time_in_force = TimeInForce.DAY,
+                )
             order = self._rest.submit_order(req)
             return {
                 "order_id":    str(order.id),
@@ -194,6 +205,26 @@ class AlpacaExchange(BaseExchange):
 
     def supports_leverage(self):
         return False  # No leverage on basic Alpaca (Reg T margin only)
+
+    # OrderManager passes a USD notional; Alpaca natively accepts notional
+    # for market orders, so declare it explicitly (item 12). place_order
+    # below honours this rather than guessing shares from a stale ticker.
+    ORDER_SIZE_UNIT = "notional"
+
+    def capabilities(self):
+        from core.exchange.capabilities import ExchangeCapabilities
+        return ExchangeCapabilities(
+            name="alpaca",
+            asset_classes=frozenset({"stock", "index", "crypto"}),
+            live_trading=True,        # real orders (paper account if ALPACA_PAPER)
+            paper_trading=True,
+            shorting=True,
+            leverage=False,
+            funding=False,
+            open_interest=False,
+            orderbook=False,          # no L2 on free tier
+            market_hours=True,        # US market hours
+        )
 
     def get_market_type(self):
         return "stocks"

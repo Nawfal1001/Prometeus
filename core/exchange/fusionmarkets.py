@@ -229,6 +229,25 @@ class FusionMarketsExchange(BaseExchange):
     async def get_taker_fee(self, symbol: str) -> float:
         return float(getattr(cfg, "FUSION_TAKER_FEE", 0.0) or 0.0)
 
+    # cTrader order volume is in instrument units (qty); the connector
+    # converts internally. Callers pass qty.
+    ORDER_SIZE_UNIT = "qty"
+
+    def capabilities(self):
+        from core.exchange.capabilities import ExchangeCapabilities
+        return ExchangeCapabilities(
+            name="fusionmarkets",
+            asset_classes=frozenset({"forex", "commodity", "index", "stock", "crypto"}),
+            live_trading=True,
+            paper_trading=True,
+            shorting=True,        # CFDs can be sold short
+            leverage=True,        # broker-side leverage
+            funding=False,        # no perp funding on CFDs
+            open_interest=False,
+            orderbook=True,
+            market_hours=True,    # forex/commodity/index/stock sessions apply
+        )
+
     async def close(self):
         await self.client.close()
         if self._paper_data_exchange is not None and hasattr(self._paper_data_exchange, "close"):

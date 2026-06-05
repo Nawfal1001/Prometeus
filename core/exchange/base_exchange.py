@@ -109,6 +109,33 @@ class BaseExchange(ABC):
         Override in subclasses; default returns 0 so callers know it's unknown."""
         return 0.0
 
+    # ── Capabilities ──────────────────────────────────────────
+
+    def capabilities(self):
+        """Return an ExchangeCapabilities describing what this connector can do.
+
+        The engine validates every SymbolProfile against this before
+        scanning/trading. Conservative default: data/paper only, no live,
+        no shorting/leverage. Subclasses override with their real powers.
+        """
+        from core.exchange.capabilities import ExchangeCapabilities
+        return ExchangeCapabilities(
+            name=getattr(self, "name", "base"),
+            asset_classes=frozenset(),
+            live_trading=False,
+            paper_trading=True,
+        )
+
+    # ── Order-size semantics ──────────────────────────────────
+    #  Tells OrderManager how the `size` argument to place_order is
+    #  interpreted by THIS connector, so callers convert correctly
+    #  (item 12 — Alpaca treats size as notional, CCXT futures as qty).
+    #  One of: "qty" | "contracts" | "shares" | "notional".
+    ORDER_SIZE_UNIT = "qty"
+
+    def order_size_unit(self) -> str:
+        return getattr(self, "ORDER_SIZE_UNIT", "qty")
+
     # ── Utilities ─────────────────────────────────────────────
 
     @staticmethod

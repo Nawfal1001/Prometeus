@@ -167,10 +167,44 @@ class BinanceExchange(BaseExchange):
     # ── Account ───────────────────────────────────────────────
 
     async def get_balance(self):
+        """Return free cash AND true account equity.
+
+        Spot: total_equity == free USDT (no positions concept here).
+        Futures/Margin: free USDT understates the account because it
+        excludes margin locked in open positions and unrealized PnL.
+        We surface the real wallet/margin equity from the raw CCXT
+        payload so live capital sync reflects the actual account value,
+        not just idle cash (item 10).
+        """
         try:
             bal  = await self._client.fetch_balance()
-            usdt = bal.get("USDT", {}).get("free", 0.0)
-            return {"USDT": usdt, "total_equity": usdt}
+            usdt_free  = float(bal.get("USDT", {}).get("free", 0.0) or 0.0)
+            usdt_total = float(bal.get("USDT", {}).get("total", usdt_free) or usdt_free)
+
+            equity = usdt_total
+            if self.market_type in ("futures", "margin"):
+                info = bal.get("info", {}) or {}
+                # USDM futures (fapi) exposes totalMarginBalance / totalWalletBalance.
+                for key in ("totalMarginBalance", "totalWalletBalance",
+                            "totalCrossWalletBalance", "marginBalance"):
+                    raw = info.get(key)
+                    if raw is not None:
+                        try:
+                            equity = float(raw)
+                            break
+                        except (TypeError, ValueError):
+                            continue
+                # Coin-M / portfolio payloads sometimes nest a list of assets.
+                if equity <= 0 and isinstance(info.get("assets"), list):
+                    try:
+                        equity = sum(float(a.get("marginBalance", 0) or 0)
+                                     for a in info["assets"])
+                    except (TypeError, ValueError):
+                        pass
+                if equity <= 0:
+                    equity = usdt_total
+
+            return {"USDT": usdt_free, "total_equity": float(equity)}
         except Exception as e:
             logger.error(f"[Binance] get_balance: {e}")
             return {"USDT": 0.0, "total_equity": 0.0}
@@ -280,3 +314,22 @@ class BinanceExchange(BaseExchange):
 
     def supports_leverage(self):
         return self.market_type in ["futures", "margin"]
+
+    # CCXT create_order takes base-asset quantity, not notional.
+    ORDER_SIZE_UNIT = "qty"
+
+    def capabilities(self):
+        from core.exchange.capabilities import ExchangeCapabilities
+        is_deriv = self.market_type in ("futures", "margin")
+        return ExchangeCapabilities(
+            name="binance",
+            asset_classes=frozenset({"crypto"}),
+            live_trading=True,
+            paper_trading=True,
+            shorting=is_deriv,
+            leverage=is_deriv,
+            funding=self.market_type == "futures",
+            open_interest=self.market_type == "futures",
+            orderbook=True,
+            market_hours=False,  # crypto 24/7
+        )

@@ -145,8 +145,73 @@ class FusionEngine:
             return self._no_trade("chaos_regime")
         scores = {"regime": regime_score, "sentiment": sentiment_score, "whale": whale_score, "liquidation": liquidation_score, "entry": entry_score}
         effective_weights, independence = self._effective_weights(scores, layer_sources)
+        return self._fuse_core(
+            scores, effective_weights, independence,
+            regime_bias=regime_bias, current_price=current_price, htf_bias=htf_bias,
+            session_mult=session_mult, threshold_mult=threshold_mult,
+            current_capital=current_capital, atr_norm=atr_norm,
+        )
+
+    def fuse_layers(self, layers: dict, regime_bias: int = 0, current_price: float = 0.0,
+                    htf_bias: int = 0, session_mult: float = 1.0, threshold_mult: float = 1.0,
+                    current_capital: float = None, atr_norm: float = None) -> dict:
+        """Availability-aware fusion (item 6).
+
+        ``layers`` maps layer name → LayerResult (or dict / float, coerced).
+        Unavailable layers are dropped from the weight pool entirely, and the
+        remaining weights are renormalised over only the layers that apply —
+        so crypto-only layers never penalise a forex/stock/commodity signal,
+        and a 0.0 'neutral' is no longer confused with 'absent'.
+        """
+        from core.layers.layer_result import LayerResult
+        if regime_bias is None:
+            logger.warning("[Fusion] CHAOS regime → NO TRADE")
+            return self._no_trade("chaos_regime")
+        results = {k: LayerResult.coerce(v, source=k) for k, v in (layers or {}).items()}
+        for k in ("regime", "sentiment", "whale", "liquidation", "entry"):
+            results.setdefault(k, LayerResult.unavailable(source=k, reason="missing"))
+        scores = {k: (r.score if r.available else 0.0) for k, r in results.items()}
+        effective_weights, independence = self._available_weights(results)
+        return self._fuse_core(
+            scores, effective_weights, independence,
+            regime_bias=regime_bias, current_price=current_price, htf_bias=htf_bias,
+            session_mult=session_mult, threshold_mult=threshold_mult,
+            current_capital=current_capital, atr_norm=atr_norm,
+        )
+
+    def _available_weights(self, results: dict):
+        """Effective weights using availability + confidence (LayerResult path).
+
+        Unavailable → weight 0 (dropped). Available → base_weight × confidence,
+        so a low-confidence read counts for less without vanishing. The
+        downstream weighted average (sum(score·w)/sum(w)) then normalises over
+        exactly the available layers.
+        """
+        sources = {k: getattr(results[k], "source", "unknown") for k in results}
+        effective = {}
+        for k, base in self.weights.items():
+            r = results.get(k)
+            effective[k] = r.effective_weight(base) if r is not None else 0.0
+        available = [k for k, r in results.items() if getattr(r, "available", False)]
+        total = max(len(results), 1)
+        independence_score = round(len(available) / total, 2)
+        warning = None
+        if not available:
+            warning = "no_available_layers"
+            logger.warning("[Fusion] no available layers — falling back to entry only")
+        elif available == ["entry"]:
+            warning = "only_entry_available"
+        return effective, {"score": independence_score, "sources": sources,
+                           "warning": warning, "available": available}
+
+    def _fuse_core(self, scores: dict, effective_weights: dict, independence: dict,
+                   regime_bias: int = 0, current_price: float = 0.0, htf_bias: int = 0,
+                   session_mult: float = 1.0, threshold_mult: float = 1.0,
+                   current_capital: float = None, atr_norm: float = None) -> dict:
+        entry_score = float(scores.get("entry", 0.0))
+        liquidation_score = float(scores.get("liquidation", 0.0))
         w_total = max(sum(effective_weights.values()), 1e-9)
-        raw_fusion_score = sum(scores[k] * effective_weights[k] for k in scores) / w_total
+        raw_fusion_score = sum(scores[k] * effective_weights.get(k, 0.0) for k in scores) / w_total
         raw_fusion_score = float(np.clip(raw_fusion_score, -1.0, 1.0))
         session_adjusted_score = float(np.clip(raw_fusion_score * session_mult, -1.0, 1.0))
         direction = 1 if session_adjusted_score > 0 else -1

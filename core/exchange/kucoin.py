@@ -176,5 +176,24 @@ class KucoinExchange(BaseExchange):
     async def set_leverage(self, symbol: str, leverage: int) -> bool:
         return True
 
+    # KuCoin connector is DATA/PAPER ONLY — never advertise live trading.
+    ORDER_SIZE_UNIT = "qty"
+
+    def capabilities(self):
+        from core.exchange.capabilities import ExchangeCapabilities
+        is_futures = self.market_type in ("futures", "future", "swap")
+        return ExchangeCapabilities(
+            name="kucoin",
+            asset_classes=frozenset({"crypto"}),
+            live_trading=False,   # hard: data/paper only, never live fallback
+            paper_trading=True,
+            shorting=is_futures,
+            leverage=is_futures,
+            funding=is_futures,
+            open_interest=is_futures,
+            orderbook=True,
+            market_hours=False,
+        )
+
     async def close(self):
         await self._client.close()

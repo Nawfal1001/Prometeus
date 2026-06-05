@@ -115,6 +115,7 @@ def reload_from_sources():
     global FUSION_CTRADER_CLIENT_ID, FUSION_CTRADER_CLIENT_SECRET, FUSION_CTRADER_ACCESS_TOKEN
     global FUSION_CTRADER_REFRESH_TOKEN, FUSION_CTRADER_ACCOUNT_ID, FUSION_CTRADER_HOST, FUSION_CTRADER_PORT
     global FUSION_TAKER_FEE
+    global MARKETAUX_API_KEY, ALPHAVANTAGE_API_KEY, FINNHUB_API_KEY, FRED_API_KEY, EIA_API_KEY
     global SYMBOL, SYMBOLS, PAPER_SYMBOLS, TIMEFRAME, LEVERAGE, INITIAL_CAPITAL, MAX_RISK_PER_TRADE
     global MAX_DAILY_DRAWDOWN, MAX_TRADES_PER_DAY, FUSION_THRESHOLD, MIN_RR_RATIO
     global STOP_LOSS_PCT, TAKE_PROFIT_PCT
@@ -156,6 +157,16 @@ def reload_from_sources():
     ALPACA_API_KEY = get_secret("ALPACA_API_KEY")
     ALPACA_SECRET = get_secret("ALPACA_SECRET", "ALPACA_API_SECRET")
     ALPACA_PAPER = get_bool("ALPACA_PAPER", "true")
+
+    # ── Non-crypto sentiment / macro data sources (all FREE tiers) ───────────
+    #  Stocks:  Marketaux (primary) → Alpha Vantage → Finnhub (fallback)
+    #  Forex/commodity macro tilt:  FRED (USD index)
+    #  Commodity inventories:       EIA (optional enrichment)
+    MARKETAUX_API_KEY = get_secret("MARKETAUX_API_KEY", "MARKETAUX_TOKEN")
+    ALPHAVANTAGE_API_KEY = get_secret("ALPHAVANTAGE_API_KEY", "ALPHA_VANTAGE_API_KEY")
+    FINNHUB_API_KEY = get_secret("FINNHUB_API_KEY", "FINNHUB_KEY")
+    FRED_API_KEY = get_secret("FRED_API_KEY")
+    EIA_API_KEY = get_secret("EIA_API_KEY")
 
     FUSION_CTRADER_CLIENT_ID = get_secret("FUSION_CTRADER_CLIENT_ID", "CTRADER_CLIENT_ID")
     FUSION_CTRADER_CLIENT_SECRET = get_secret("FUSION_CTRADER_CLIENT_SECRET", "CTRADER_CLIENT_SECRET")

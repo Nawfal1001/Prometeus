@@ -20,6 +20,7 @@ _FUSION_ALIASES = {"fusionmarkets", "fusion_markets", "ctrader"}
 def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
     requested = (name or cfg.EXCHANGE).lower()
     mtype = (market_type or cfg.MARKET_TYPE).lower()
+    is_live = str(getattr(cfg, "TRADING_MODE", "paper")).lower() == "live"
 
     logger.info(f"[Factory] Requested={requested} | MarketType={mtype} | Mode={cfg.TRADING_MODE}")
 
@@ -31,9 +32,26 @@ def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
     if requested not in _FALLBACK_CHAIN:
         return _build_direct(requested, mtype)
 
+    # In LIVE mode, only connectors that can actually execute real orders are
+    # eligible for fallback. KuCoin is data/paper-only and must NEVER be a
+    # silent live executor — falling through to it would mean "trades" that
+    # never reach a venue while the engine believes it is live (item 9).
+    chain = _FALLBACK_CHAIN
+    if is_live:
+        chain = [c for c in _FALLBACK_CHAIN if c != "kucoin"]
+        if requested == "kucoin":
+            raise RuntimeError(
+                "Live trading requested with EXCHANGE=kucoin, but the KuCoin "
+                "connector is data/paper-only. Set EXCHANGE to 'fusion' or "
+                "'binance' (with credentials) for live trading."
+            )
+
     # Walk the chain from the requested exchange onward
-    start = _FALLBACK_CHAIN.index(requested)
-    for candidate in _FALLBACK_CHAIN[start:]:
+    try:
+        start = chain.index(requested)
+    except ValueError:
+        start = 0
+    for candidate in chain[start:]:
         exchange = _try_build(candidate, mtype)
         if exchange is not None:
             if candidate != requested:
@@ -42,6 +60,14 @@ def get_exchange(name: str = None, market_type: str = None) -> BaseExchange:
                     f"falling back to '{candidate}'"
                 )
             return exchange
+
+    if is_live:
+        raise RuntimeError(
+            "Live trading requires Fusion or Binance credentials, but none "
+            "were complete. Refusing to fall back to KuCoin (paper-only). "
+            "Configure FUSION_CTRADER_* or BINANCE_API_KEY/SECRET, or switch "
+            "TRADING_MODE back to paper."
+        )
 
     raise RuntimeError(
         "Exchange fallback chain exhausted (fusion → binance → kucoin). "

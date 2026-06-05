@@ -137,6 +137,14 @@ class OrderManager:
             return {"status": "skipped", "reason": "paper_mode"}
         if self.exchange is None:
             return {"status": "skipped", "reason": "no_exchange"}
+        # Periodic autosync must not clobber capital mid-trade: live equity
+        # swings with unrealized PnL on open positions, so overwriting
+        # risk.capital while trades are open corrupts position sizing and
+        # drawdown accounting. Manual sync (force=True) may still proceed
+        # because the operator is explicitly asking for it (item 11).
+        if not force and len(self.open_trades) > 0:
+            return {"status": "skipped", "reason": "open_trades_present",
+                    "open_trades": len(self.open_trades)}
         try:
             bal = await self.exchange.get_balance()
         except Exception as e:
