@@ -8,17 +8,22 @@ from loguru import logger
 
 class EntrySignal:
 
-    def __init__(self):
+    def __init__(self, xgb_model_cls=None):
         self._xgb = None
         self._xgb_loaded = False
+        self._xgb_model_cls = xgb_model_cls  # None → default crypto XGBoostSignalModel
 
     def _load_xgb(self):
         if self._xgb_loaded:
             return
         self._xgb_loaded = True
         try:
-            from core.models.xgboost_model import XGBoostSignalModel
-            self._xgb = XGBoostSignalModel()
+            if self._xgb_model_cls is not None:
+                cls = self._xgb_model_cls
+            else:
+                from core.models.xgboost_model import XGBoostSignalModel
+                cls = XGBoostSignalModel
+            self._xgb = cls()
             self._xgb.load()
             if self._xgb.model is None:
                 logger.warning("[Entry] XGBoost not trained — ML entry score disabled")

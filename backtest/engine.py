@@ -16,17 +16,23 @@ SLIPPAGE = 0.0003
 
 class BacktestEngine:
 
-    def __init__(self):
+    def __init__(self, weights_override: dict | None = None):
         self._xgb = None
         self.edge_guard = AdaptiveEdgeGuard()
         self.regime_memory = RegimeMemory()
+        # Optional weight profile — used by non-crypto / FX engine variant.
+        # Keys: "regime", "entry" (only the two active backtest layers matter).
+        self._weights_override = weights_override or {}
 
-    def _load_xgb(self):
+    def _load_xgb(self, model_cls=None):
         if self._xgb is not None:
             return
         try:
-            from core.models.xgboost_model import XGBoostSignalModel
-            self._xgb = XGBoostSignalModel()
+            cls = model_cls
+            if cls is None:
+                from core.models.xgboost_model import XGBoostSignalModel
+                cls = XGBoostSignalModel
+            self._xgb = cls()
             self._xgb.load()
             if self._xgb.model is None:
                 logger.warning("[Backtest] XGBoost not trained — ML signal disabled")
@@ -156,8 +162,8 @@ class BacktestEngine:
 
         entry_score = self._entry_score(row)
         regime_bias, regime_score = self._regime_score(row)
-        w_e = float(getattr(cfg, "WEIGHT_ENTRY", 0.35))
-        w_r = float(getattr(cfg, "WEIGHT_REGIME", 0.20))
+        w_e = float(self._weights_override.get("entry", getattr(cfg, "WEIGHT_ENTRY", 0.35)))
+        w_r = float(self._weights_override.get("regime", getattr(cfg, "WEIGHT_REGIME", 0.20)))
         # Backtest only has entry + regime layers (sentiment/whale/liquidation are
         # live-only data feeds). Normalize by ONLY the active layers so the fusion
         # score reflects the entry:regime ratio and stays stable when the optimizer

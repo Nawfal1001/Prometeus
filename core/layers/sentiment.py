@@ -7,6 +7,7 @@ import time
 from collections import deque
 from loguru import logger
 import config.settings as cfg
+from core.asset_class import is_crypto
 
 
 class SentimentEngine:
@@ -69,8 +70,11 @@ class SentimentEngine:
             return 0.0
         return sum(dq) / len(dq)
 
-    def get_layer_score(self) -> float:
+    def get_layer_score(self, symbol: str | None = None) -> float:
         try:
+            # Fear & Greed index is crypto-specific — return neutral for other asset classes
+            if symbol and not is_crypto(symbol):
+                return 0.0
             self.update()
             fg = max(-1.0, min(1.0, (float(self.fear_greed) - 50.0) / 50.0))
 
@@ -86,7 +90,7 @@ class SentimentEngine:
             return 0.0
 
     def get_sentiment_score(self, symbol=None):
-        return self.get_layer_score()
+        return self.get_layer_score(symbol=symbol)
 
 
 sentiment_engine = SentimentEngine()

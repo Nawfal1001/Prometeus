@@ -104,6 +104,14 @@ class PrometheusOptimizer:
         self._multi_feature_cache: "OrderedDict" = OrderedDict()
         self._feature_cache_max = 4
 
+    def _get_seed_params(self) -> list[dict]:
+        """Return the seed parameter list for this optimizer variant."""
+        return SEED_PARAMS
+
+    def _create_backtest_engine(self):
+        """Return a configured BacktestEngine for single-symbol trials."""
+        return BacktestEngine()
+
     def run(self, data=None, mode: str | None = None) -> dict:
         if data is not None:
             valid = {s: d for s, d in data.items() if d is not None and not d.empty}
@@ -152,7 +160,7 @@ class PrometheusOptimizer:
 
         tune_indicators = bool(getattr(cfg, "OPTUNA_TUNE_INDICATORS", False))
         skip_keys = set() if tune_indicators else {"EMA_FAST", "EMA_MID", "EMA_SLOW", "RSI_PERIOD", "MAX_TRADES_PER_DAY"}
-        for seed in SEED_PARAMS:
+        for seed in self._get_seed_params():
             filtered = {k: v for k, v in seed.items() if k not in skip_keys}
             try:
                 self.study.enqueue_trial(filtered)
@@ -236,7 +244,7 @@ class PrometheusOptimizer:
                 prepared = self._features_for_trial(params)
                 if prepared is None or (hasattr(prepared, "empty") and prepared.empty) or len(prepared) < 100:
                     return -1.0
-                results = BacktestEngine().walk_forward(prepared)
+                results = self._create_backtest_engine().walk_forward(prepared)
 
             if "error" in results:
                 # No-trade / error trials get a smooth "approach" gradient instead

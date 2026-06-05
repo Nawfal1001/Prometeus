@@ -51,6 +51,11 @@ class PrometheusEngine:
         self._consec_errors = 0
         self._backoff_seconds = 30
 
+    @property
+    def _tf(self) -> str:
+        """Active timeframe — override in subclasses (e.g. FXPrometheusEngine)."""
+        return cfg.TIMEFRAME
+
     async def start(self):
         self.running = True
         mode = "rotator" if self._rotator_enabled() else "single"
@@ -82,7 +87,7 @@ class PrometheusEngine:
 
     async def _live_price_and_atr(self, symbol: str) -> tuple[float, float]:
         try:
-            df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=80)
+            df = await self.exchange.get_ohlcv(symbol, self._tf, limit=80)
             if df is None or df.empty:
                 return 0.0, 0.0
             price = float(df["close"].iloc[-1])
@@ -168,7 +173,7 @@ class PrometheusEngine:
 
     async def _symbol_signal(self, symbol: str):
         limit = int(getattr(cfg, "LIVE_OHLCV_LIMIT", 600))
-        df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=limit)
+        df = await self.exchange.get_ohlcv(symbol, self._tf, limit=limit)
         if df is None or df.empty:
             journal.autoscan(symbol, reason="empty_ohlcv")
             return None
@@ -213,7 +218,7 @@ class PrometheusEngine:
 
         regime_result = self.regime.detect(df, funding_rate=funding_rate)
         whale_result = self.whale.update(df=df, symbol=symbol)
-        sent_result = {"layer_score": self.sentiment.get_layer_score()}
+        sent_result = {"layer_score": self.sentiment.get_layer_score(symbol)}
         liq_result = self.liquidation.update(current_price, symbol, df=df)
         entry_raw = self.entry.evaluate(df)
         entry_score = self._normalize_layer_score(entry_raw)
@@ -302,7 +307,7 @@ class PrometheusEngine:
         ranked_by_symbol = {r.get("symbol"): r for r in (self._rotator_ranked or [])}
         for trade in list(self.orders.get_open_trades()):
             symbol = trade.get("symbol") or trade.get("signal", {}).get("symbol") or cfg.SYMBOL
-            df = await self.exchange.get_ohlcv(symbol, cfg.TIMEFRAME, limit=120)
+            df = await self.exchange.get_ohlcv(symbol, self._tf, limit=120)
             if df is None or df.empty:
                 continue
             last = df.iloc[-1]
@@ -409,7 +414,7 @@ class PrometheusEngine:
             try:
                 logger.info("[Engine] Auto-training XGBoost on startup...")
                 train_symbol = self._symbols()[0]
-                df = await self.exchange.get_ohlcv(train_symbol, cfg.TIMEFRAME, limit=1500)
+                df = await self.exchange.get_ohlcv(train_symbol, self._tf, limit=1500)
                 if df is not None and not df.empty and len(df) >= 300 and hasattr(self.entry, "_load_xgb"):
                     self.entry._load_xgb()
                     model = getattr(self.entry, "_xgb", None)
@@ -456,7 +461,7 @@ class PrometheusEngine:
                 if now - self._last_xgb_retrain > 21600:
                     try:
                         train_symbol = self._symbols()[0]
-                        df = await self.exchange.get_ohlcv(train_symbol, cfg.TIMEFRAME, limit=1500)
+                        df = await self.exchange.get_ohlcv(train_symbol, self._tf, limit=1500)
                         if hasattr(self.entry, "_load_xgb"):
                             self.entry._load_xgb()
                             model = getattr(self.entry, "_xgb", None)
