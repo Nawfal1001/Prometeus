@@ -337,18 +337,19 @@ class PrometheusEngine:
         cache_key = getattr(caps, "name", "") + ("|live" if not self.paper else "|paper")
         if getattr(self, "_symbols_validated_for", None) == cache_key and getattr(self, "_valid_symbols", None):
             return self._valid_symbols
-        from core.symbol_profile import SymbolProfile
-        from core.exchange.capabilities import validate_profile
-        live = not self.paper
+        # Only the asset-class question is a scan-time concern ("can this
+        # connector even serve this instrument?"). Shorting/leverage are
+        # per-trade and already enforced at execution (e.g. Binance rejects
+        # spot shorts), so we do NOT filter on them here — that would wrongly
+        # drop crypto spot symbols whose default profile allows shorting.
         ok: list[str] = []
         for sym in symbols:
-            prof = SymbolProfile.from_symbol(sym, live_enabled=live, paper_enabled=self.paper)
-            problems = validate_profile(caps, prof, live=live)
-            if problems:
-                logger.warning(f"[Engine] {sym} unsupported on {caps.name}: {problems[0]}")
-                journal.autoscan(sym, reason=f"unsupported_on_{caps.name}")
-            else:
+            ac = classify_symbol(sym)
+            if caps.supports_asset_class(ac):
                 ok.append(sym)
+            else:
+                logger.warning(f"[Engine] {sym} ({ac}) unsupported on {caps.name}")
+                journal.autoscan(sym, reason=f"unsupported_on_{caps.name}")
         self._symbols_validated_for = cache_key
         self._valid_symbols = ok or symbols  # never strand the engine with nothing
         return self._valid_symbols

@@ -104,6 +104,12 @@ class PortfolioRiskManager:
         """
         if not self._enabled():
             return True, "ok"
+        # Single-engine (crypto running alone — the default) → portfolio gate
+        # is a NO-OP so existing crypto behaviour is 100% unchanged. The
+        # cross-asset ceilings only engage once a second engine (FX) is also
+        # live, which is exactly when "portfolio" risk becomes meaningful.
+        if len(self._managers) < 2:
+            return True, "ok"
         try:
             trades = self._open_trades()
             ac = classify_symbol(symbol)
