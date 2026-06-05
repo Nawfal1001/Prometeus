@@ -30,6 +30,7 @@ from dashboard.api_optimize_multi import router as optimize_multi_router
 from dashboard.api_lab import router as lab_router
 from dashboard.api_fusion_watchlist import router as fusion_watchlist_router
 from dashboard.api_fx import router as fx_router
+from dashboard.api_portfolio import router as portfolio_router
 from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
@@ -64,6 +65,7 @@ app.include_router(optimize_multi_router)
 app.include_router(lab_router)
 app.include_router(fusion_watchlist_router)
 app.include_router(fx_router)
+app.include_router(portfolio_router)
 
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()

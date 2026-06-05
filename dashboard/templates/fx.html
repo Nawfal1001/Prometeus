@@ -40,10 +40,30 @@
 <h1>🌐 FX / Non-crypto Scanner</h1>
 <p style="color:var(--muted);margin-bottom:20px">
   Separate signal engine for forex, commodities, indices, and stocks.
-  Uses a regime-led weight profile (Regime 30 % · Entry 40 % · Liquidation 20 % · Whale 10 %)
-  with per-class ATR thresholds and session gating.
-  The crypto Fear &amp; Greed index is excluded.
+  Weight profile <b>Regime 30 % · Entry 40 % · Sentiment 30 %</b>; whale &amp; liquidation
+  are crypto-only and dropped from the fusion pool. Sentiment is routed per class
+  (forex/commodity → CFTC COT positioning, stocks → news). Per-class ATR thresholds,
+  session gating, and data-quality checks apply.
 </p>
+
+<!-- Multi-asset status -->
+<div class="card">
+  <div class="card-header">🧭 Multi-asset Status</div>
+  <div style="padding:16px 20px;display:flex;flex-wrap:wrap;gap:24px">
+    <div style="min-width:220px">
+      <div style="color:var(--muted);font-size:12px;margin-bottom:6px">EXCHANGE</div>
+      <div id="ms-exchange">—</div>
+    </div>
+    <div style="min-width:260px">
+      <div style="color:var(--muted);font-size:12px;margin-bottom:6px">PORTFOLIO RISK (crypto + FX)</div>
+      <div id="ms-portfolio">—</div>
+    </div>
+    <div style="flex:1;min-width:320px">
+      <div style="color:var(--muted);font-size:12px;margin-bottom:6px">LAYERS BY ASSET CLASS</div>
+      <div id="ms-layers">—</div>
+    </div>
+  </div>
+</div>
 
 <!-- Scanner config -->
 <div class="card">
@@ -312,6 +332,47 @@ async function runTrain(){
     st.textContent = `Trained on ${data.rows} rows across ${(data.symbols||[]).length} symbols`;
   } catch(e){st.textContent='Error: '+e.message;}
 }
+
+async function loadMultiAssetStatus(){
+  // Exchange capabilities + connection
+  try {
+    const r = await fetch('/api/exchange/capabilities'); const d = await r.json();
+    const c = d.capabilities||{};
+    const dot = d.connected ? '<span style="color:#2ecc71">●</span>' : '<span style="color:#e74c3c">●</span>';
+    const powers = ['live_trading','shorting','leverage','funding','orderbook','market_hours']
+      .filter(k=>c[k]).map(k=>k.replace('_',' '));
+    document.getElementById('ms-exchange').innerHTML =
+      `${dot} <b>${esc(d.exchange||'—')}</b> · ${esc(d.market_type||'')} · <i>${esc(d.trading_mode||'')}</i>`
+      + `<div style="font-size:11px;color:var(--muted);margin-top:4px">classes: ${(c.asset_classes||[]).join(', ')||'—'}</div>`
+      + `<div style="font-size:11px;color:var(--muted)">size unit: ${esc(d.order_size_unit||'qty')} · ${powers.join(' · ')||'data only'}</div>`;
+  } catch(e){ document.getElementById('ms-exchange').textContent = 'unavailable'; }
+
+  // Portfolio risk snapshot
+  try {
+    const r = await fetch('/api/portfolio/risk'); const d = await r.json();
+    const s = d.snapshot||{}, l = d.limits||{};
+    const riskPct = s.total_risk_pct!=null ? (s.total_risk_pct*100).toFixed(1)+'%' : '—';
+    const cls = Object.entries(s.per_class||{}).map(([k,v])=>
+      `${classBadge(k)} ${v.open} open · ${(v.risk||0).toFixed(2)} risk`).join('<br>') || '<span style="color:var(--muted)">no open trades</span>';
+    document.getElementById('ms-portfolio').innerHTML =
+      `<b>${s.open_trades||0}</b>/${l.max_open_trades_total||'—'} trades · risk <b>${riskPct}</b> / ${((l.max_portfolio_risk||0)*100).toFixed(0)}% cap`
+      + `<div style="font-size:11px;color:var(--muted);margin-top:4px">capital: $${(s.total_capital||0).toFixed(2)} · engines: ${s.engines||0}</div>`
+      + `<div style="font-size:12px;margin-top:6px">${cls}</div>`;
+  } catch(e){ document.getElementById('ms-portfolio').textContent = 'unavailable'; }
+
+  // Layer matrix per asset class
+  try {
+    const r = await fetch('/api/asset-classes/layers'); const d = await r.json();
+    const rows = Object.entries(d.classes||{}).map(([ac,v])=>
+      `<div style="margin-bottom:3px">${classBadge(ac)} `
+      + `<span style="color:#2ecc71;font-size:11px">${v.enabled.join(' ')}</span> `
+      + (v.disabled.length?`<span style="color:#888;font-size:11px;text-decoration:line-through">${v.disabled.join(' ')}</span>`:'')
+      + `</div>`).join('');
+    document.getElementById('ms-layers').innerHTML = rows
+      + `<div style="font-size:11px;color:var(--muted);margin-top:4px">crypto-only: ${(d.crypto_only_layers||[]).join(', ')}</div>`;
+  } catch(e){ document.getElementById('ms-layers').textContent = 'unavailable'; }
+}
+loadMultiAssetStatus();
 
 async function loadUniverse(){
   const st = document.getElementById('fx-status');
