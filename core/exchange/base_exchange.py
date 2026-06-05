@@ -19,6 +19,27 @@ class BaseExchange(ABC):
         self.testnet = testnet
         self.name = "base"
 
+    def capabilities(self) -> dict:
+        """Return connector capability metadata for asset-aware routing.
+
+        The default is intentionally conservative. Concrete connectors should
+        override this when they support live trading, specific asset classes,
+        shorting, leverage, order books, or exchange-specific size semantics.
+        """
+        return {
+            "name": self.name,
+            "asset_classes": [],
+            "live_trading": False,
+            "paper_trading": True,
+            "shorting": False,
+            "leverage": False,
+            "funding": False,
+            "open_interest": False,
+            "orderbook": False,
+            "order_size_mode": "unknown",
+            "testnet": bool(self.testnet),
+        }
+
     # ── Market Data ──────────────────────────────────────────
 
     @abstractmethod
