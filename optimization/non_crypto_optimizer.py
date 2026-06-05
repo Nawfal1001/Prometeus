@@ -11,13 +11,17 @@ import config.settings as cfg
 from optimization.optimizer import PrometheusOptimizer
 from backtest.engine import BacktestEngine
 
-# Forex/commodity/index/stock weight profile
+# Forex/commodity/index/stock weight profile.
+# Whale & liquidation are crypto-only (dropped by the LayerRouter for
+# non-crypto); sentiment carries real weight (CFTC COT / news). The
+# BacktestEngine only consumes regime+entry, so the 0.30:0.40 backbone is
+# what actually drives trial evaluation here.
 NON_CRYPTO_WEIGHTS = {
     "regime":      0.30,
     "entry":       0.40,
-    "liquidation": 0.20,
-    "whale":       0.10,
-    "sentiment":   0.00,
+    "sentiment":   0.30,
+    "whale":       0.00,
+    "liquidation": 0.00,
 }
 
 # Seeds calibrated for non-crypto instruments:

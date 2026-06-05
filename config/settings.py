@@ -178,6 +178,13 @@ def reload_from_sources():
     FUSION_TAKER_FEE = get_float("FUSION_TAKER_FEE", 0.0)
 
     # ── Non-crypto / FX parallel system ──────────────────────────────────────
+    global NON_CRYPTO_ENABLED, NON_CRYPTO_SYMBOLS, NON_CRYPTO_TIMEFRAME
+    global NON_CRYPTO_FUSION_THRESHOLD, NON_CRYPTO_ATR_SL_MULT
+    global NON_CRYPTO_ATR_TP1_MULT, NON_CRYPTO_ATR_TP2_MULT
+    global NON_CRYPTO_WEIGHT_REGIME, NON_CRYPTO_WEIGHT_ENTRY, NON_CRYPTO_WEIGHT_SENTIMENT
+    global NON_CRYPTO_WEIGHT_LIQUIDATION, NON_CRYPTO_WEIGHT_WHALE
+    global NON_CRYPTO_MAX_RISK_PER_TRADE
+    global NON_CRYPTO_OPTUNA_TRIALS, NON_CRYPTO_OPTUNA_TIMEOUT_SEC, NON_CRYPTO_OPTUNA_METRIC
     NON_CRYPTO_ENABLED = get_bool("NON_CRYPTO_ENABLED", "false")
     # These settings control the separate forex/commodity/index/stock engine.
     # They do NOT affect the crypto system.
@@ -188,11 +195,14 @@ def reload_from_sources():
     NON_CRYPTO_ATR_SL_MULT = get_float("NON_CRYPTO_ATR_SL_MULT", 1.2)
     NON_CRYPTO_ATR_TP1_MULT = get_float("NON_CRYPTO_ATR_TP1_MULT", 1.8)
     NON_CRYPTO_ATR_TP2_MULT = get_float("NON_CRYPTO_ATR_TP2_MULT", 3.5)
+    # Whale & liquidation are crypto-only (LayerRouter drops them for
+    # non-crypto), so they default to 0.0. Sentiment carries real weight
+    # now that non-crypto sentiment is wired (CFTC COT / news).
     NON_CRYPTO_WEIGHT_REGIME = get_float("NON_CRYPTO_WEIGHT_REGIME", 0.30)
     NON_CRYPTO_WEIGHT_ENTRY = get_float("NON_CRYPTO_WEIGHT_ENTRY", 0.40)
-    NON_CRYPTO_WEIGHT_LIQUIDATION = get_float("NON_CRYPTO_WEIGHT_LIQUIDATION", 0.20)
-    NON_CRYPTO_WEIGHT_WHALE = get_float("NON_CRYPTO_WEIGHT_WHALE", 0.10)
-    NON_CRYPTO_WEIGHT_SENTIMENT = get_float("NON_CRYPTO_WEIGHT_SENTIMENT", 0.00)
+    NON_CRYPTO_WEIGHT_SENTIMENT = get_float("NON_CRYPTO_WEIGHT_SENTIMENT", 0.30)
+    NON_CRYPTO_WEIGHT_LIQUIDATION = get_float("NON_CRYPTO_WEIGHT_LIQUIDATION", 0.00)
+    NON_CRYPTO_WEIGHT_WHALE = get_float("NON_CRYPTO_WEIGHT_WHALE", 0.00)
     NON_CRYPTO_MAX_RISK_PER_TRADE = get_float("NON_CRYPTO_MAX_RISK_PER_TRADE", 0.02)
     NON_CRYPTO_OPTUNA_TRIALS = get_int("NON_CRYPTO_OPTUNA_TRIALS", 50)
     NON_CRYPTO_OPTUNA_TIMEOUT_SEC = get_int("NON_CRYPTO_OPTUNA_TIMEOUT_SEC", 360)

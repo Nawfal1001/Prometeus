@@ -216,10 +216,15 @@ class PrometheusEngine:
         except Exception as e:
             logger.debug(f"[Engine] Orderbook fetch skipped for {symbol}: {e}")
 
+        from core.asset_class import is_crypto as _is_crypto
+        _crypto_sym = _is_crypto(symbol)
         regime_result = self.regime.detect(df, funding_rate=funding_rate)
-        whale_result = self.whale.update(df=df, symbol=symbol)
+        # Whale & liquidation are crypto microstructure layers. For non-crypto
+        # instruments we skip them entirely (no OHLCV-proxy math on forex/stock/
+        # commodity candles); the LayerRouter marks them unavailable downstream.
+        whale_result = self.whale.update(df=df, symbol=symbol) if _crypto_sym else {"layer_score": 0.0}
         sent_result = {"layer_score": self.sentiment.get_layer_score(symbol)}
-        liq_result = self.liquidation.update(current_price, symbol, df=df)
+        liq_result = self.liquidation.update(current_price, symbol, df=df) if _crypto_sym else {"layer_score": 0.0}
         entry_raw = self.entry.evaluate(df)
         entry_score = self._normalize_layer_score(entry_raw)
         whale_score = self._normalize_layer_score(whale_result)
@@ -232,7 +237,54 @@ class PrometheusEngine:
             "liquidation": (liq_result or {}).get("source", "ohlcv_liquidity_magnet"),
             "entry": "EntrySignal",
         }
-        signal = self.fusion.fuse(
+        signal = self._compute_fusion(
+            symbol,
+            regime_result=regime_result,
+            sentiment_score=sentiment_score,
+            whale_score=whale_score,
+            liquidation_score=liquidation_score,
+            entry_score=entry_score,
+            whale_result=whale_result,
+            liq_result=liq_result,
+            current_price=current_price,
+            atr_norm=atr_norm,
+            layer_sources_live=layer_sources_live,
+        )
+        signal.update({
+            "symbol": symbol,
+            "entry_price": current_price,
+            "atr_norm": atr_norm,
+            "vol_zscore": vol_zscore,
+            "recent_high": recent_high,
+            "recent_low": recent_low,
+        })
+        # Prefer the scores fusion actually used (correct for the non-crypto
+        # availability-aware path); fall back to the locally computed floats.
+        _sig_ls = signal.get("layer_scores") or {}
+        layer_scores = {
+            "regime": float(_sig_ls.get("regime", float(regime_result.get("score", 0.0) or 0.0))),
+            "sentiment": float(_sig_ls.get("sentiment", sentiment_score)),
+            "whale": float(_sig_ls.get("whale", whale_score)),
+            "liquidation": float(_sig_ls.get("liquidation", liquidation_score)),
+            "entry": float(_sig_ls.get("entry", entry_score)),
+            "fusion": signal.get("fusion_score", 0),
+        }
+        if orderbook is not None:
+            signal["orderbook_top"] = {"bids": orderbook.get("bids", [])[:10], "asks": orderbook.get("asks", [])[:10]}
+        journal.signal(symbol, signal, price=current_price, layer_scores=layer_scores, regime=regime_result.get("regime"), htf_bias=self._4h_bias, atr_norm=atr_norm, vol_zscore=vol_zscore)
+        return {"symbol": symbol, "df": df, "price": current_price, "signal": signal, "layer_scores": layer_scores, "regime": regime_result}
+
+    def _compute_fusion(self, symbol, *, regime_result, sentiment_score, whale_score,
+                        liquidation_score, entry_score, whale_result, liq_result,
+                        current_price, atr_norm, layer_sources_live):
+        """Fuse layer scores into a trade signal.
+
+        Base (crypto) implementation uses the proven float fusion path so
+        crypto behaviour is unchanged. FXPrometheusEngine overrides this to
+        use the availability-aware LayerRouter + fuse_layers path, where the
+        crypto-only layers are dropped and sentiment is routed per asset class.
+        """
+        return self.fusion.fuse(
             regime_score=float(regime_result.get("score", 0.0) or 0.0),
             sentiment_score=sentiment_score,
             whale_score=whale_score,
@@ -248,26 +300,6 @@ class PrometheusEngine:
             atr_norm=atr_norm,
             layer_sources=layer_sources_live,
         )
-        signal.update({
-            "symbol": symbol,
-            "entry_price": current_price,
-            "atr_norm": atr_norm,
-            "vol_zscore": vol_zscore,
-            "recent_high": recent_high,
-            "recent_low": recent_low,
-        })
-        layer_scores = {
-            "regime": float(regime_result.get("score", 0.0) or 0.0),
-            "sentiment": sentiment_score,
-            "whale": whale_score,
-            "liquidation": liquidation_score,
-            "entry": entry_score,
-            "fusion": signal.get("fusion_score", 0),
-        }
-        if orderbook is not None:
-            signal["orderbook_top"] = {"bids": orderbook.get("bids", [])[:10], "asks": orderbook.get("asks", [])[:10]}
-        journal.signal(symbol, signal, price=current_price, layer_scores=layer_scores, regime=regime_result.get("regime"), htf_bias=self._4h_bias, atr_norm=atr_norm, vol_zscore=vol_zscore)
-        return {"symbol": symbol, "df": df, "price": current_price, "signal": signal, "layer_scores": layer_scores, "regime": regime_result}
 
     async def _autoscan(self, force: bool = False):
         now = time.time()

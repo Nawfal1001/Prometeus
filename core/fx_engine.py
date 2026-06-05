@@ -60,6 +60,14 @@ class FXPrometheusEngine(PrometheusEngine):
         self.orders.fusion = self.fusion
         self.orders.memory = self.selector.memory
 
+        # 4. Layer + sentiment routing → per-asset-class layer availability.
+        #    Crypto-only layers (whale/liquidation) become unavailable, and
+        #    sentiment is routed (forex/commodity → CFTC COT, stock → news).
+        from core.routing.layer_router import LayerRouter
+        from core.routing.sentiment_router import SentimentRouter
+        self._sentiment_router = SentimentRouter(crypto_engine=self.sentiment)
+        self._layer_router = LayerRouter(sentiment_router=self._sentiment_router)
+
         logger.info(
             "[FXEngine] Initialized | "
             f"symbols={self._symbols()} tf={self._tf} "
@@ -97,3 +105,32 @@ class FXPrometheusEngine(PrometheusEngine):
             logger.debug(f"[FXEngine] {symbol} outside active session — skipped")
             return None
         return await super()._symbol_signal(symbol)
+
+    def _compute_fusion(self, symbol, *, regime_result, entry_score, current_price,
+                        atr_norm, **_ignored):
+        """Availability-aware fusion for non-crypto instruments.
+
+        Builds LayerResults via the LayerRouter — crypto-only layers come back
+        unavailable() and are dropped from the weight pool, sentiment is routed
+        per asset class (forex/commodity → CFTC COT, stock → news sentiment).
+        Weights renormalise over only the layers that genuinely apply, so a
+        forex signal is regime+entry(+sentiment) rather than a crypto template
+        diluted by zeroed whale/liquidation scores.
+        """
+        layers = self._layer_router.build(
+            symbol,
+            regime_result=regime_result,
+            entry_score=entry_score,
+            whale_result=None,
+            liq_result=None,
+        )
+        return self.fusion.fuse_layers(
+            layers,
+            regime_bias=regime_result.get("bias", 0),
+            current_price=current_price,
+            htf_bias=self._4h_bias,
+            session_mult=self._session_multiplier(),
+            threshold_mult=self.orders.risk.threshold_multiplier(),
+            current_capital=self.orders.risk.capital,
+            atr_norm=atr_norm,
+        )

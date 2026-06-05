@@ -23,16 +23,23 @@ from backtest.engine import BacktestEngine
 
 # ---------------------------------------------------------------------------
 # Non-crypto signal weight profile.
-# Regime weight is raised because EMA/trend is the most reliable
-# cross-asset signal.  Entry stays high (pure technical — no crypto XGBoost).
-# Sentiment is always 0 (Fear & Greed is crypto-only, handled in the layer).
+#
+# Whale & liquidation are crypto-only — the LayerRouter marks them
+# unavailable for non-crypto, so their weights here are 0.0 (they are
+# dropped from the live fusion pool entirely, never diluting the score).
+#
+# Sentiment now carries REAL weight because non-crypto sentiment is wired
+# (forex/commodity → CFTC COT positioning, stocks → news sentiment). When
+# a sentiment source is missing/unavailable, fusion renormalises over
+# regime+entry automatically, preserving their 0.30:0.40 backbone (which
+# matches the backtest engine, keeping backtest↔live consistent).
 # ---------------------------------------------------------------------------
 NON_CRYPTO_WEIGHTS = {
     "regime":      0.30,
     "entry":       0.40,
-    "liquidation": 0.20,
-    "whale":       0.10,
-    "sentiment":   0.00,
+    "sentiment":   0.30,
+    "whale":       0.00,
+    "liquidation": 0.00,
 }
 
 # Default symbol list: a balanced selection from the FusionMarkets universe
