@@ -15,6 +15,7 @@ from loguru import logger
 
 import config.settings as cfg
 from core.models.feature_engine import compute_features
+from core.asset_class import classify_symbol, vol_quality_for_class, is_session_active
 
 DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "AVAX/USDT", "DOGE/USDT"]
 
@@ -75,16 +76,8 @@ class MultiSymbolScanner:
                         await maybe
 
     @staticmethod
-    def _volatility_quality(atr_norm: float) -> float:
-        if atr_norm <= 0:
-            return 0.0
-        if atr_norm < 0.001:
-            return 0.0
-        if 0.002 <= atr_norm <= 0.015:
-            return 1.0
-        if atr_norm <= 0.03:
-            return 0.65
-        return 0.25
+    def _volatility_quality(atr_norm: float, symbol: str = "") -> float:
+        return vol_quality_for_class(atr_norm, symbol)
 
     async def _scan_symbol(self, symbol: str) -> dict[str, Any]:
         try:
@@ -130,7 +123,7 @@ class MultiSymbolScanner:
 
             edge = max(0.0, (abs_score - threshold) / max(1e-9, 1.0 - threshold))
             vol_participation = min(max(vol_ratio - 1.0, 0.0), 1.5) / 1.5
-            vol_quality = self._volatility_quality(atr_norm)
+            vol_quality = self._volatility_quality(atr_norm, symbol)
             rr_quality = min(max((rr - 1.0) / 2.0, 0.0), 1.0) if rr else 0.0
 
             rank_score = (
@@ -140,6 +133,13 @@ class MultiSymbolScanner:
                 vol_participation * 0.10 +
                 rr_quality * 0.05
             )
+
+            # Block trading outside active session for non-crypto instruments
+            asset_class = classify_symbol(symbol)
+            session_active = is_session_active(symbol)
+            if tradable and not session_active:
+                tradable = False
+                reason = "outside_session"
 
             if not tradable:
                 rank_score *= 0.35
@@ -165,6 +165,8 @@ class MultiSymbolScanner:
                 "vol_ratio": vol_ratio,
                 "price": float(last.get("close", 0) or 0),
                 "reason": reason,
+                "asset_class": asset_class,
+                "session_active": session_active,
             }
         except Exception as e:
             logger.exception(f"[Scanner] Fatal error scanning {symbol}")

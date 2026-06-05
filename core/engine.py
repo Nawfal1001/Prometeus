@@ -213,7 +213,7 @@ class PrometheusEngine:
 
         regime_result = self.regime.detect(df, funding_rate=funding_rate)
         whale_result = self.whale.update(df=df, symbol=symbol)
-        sent_result = {"layer_score": self.sentiment.get_layer_score()}
+        sent_result = {"layer_score": self.sentiment.get_layer_score(symbol)}
         liq_result = self.liquidation.update(current_price, symbol, df=df)
         entry_raw = self.entry.evaluate(df)
         entry_score = self._normalize_layer_score(entry_raw)
