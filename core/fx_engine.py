@@ -13,8 +13,8 @@
 #   - Session gating   — no signal outside the instrument's active hours
 #
 #  Shared infrastructure (no duplication):
-#   - Exchange connector (same instance, safe for concurrent async reads)
-#   - Regime / Whale / Liquidation / Sentiment layers (OHLCV-based, neutral)
+#   - Separate exchange instance from the same factory/config
+#   - Regime / smart-flow / liquidity-magnet / neutral sentiment layers
 #   - Feature engine, risk sizing, telegram bot, WebSocket broadcast
 # ============================================================
 from __future__ import annotations
@@ -24,7 +24,7 @@ from loguru import logger
 
 import config.settings as cfg
 from core.engine import PrometheusEngine
-from core.asset_class import is_session_active
+from core.asset_class import classify_symbol, is_session_active
 from core.scanner.fx_scanner import NON_CRYPTO_WEIGHTS
 
 _FX_TRADES_FILE = Path(__file__).resolve().parent.parent / "data" / "fx_paper_trades.json"
@@ -86,14 +86,32 @@ class FXPrometheusEngine(PrometheusEngine):
         return cfg.TRADING_MODE == "paper"
 
     async def _symbol_signal(self, symbol: str):
-        """Compute signal for one FX symbol.
+        """Compute signal for one FX / non-crypto symbol.
 
-        Adds session gating on top of the standard signal computation:
-        stocks, forex pairs, and indices are only tradeable within their
-        active UTC session windows.  Returning None tells the rotator to
-        skip the symbol without error.
+        Adds session gating and metadata cleanup on top of the standard signal
+        computation. Current smart-flow and liquidity layers are OHLCV-derived,
+        not true whale/on-chain or liquidation-heatmap data, so non-crypto
+        signals are labeled honestly for dashboard/audit visibility.
         """
         if not is_session_active(symbol):
             logger.debug(f"[FXEngine] {symbol} outside active session — skipped")
             return None
-        return await super()._symbol_signal(symbol)
+
+        item = await super()._symbol_signal(symbol)
+        if not item:
+            return None
+
+        asset_class = classify_symbol(symbol)
+        signal = item.get("signal") or {}
+        signal["asset_class"] = asset_class
+
+        if asset_class != "crypto":
+            sources = signal.get("layer_sources", {}) or {}
+            sources["whale"] = "smart_flow_ohlcv_non_crypto"
+            sources["liquidation"] = "liquidity_magnet_ohlcv_non_crypto"
+            sources["sentiment"] = "neutral_non_crypto"
+            signal["layer_sources"] = sources
+
+        item["asset_class"] = asset_class
+        item["signal"] = signal
+        return item
