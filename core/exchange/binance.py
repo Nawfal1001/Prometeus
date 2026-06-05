@@ -168,12 +168,45 @@ class BinanceExchange(BaseExchange):
 
     async def get_balance(self):
         try:
-            bal  = await self._client.fetch_balance()
-            usdt = bal.get("USDT", {}).get("free", 0.0)
-            return {"USDT": usdt, "total_equity": usdt}
+            bal = await self._client.fetch_balance()
+            usdt = bal.get("USDT", {}) or {}
+            free = float(usdt.get("free") or 0.0)
+            used = float(usdt.get("used") or 0.0)
+            total = float(usdt.get("total") or 0.0)
+
+            info = bal.get("info") or {}
+
+            def info_float(key: str) -> float:
+                try:
+                    return float(info.get(key) or 0.0)
+                except Exception:
+                    return 0.0
+
+            total_wallet = info_float("totalWalletBalance")
+            total_margin = info_float("totalMarginBalance")
+            available = info_float("availableBalance")
+            unrealized = info_float("totalUnrealizedProfit")
+
+            if self.market_type == "futures":
+                equity = total_margin or total_wallet or total or free
+                free_balance = available or free
+            else:
+                equity = total or free
+                free_balance = free
+
+            return {
+                "USDT": free_balance,
+                "free": free_balance,
+                "used": used,
+                "total": total,
+                "total_equity": equity,
+                "wallet_balance": total_wallet,
+                "margin_balance": total_margin,
+                "unrealized_pnl": unrealized,
+            }
         except Exception as e:
             logger.error(f"[Binance] get_balance: {e}")
-            return {"USDT": 0.0, "total_equity": 0.0}
+            return {"USDT": 0.0, "free": 0.0, "total_equity": 0.0}
 
     async def get_positions(self):
         try:
