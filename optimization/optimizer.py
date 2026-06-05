@@ -346,36 +346,53 @@ class PrometheusOptimizer:
         ter = float(results.get("time_exit_rate", 0) or 0)
         tp1 = float(results.get("tp1_hit_rate", 0) or 0)
 
-        # Trade-volume factor: monotonic, strongest gradient in the 30-100 trade
-        # range so the optimizer is actively pushed to find configs that trade a
-        # lot, not just "few-but-clean" setups.
-        # Two stages: fast ramp up to the floor (~30), then continued linear
-        # reward up to the sweet spot (~100). Sample values:
-        # n=0->0.03  n=5->0.22  n=15->0.36  n=30->0.46  n=50->0.62
-        # n=80->0.85  n=100->0.95  n=160->0.96
+        # Shared guards (all metrics):
+        # time_penalty  – TIME exits are noise signals; a trade that never hits
+        #                 TP or SL adds no information and consumes a slot.
+        # ruin_penalty  – hard brake: drawdown above 10% starts compounding losses.
+        # drawdown_quality – linear reward for keeping DD low (below 22%).
+        time_penalty     = max(0.40, 1.0 - ter * 1.4)
+        drawdown_quality = max(-0.4, 1.0 - dd / 0.22)
+        ruin_penalty     = 1.0 / (1.0 + max(0.0, dd - 0.10) * 4.5)
+
+        if self.metric == "target_150":
+            initial  = float(getattr(cfg, "INITIAL_CAPITAL", 50))
+            target   = float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150))
+            final    = float(results.get("final_capital", initial) or initial)
+
+            # How far did we get toward the 3× target?
+            progress = max(-0.5, min(final / target, 1.5))
+
+            # profit_factor is computed from backtest trades that already include
+            # PAPER_TAKER_FEE + PAPER_SLIPPAGE → PF > 1 means net-profitable
+            # after all costs. This is the primary quality gate.
+            pf_score = max(0.0, min(pf, 5.0)) / 5.0
+
+            # Quality-pure scoring — zero trade-volume pressure.
+            # A 10-trade strategy at 70% WR, PF=3 beats a 100-trade strategy
+            # at 50% WR, PF=1.2. No trade_factor / trade_bonus multiplier.
+            base = (progress        * 0.40   # reaching the target is #1
+                    + pf_score      * 0.25   # fee-net profitability
+                    + wr            * 0.20   # win rate
+                    + drawdown_quality * 0.15)  # don't blow up
+
+            score = base * time_penalty * ruin_penalty
+
+            # Large bonus for configs that actually reach the target in backtest.
+            # No minimum-trade requirement: 5 excellent trades are fine.
+            if final >= target:
+                score += 0.30
+            return score
+
+        # ── Legacy metrics – kept for UI selector compatibility ──────────────
+        # These still use trade_factor so they behave as before for anyone who
+        # selects them explicitly. Only target_150 drops volume pressure.
         n_floor, n_sweet = 30.0, 100.0
         below = n / (n + 8.0)
         above = max(0.0, min(1.0, (n - n_floor) / (n_sweet - n_floor)))
         trade_factor = 0.03 + 0.50 * below + 0.47 * above
-        # Additive density bonus: small, but the optimizer cannot escape it by
-        # picking very few high-PF trades. Saturates around 80 trades.
-        trade_bonus = 0.18 * (n / (n + 30.0))
-        time_penalty = max(0.40, 1.0 - ter * 1.4)
-        drawdown_quality = max(-0.4, 1.0 - dd / 0.22)
-        ruin_penalty = 1.0 / (1.0 + max(0.0, dd - 0.10) * 4.5)
+        trade_bonus  = 0.18 * (n / (n + 30.0))
 
-        if self.metric == "target_150":
-            initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
-            target = float(getattr(cfg, "OPTUNA_TARGET_CAPITAL", 150))
-            final = float(results.get("final_capital", initial) or initial)
-            progress = max(-0.5, min(final / target, 1.5))
-            ret_component = max(-0.4, min(ret / 2.0, 1.0))
-            base = (progress * 0.32 + ret_component * 0.22 + min(pf, 4.0) / 4.0 * 0.18
-                    + drawdown_quality * 0.16 + wr * 0.12)
-            score = base * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
-            if final >= target and n >= 10:
-                score += 0.20
-            return score
         if self.metric == "win_rate":
             return wr * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
         if self.metric == "profit_factor":
