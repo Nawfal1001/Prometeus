@@ -126,10 +126,14 @@ class FusionMarketsExchange(BaseExchange):
         timeframe_to_ctrader_period(timeframe)
         try:
             return await self.client.get_trendbars(ctrader_symbol, timeframe, int(limit))
-        except CTraderProtocolNotReady as e:
+        except Exception as e:
+            # Any cTrader failure (SDK not ready, connection/auth error, protobuf
+            # error) degrades to KuCoin public data for crypto in paper mode.
+            # Non-crypto instruments (forex/commodity/index/stock) have no public
+            # fallback, so the original error is re-raised for those.
             pub = self._to_public_crypto_symbol(ctrader_symbol)
             if pub and self._paper_fallback_enabled():
-                logger.warning(f"[FusionMarkets/cTrader] {e}; falling back to KuCoin for {pub}")
+                logger.warning(f"[FusionMarkets/cTrader] {type(e).__name__}: {e}; falling back to KuCoin for {pub}")
                 return await self._fallback_exchange().get_ohlcv(pub, timeframe, limit=int(limit))
             raise
 
@@ -137,7 +141,7 @@ class FusionMarketsExchange(BaseExchange):
         ctrader_symbol = normalize_ctrader_symbol(symbol)
         try:
             return await self.client.get_orderbook(ctrader_symbol, int(depth))
-        except CTraderProtocolNotReady:
+        except Exception:
             pub = self._to_public_crypto_symbol(ctrader_symbol)
             if pub and self._paper_fallback_enabled():
                 return await self._fallback_exchange().get_orderbook(pub, depth=int(depth))
@@ -147,7 +151,7 @@ class FusionMarketsExchange(BaseExchange):
         ctrader_symbol = normalize_ctrader_symbol(symbol)
         try:
             return await self.client.get_ticker(ctrader_symbol)
-        except CTraderProtocolNotReady:
+        except Exception:
             pub = self._to_public_crypto_symbol(ctrader_symbol)
             if pub and self._paper_fallback_enabled():
                 return await self._fallback_exchange().get_ticker(pub)

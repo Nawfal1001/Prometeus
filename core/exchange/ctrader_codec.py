@@ -32,8 +32,10 @@ class OpenApiPyCodec(CTraderCodec):
                 ProtoOAOrderType,
                 ProtoOATradeSide,
             )
+            from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATrendbarPeriod
             from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoMessage
             self.Protobuf = Protobuf
+            self.ProtoOATrendbarPeriod = ProtoOATrendbarPeriod
             self.ProtoMessage = ProtoMessage
             self.ProtoOAApplicationAuthReq = ProtoOAApplicationAuthReq
             self.ProtoOAAccountAuthReq = ProtoOAAccountAuthReq
@@ -80,7 +82,12 @@ class OpenApiPyCodec(CTraderCodec):
         req = self.ProtoOAGetTrendbarsReq()
         req.ctidTraderAccountId = int(account_id)
         req.symbolId = int(symbol_id)
-        req.period = period
+        # period arrives as a string name ("M30"); the protobuf field is an enum
+        # (ProtoOATrendbarPeriod). Accept either a name or an already-int value.
+        if isinstance(period, str):
+            req.period = self.ProtoOATrendbarPeriod.Value(period)
+        else:
+            req.period = int(period)
         req.fromTimestamp = int(frm_ms)
         req.toTimestamp = int(to_ms)
         return self._pack(req)

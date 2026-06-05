@@ -343,6 +343,9 @@ def normalize_ctrader_symbol(symbol: str) -> str:
 
 
 def timeframe_to_ctrader_period(timeframe: str) -> str:
+    # Only the periods cTrader's ProtoOATrendbarPeriod enum actually defines.
+    # H2/H6/H8 are intentionally absent — cTrader does not support them, so they
+    # raise a clear "unsupported" error instead of a cryptic protobuf failure.
     mapping = {
         "1m": "M1",
         "2m": "M2",
@@ -353,12 +356,10 @@ def timeframe_to_ctrader_period(timeframe: str) -> str:
         "15m": "M15",
         "30m": "M30",
         "1h": "H1",
-        "2h": "H2",
         "4h": "H4",
-        "6h": "H6",
-        "8h": "H8",
         "12h": "H12",
         "1d": "D1",
+        "1w": "W1",
     }
     tf = str(timeframe or "").lower()
     if tf not in mapping:
