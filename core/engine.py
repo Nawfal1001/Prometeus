@@ -20,6 +20,7 @@ from core.alerts.telegram_bot import TelegramBot
 from core.selection.candidate_selector import CandidateSelector
 from core.monitoring.decision_journal import journal
 from core.models.feature_engine import compute_features
+from core.asset_class import classify_symbol
 
 
 class PrometheusEngine:
@@ -218,6 +219,23 @@ class PrometheusEngine:
 
         from core.asset_class import is_crypto as _is_crypto
         _crypto_sym = _is_crypto(symbol)
+
+        # Data-quality gate (item 15). Enforced for non-crypto (weekend gaps,
+        # stale candles, wide spreads are common and would produce garbage
+        # signals). For crypto it is advisory-only so existing behaviour is
+        # unchanged — a healthy 24/7 feed never trips the lenient thresholds.
+        try:
+            from core import data_quality as _dq
+            _q = _dq.check(symbol, df, self._tf, orderbook=orderbook,
+                           min_rows=max(50, int(getattr(cfg, "MIN_FEATURE_ROWS", 50))))
+            if not _q.ok and not _crypto_sym:
+                journal.autoscan(symbol, reason=f"data_quality:{_q.reason}")
+                logger.debug(f"[Engine] {symbol} skipped — data_quality={_q.reason}")
+                return None
+            self._last_data_quality = _q.as_dict()
+        except Exception as e:
+            logger.debug(f"[Engine] data-quality check skipped for {symbol}: {e}")
+
         regime_result = self.regime.detect(df, funding_rate=funding_rate)
         # Whale & liquidation are crypto microstructure layers. For non-crypto
         # instruments we skip them entirely (no OHLCV-proxy math on forex/stock/
@@ -252,11 +270,13 @@ class PrometheusEngine:
         )
         signal.update({
             "symbol": symbol,
+            "asset_class": classify_symbol(symbol),
             "entry_price": current_price,
             "atr_norm": atr_norm,
             "vol_zscore": vol_zscore,
             "recent_high": recent_high,
             "recent_low": recent_low,
+            "data_quality": getattr(self, "_last_data_quality", None),
         })
         # Prefer the scores fusion actually used (correct for the non-crypto
         # availability-aware path); fall back to the locally computed floats.
