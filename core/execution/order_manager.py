@@ -17,7 +17,7 @@ TRADES_FILE.parent.mkdir(exist_ok=True)
 
 class OrderManager:
 
-    def __init__(self, exchange=None, paper: bool = True):
+    def __init__(self, exchange=None, paper: bool = True, trades_file=None):
         self.exchange = exchange
         self.paper = paper or cfg.TRADING_MODE == "paper"
         self.risk = RiskManager()
@@ -29,6 +29,8 @@ class OrderManager:
         self.real_taker_fee = None
         self.symbol_cooldowns = {}
         self._force_next_signal = False
+        from pathlib import Path as _Path
+        self._trades_file = _Path(trades_file) if trades_file else TRADES_FILE
         self._load_trades()
 
     def _resolve_taker_fee(self, is_live: bool) -> float:
@@ -94,14 +96,14 @@ class OrderManager:
                 "trade_history": self.risk.trade_history[-200:],
                 "symbol_cooldowns": self.symbol_cooldowns,
             }
-            TRADES_FILE.write_text(json.dumps(data, indent=2, default=str))
+            self._trades_file.write_text(json.dumps(data, indent=2, default=str))
         except Exception as e:
             logger.warning(f"[Orders] Save failed: {e}")
 
     def _load_trades(self):
         try:
-            if TRADES_FILE.exists():
-                data = json.loads(TRADES_FILE.read_text())
+            if self._trades_file.exists():
+                data = json.loads(self._trades_file.read_text())
                 self.open_trades = data.get("open_trades", {})
                 self._trade_counter = data.get("trade_counter", 0)
                 self.risk.capital = data.get("capital", cfg.INITIAL_CAPITAL)

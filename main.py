@@ -19,6 +19,7 @@ logger.add("logs/prometheus.log", rotation="1 day", retention="7 days", level=cf
 
 engine: PrometheusEngine | None = None
 engine_task: asyncio.Task | None = None
+_fx_engine_task: asyncio.Task | None = None
 
 
 def remove_fake_control_route():
@@ -174,6 +175,33 @@ def validate_live_start() -> tuple[bool, str]:
     return True, "ok"
 
 
+async def _start_fx_engine_task():
+    """Background task for the FX / non-crypto autonomous engine.
+
+    Started alongside the crypto engine when NON_CRYPTO_ENABLED=true.
+    Runs independently — a crash here never affects the crypto engine.
+    """
+    global _fx_engine_task
+    if not getattr(cfg, "NON_CRYPTO_ENABLED", False):
+        logger.info("[FXEngine] NON_CRYPTO_ENABLED=false — FX engine not started")
+        return
+    from core.fx_engine import FXPrometheusEngine
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            fx = FXPrometheusEngine(broadcast_fn=broadcast)
+            await fx.start()
+            break  # clean stop
+        except asyncio.CancelledError:
+            logger.info("[FXEngine] task cancelled")
+            break
+        except Exception as e:
+            wait = min(30 * (2 ** min(attempt - 1, 3)), 300)
+            logger.exception(f"[FXEngine] crashed (attempt {attempt}), restarting in {wait}s: {e}")
+            await asyncio.sleep(wait)
+
+
 async def start_engine_task(mode: str):
     global engine, engine_task
     user_stopped = False
@@ -261,6 +289,12 @@ async def control_override(action: str):
                 return {"status": "blocked", "error": reason}
 
         engine_task = asyncio.create_task(start_engine_task(mode))
+        # Start FX engine in parallel if enabled — fully isolated
+        global _fx_engine_task
+        if getattr(cfg, "NON_CRYPTO_ENABLED", False):
+            if _fx_engine_task is None or _fx_engine_task.done():
+                _fx_engine_task = asyncio.create_task(_start_fx_engine_task())
+                logger.info("[Control] FX engine task launched alongside crypto engine")
         return {"status": "starting", "mode": mode}
 
     if action == "stop":
@@ -270,6 +304,10 @@ async def control_override(action: str):
             engine_task.cancel()
         engine = None
         engine_task = None
+        # Also stop the FX engine if running
+        if _fx_engine_task and not _fx_engine_task.done():
+            _fx_engine_task.cancel()
+        _fx_engine_task = None
         update_state("status", "stopped")
         await broadcast({"type": "status", "status": "stopped"})
         return {"status": "stopped"}

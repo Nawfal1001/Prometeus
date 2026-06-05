@@ -167,6 +167,7 @@ def reload_from_sources():
     FUSION_TAKER_FEE = get_float("FUSION_TAKER_FEE", 0.0)
 
     # ── Non-crypto / FX parallel system ──────────────────────────────────────
+    NON_CRYPTO_ENABLED = get_bool("NON_CRYPTO_ENABLED", "false")
     # These settings control the separate forex/commodity/index/stock engine.
     # They do NOT affect the crypto system.
     NON_CRYPTO_SYMBOLS = get("NON_CRYPTO_SYMBOLS",

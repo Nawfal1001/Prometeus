@@ -13,7 +13,7 @@ PROXY_LAYER_WEIGHT_FACTOR = 0.50
 
 class FusionEngine:
 
-    def __init__(self):
+    def __init__(self, weights_override: dict | None = None):
         self.weights = {
             "regime":      cfg.WEIGHT_REGIME,
             "sentiment":   cfg.WEIGHT_SENTIMENT,
@@ -21,6 +21,8 @@ class FusionEngine:
             "liquidation": cfg.WEIGHT_LIQUIDATION,
             "entry":       cfg.WEIGHT_ENTRY,
         }
+        if weights_override:
+            self.weights.update(weights_override)
         self.last_result = {}
         self._entry_signal = None
         _wsum = sum(self.weights.values())
