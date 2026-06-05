@@ -211,17 +211,54 @@
       <div class="field-group"><label>FX ATR SL Mult</label><input type="number" name="NON_CRYPTO_ATR_SL_MULT" min="0.5" max="5" step="0.1"></div>
       <div class="field-group"><label>FX ATR TP1 Mult</label><input type="number" name="NON_CRYPTO_ATR_TP1_MULT" min="0.5" max="10" step="0.1"></div>
       <div class="field-group"><label>FX ATR TP2 Mult</label><input type="number" name="NON_CRYPTO_ATR_TP2_MULT" min="0.5" max="15" step="0.1"></div>
-      <div class="section-title" style="font-size:13px;padding:8px 0 4px;color:var(--muted)">FX Signal Weights (must sum to 1.0)</div>
+      <div class="field-group"><label>FX Min RR Ratio</label><input type="number" name="NON_CRYPTO_MIN_RR_RATIO" min="1" max="5" step="0.1"></div>
+      <div class="section-title" style="font-size:13px;padding:8px 0 4px;color:var(--muted)">FX Signal Weights (regime + entry + sentiment ≈ 1.0)</div>
       <div class="field-group"><label>Regime Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_REGIME" min="0" max="1" step="0.01" class="fx-weight-input"></div>
       <div class="field-group"><label>Entry Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_ENTRY" min="0" max="1" step="0.01" class="fx-weight-input"></div>
-      <div class="field-group"><label>Liquidation Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_LIQUIDATION" min="0" max="1" step="0.01" class="fx-weight-input"></div>
-      <div class="field-group"><label>Whale Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_WHALE" min="0" max="1" step="0.01" class="fx-weight-input"></div>
-      <div class="field-group"><label>Sentiment Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_SENTIMENT" min="0" max="1" step="0.01" class="fx-weight-input"><span class="hint">Keep at 0.00 — sentiment layer returns 0 for non-crypto.</span></div>
+      <div class="field-group"><label>Sentiment Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_SENTIMENT" min="0" max="1" step="0.01" class="fx-weight-input"><span class="hint">Now wired: forex/commodity → CFTC COT, stocks → news.</span></div>
+      <div class="field-group"><label>Liquidation Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_LIQUIDATION" min="0" max="1" step="0.01" class="fx-weight-input"><span class="hint">Crypto-only — keep 0.</span></div>
+      <div class="field-group"><label>Whale Weight</label><input type="number" name="NON_CRYPTO_WEIGHT_WHALE" min="0" max="1" step="0.01" class="fx-weight-input"><span class="hint">Crypto-only — keep 0.</span></div>
       <div class="field-group"><label>FX Weight Sum</label><div class="weight-sum">Sum: <b id="fx-weight-sum">1.00</b></div></div>
       <div class="section-title" style="font-size:13px;padding:8px 0 4px;color:var(--muted)">FX Optuna / Optimizer</div>
       <div class="field-group"><label>Optuna Trials</label><input type="number" name="NON_CRYPTO_OPTUNA_TRIALS" min="1" max="500" step="1"></div>
       <div class="field-group"><label>Timeout Seconds</label><input type="number" name="NON_CRYPTO_OPTUNA_TIMEOUT_SEC" min="30" max="7200" step="30"></div>
       <div class="field-group"><label>Metric</label><input name="NON_CRYPTO_OPTUNA_METRIC" placeholder="target_150"></div>
+    </div></div>
+
+    <!-- ================================================================ -->
+    <!-- Non-crypto Sentiment / Data Sources (all FREE tiers) -->
+    <!-- ================================================================ -->
+    <div class="settings-section"><div class="section-title">📰 Non-crypto Sentiment / Data Sources</div>
+      <div class="hint" style="padding:4px 0 10px">
+        Stocks need ONE of the news keys below (tried in order Marketaux → Alpha Vantage → Finnhub).
+        Forex &amp; commodity sentiment uses CFTC COT positioning — <b>no key required</b>.
+        FRED adds an optional USD-macro tilt. Without keys, sentiment returns <i>unavailable</i>
+        and fusion falls back to regime + entry (nothing breaks).
+      </div>
+      <div class="settings-grid">
+      <div class="field-group"><label>Marketaux Token <span class="hint">(stocks, primary)</span></label><input type="password" name="MARKETAUX_API_KEY" placeholder="Leave blank to keep existing"></div>
+      <div class="field-group"><label>Alpha Vantage Key <span class="hint">(stocks, fallback)</span></label><input type="password" name="ALPHAVANTAGE_API_KEY" placeholder="Leave blank to keep existing"></div>
+      <div class="field-group"><label>Finnhub Key <span class="hint">(stocks, last resort)</span></label><input type="password" name="FINNHUB_API_KEY" placeholder="Leave blank to keep existing"></div>
+      <div class="field-group"><label>FRED Key <span class="hint">(forex/commodity macro tilt)</span></label><input type="password" name="FRED_API_KEY" placeholder="Leave blank to keep existing"></div>
+      <div class="field-group"><label>EIA Key <span class="hint">(commodity inventories, optional)</span></label><input type="password" name="EIA_API_KEY" placeholder="Leave blank to keep existing"></div>
+    </div></div>
+
+    <!-- ================================================================ -->
+    <!-- Portfolio Risk (across crypto + FX engines) -->
+    <!-- ================================================================ -->
+    <div class="settings-section"><div class="section-title">🛡️ Portfolio Risk (multi-asset)</div>
+      <div class="hint" style="padding:4px 0 10px">
+        Cross-engine ceilings that engage only when the FX engine runs alongside crypto.
+        With crypto running alone these have no effect.
+      </div>
+      <div class="settings-grid">
+      <div class="field-group"><label>Enable Portfolio Risk</label><select name="PORTFOLIO_RISK_ENABLED"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+      <div class="field-group"><label>Max Open Trades (total)</label><input type="number" name="MAX_OPEN_TRADES_TOTAL" min="1" max="100" step="1"></div>
+      <div class="field-group"><label>Max Open Trades / Class</label><input type="number" name="MAX_OPEN_TRADES_PER_CLASS" min="1" max="50" step="1"></div>
+      <div class="field-group"><label>Max Portfolio Risk</label><input type="number" name="MAX_PORTFOLIO_RISK" min="0.01" max="1" step="0.01"><span class="hint">Σ risk / Σ capital across engines.</span></div>
+      <div class="field-group"><label>Max Risk / Symbol</label><input type="number" name="MAX_RISK_PER_SYMBOL" min="0.01" max="1" step="0.01"></div>
+      <div class="field-group"><label>Max Net Directional Risk / Class</label><input type="number" name="MAX_NET_DIR_RISK_PER_CLASS" min="0.01" max="1" step="0.01"><span class="hint">Correlation cap (e.g. all USD pairs long).</span></div>
+      <div class="field-group"><label>Scan Concurrency</label><input type="number" name="SCAN_CONCURRENCY" min="1" max="16" step="1"><span class="hint">Parallel symbol scans (avoids rate limits).</span></div>
     </div></div>
 
     <!-- ================================================================ -->
@@ -243,7 +280,8 @@ const boolKeys=new Set([
   'ALERT_ON_SIGNAL','ALERT_ON_TRADE','ALERT_ON_DAILY_SUMMARY','ALERT_ON_OPTIMIZATION',
   'EXIT_ON_REGIME_FLIP','EXIT_ON_SIGNAL_FLIP','PAPER_CONSERVATIVE_SAME_BAR','PAPER_FORCE_TRADE_ON_SIGNAL',
   'LIVE_CAPITAL_AUTOSYNC','TRADE_STOCKS_ONLY_HOURS','XGB_USE_OPTUNA_TUNING','XGB_USE_SCALE_POS_WEIGHT',
-  'EARLY_KILL_ENABLED','HTF_REQUIRES_LTF_CONFIRMATION','OPTUNA_TUNE_INDICATORS','NON_CRYPTO_ENABLED'
+  'EARLY_KILL_ENABLED','HTF_REQUIRES_LTF_CONFIRMATION','OPTUNA_TUNE_INDICATORS','NON_CRYPTO_ENABLED',
+  'PORTFOLIO_RISK_ENABLED'
 ]);
 const listKeys=new Set(['SYMBOLS','PAPER_SYMBOLS','NON_CRYPTO_SYMBOLS']);
 

@@ -13,7 +13,8 @@ PROXY_LAYER_WEIGHT_FACTOR = 0.50
 
 class FusionEngine:
 
-    def __init__(self, weights_override: dict | None = None):
+    def __init__(self, weights_override: dict | None = None,
+                 params_override: dict | None = None):
         self.weights = {
             "regime":      cfg.WEIGHT_REGIME,
             "sentiment":   cfg.WEIGHT_SENTIMENT,
@@ -23,6 +24,12 @@ class FusionEngine:
         }
         if weights_override:
             self.weights.update(weights_override)
+        # Optional per-instance trading-param overrides (FUSION_THRESHOLD,
+        # ATR_SL_MULT, ATR_TP1_MULT, ATR_TP2_MULT, MIN_RR_RATIO). The crypto
+        # engine passes none → reads cfg exactly as before. The FX engine
+        # injects its NON_CRYPTO_* values so non-crypto optimisation can be
+        # applied WITHOUT ever touching the shared crypto config keys.
+        self._params = dict(params_override) if params_override else {}
         self.last_result = {}
         self._entry_signal = None
         _wsum = sum(self.weights.values())
@@ -31,6 +38,15 @@ class FusionEngine:
                 f"[Fusion] Weight sum={_wsum:.3f} (expected ~1.0) — "
                 f"normalization will be applied. Check Settings > Layer Weights."
             )
+
+    def _p(self, name: str, default: float) -> float:
+        """Trading param: instance override → cfg → default."""
+        if name in self._params:
+            try:
+                return float(self._params[name])
+            except (TypeError, ValueError):
+                pass
+        return float(getattr(cfg, name, default))
 
     def _get_entry_signal(self):
         if self._entry_signal is None:
@@ -283,7 +299,7 @@ class FusionEngine:
                 liq_disagreement_factor = max(0.20, 1.0 - liq_penalty_factor * excess)
                 logger.info(f"[Fusion] LIQUIDATION SOFT PENALTY | direction={direction} liq={liquidation_score:+.3f} -> factor={liq_disagreement_factor:.2f}")
 
-        effective_threshold = cfg.FUSION_THRESHOLD * threshold_mult
+        effective_threshold = self._p("FUSION_THRESHOLD", 0.28) * threshold_mult
         if liq_disagreement and liq_disagreement_factor < 1.0:
             effective_threshold = effective_threshold / max(liq_disagreement_factor, 1e-6)
         if abs_score < effective_threshold:
@@ -292,10 +308,10 @@ class FusionEngine:
             result["effective_threshold"] = round(effective_threshold, 4)
             return result
 
-        sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
-        tp1_mult = float(getattr(cfg, "ATR_TP1_MULT", 1.2))
-        tp2_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
-        min_rr = float(getattr(cfg, "MIN_RR_RATIO", 2.0))
+        sl_mult = self._p("ATR_SL_MULT", 1.2)
+        tp1_mult = self._p("ATR_TP1_MULT", 1.2)
+        tp2_mult = self._p("ATR_TP2_MULT", 2.4)
+        min_rr = self._p("MIN_RR_RATIO", 2.0)
         rr_ratio = tp2_mult / max(sl_mult, 1e-9)
         if rr_ratio < min_rr:
             result = self._no_trade("rr_too_low")

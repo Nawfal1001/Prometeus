@@ -145,7 +145,8 @@ async def fx_optimize(request: Request):
             await exchange.close()
             if not dfs:
                 return JSONResponse({"error": "No valid data for any symbol"}, status_code=400)
-            opt = NonCryptoOptimizer(df=next(iter(dfs.values())), n_trials=n_trials)
+            opt = NonCryptoOptimizer(df=next(iter(dfs.values())), n_trials=n_trials,
+                                     symbols=list(dfs.keys()))
             results = await asyncio.to_thread(opt.run, dfs, "compete")
         else:
             df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
@@ -155,7 +156,7 @@ async def fx_optimize(request: Request):
             feat = compute_features(df.copy())
             if feat is None or feat.empty or len(feat) < 400:
                 return JSONResponse({"error": "Not enough candles after feature prep"}, status_code=400)
-            opt = NonCryptoOptimizer(df=feat, n_trials=n_trials)
+            opt = NonCryptoOptimizer(df=feat, n_trials=n_trials, symbols=[symbol])
             results = await asyncio.to_thread(opt.run)
 
         if apply_best and opt.best_params:

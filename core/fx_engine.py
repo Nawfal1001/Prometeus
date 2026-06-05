@@ -46,9 +46,20 @@ class FXPrometheusEngine(PrometheusEngine):
         from core.models.non_crypto_model import NonCryptoXGBoostModel
         self.entry = EntrySignal(xgb_model_cls=NonCryptoXGBoostModel)
 
-        # 2. Swap fusion engine → non-crypto weight profile.
+        # 2. Swap fusion engine → non-crypto weight profile + non-crypto
+        #    trading params. The params_override reads NON_CRYPTO_* settings so
+        #    FX optimisation (apply best) takes effect here WITHOUT ever
+        #    touching the shared crypto FUSION_THRESHOLD / ATR / RR keys.
         from core.layers.fusion import FusionEngine
-        self.fusion = FusionEngine(weights_override=NON_CRYPTO_WEIGHTS)
+        fx_params = {
+            "FUSION_THRESHOLD": getattr(cfg, "NON_CRYPTO_FUSION_THRESHOLD", 0.20),
+            "MIN_RR_RATIO":     getattr(cfg, "NON_CRYPTO_MIN_RR_RATIO", 2.0),
+            "ATR_SL_MULT":      getattr(cfg, "NON_CRYPTO_ATR_SL_MULT", 1.2),
+            "ATR_TP1_MULT":     getattr(cfg, "NON_CRYPTO_ATR_TP1_MULT", 1.8),
+            "ATR_TP2_MULT":     getattr(cfg, "NON_CRYPTO_ATR_TP2_MULT", 3.5),
+        }
+        self.fusion = FusionEngine(weights_override=NON_CRYPTO_WEIGHTS,
+                                   params_override=fx_params)
 
         # 3. Swap order manager → separate trades file, own capital pool.
         from core.execution.order_manager import OrderManager
