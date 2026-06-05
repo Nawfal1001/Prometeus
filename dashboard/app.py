@@ -23,10 +23,12 @@ from optimization.optimizer import PrometheusOptimizer
 from optimization.walkforward_optimizer import WalkForwardOptimizer
 from optimization.quality_signal_optimizer import QualitySignalOptimizer
 from optimization.live_robustness_optimizer import LiveRobustnessOptimizer
+from optimization.process_runner import run_optimizer_subprocess
 from dashboard.api_scanner import router as scanner_router
 from dashboard.api_backtest_multi import router as backtest_multi_router
 from dashboard.api_optimize_multi import router as optimize_multi_router
 from dashboard.api_lab import router as lab_router
+from dashboard.api_fusion_watchlist import router as fusion_watchlist_router
 from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
@@ -59,6 +61,7 @@ app.include_router(scanner_router)
 app.include_router(backtest_multi_router)
 app.include_router(optimize_multi_router)
 app.include_router(lab_router)
+app.include_router(fusion_watchlist_router)
 
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()
@@ -100,7 +103,17 @@ _opt_status = {
 }
 _model_status = {"running": False, "started_at": None, "finished_at": None, "result": None, "error": None, "params": {}}
 DEFAULT_CRYPTO_TRAIN_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT", "AVAX/USDT", "LINK/USDT", "ADA/USDT"]
-_SECRET_KEYS = {"BINANCE_API_KEY", "BINANCE_SECRET", "ALPACA_API_KEY", "ALPACA_SECRET", "BYBIT_API_KEY", "BYBIT_SECRET", "TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY", "POLYGON_KEY", "COINALYZE_KEY", "KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_API_PASSWORD", "DASHBOARD_PASSWORD", "DASHBOARD_SESSION_SECRET"}
+_SECRET_KEYS = {
+    "BINANCE_API_KEY", "BINANCE_SECRET",
+    "ALPACA_API_KEY", "ALPACA_SECRET",
+    "BYBIT_API_KEY", "BYBIT_SECRET",
+    "KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_API_PASSWORD",
+    "FUSION_CTRADER_CLIENT_SECRET", "FUSION_CTRADER_ACCESS_TOKEN", "FUSION_CTRADER_REFRESH_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "GEMINI_API_KEY", "ETHERSCAN_KEY", "COINGLASS_KEY", "CRYPTOCOMPARE_KEY", "CRYPTOQUANT_KEY",
+    "POLYGON_KEY", "COINALYZE_KEY",
+    "DASHBOARD_PASSWORD", "DASHBOARD_SESSION_SECRET",
+}
 
 
 def _broadcast_from_any_thread(data: dict):
@@ -355,7 +368,7 @@ async def _run_quality_optimization_job(params: dict):
         if df is None or df.empty:
             raise RuntimeError("No data returned from exchange")
 
-        result = await loop.run_in_executor(executor, lambda: _run_quality_optimizer_sync(df, trials, timeout, progress_callback))
+        result = await run_optimizer_subprocess("quality", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, trials=trials, timeout=timeout)
         result.update({"mode": "signal_quality", "timeframe": timeframe, "candles": candles, "trials": trials, "timeout": timeout})
 
         if params.get("auto_apply") and result.get("best_params"):
@@ -414,7 +427,7 @@ async def _run_live_robustness_optimization_job(params: dict):
             df = await _fetch_ohlcv(symbol, timeframe, candles)
             if df is None or df.empty:
                 raise RuntimeError("No data returned from exchange")
-            result = await loop.run_in_executor(executor, lambda: _run_live_robustness_optimizer_sync(df, trials, timeout, progress_callback, mode="single"))
+            result = await run_optimizer_subprocess("live_robustness", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, trials=trials, timeout=timeout, mode="single")
         else:
             symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
             ui_log(f"Live robustness optimization starting | mode={run_mode} symbols={symbols} tf={timeframe} trials={trials}")
@@ -439,7 +452,7 @@ async def _run_live_robustness_optimization_job(params: dict):
                         await maybe
             if not data_by_symbol:
                 raise RuntimeError("No symbol data returned from exchange")
-            result = await loop.run_in_executor(executor, lambda: _run_live_robustness_optimizer_sync(next(iter(data_by_symbol.values())), trials, timeout, progress_callback, data=data_by_symbol, mode="compete"))
+            result = await run_optimizer_subprocess("live_robustness", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=next(iter(data_by_symbol.values())), data=data_by_symbol, trials=trials, timeout=timeout, mode="compete")
             result.update({"optimizer_mode": "compete", "selection_logic": "live_paper_rotator_robustness", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
 
         if _opt_status.get("cancel_requested"):
@@ -506,7 +519,7 @@ async def _run_optimization_job(params: dict):
                 raise RuntimeError("No data returned from exchange")
             _opt_status["progress"] = {"phase": "running", "trial_num": 0, "total": trials, "progress_pct": 0, "message": "Starting trials..."}
             await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
-            result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(df, metric, trials, timeout, progress_callback, mode="single", tune_groups=tune_groups))
+            result = await run_optimizer_subprocess("prometheus", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, metric=metric, trials=trials, timeout=timeout, mode="single", tune_groups=tune_groups)
         else:
             symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL)[:max_symbols]
             ui_log(f"Optimization starting | mode={run_mode} symbols={symbols} metric={metric} trials={trials}")
@@ -535,7 +548,7 @@ async def _run_optimization_job(params: dict):
             await broadcast({"type": "optimization", "status": "progress", "progress": _opt_status["progress"]})
             if run_mode in ("compete", "competition"):
                 first_df = next(iter(data_by_symbol.values()))
-                result = await loop.run_in_executor(executor, lambda: _run_optimizer_sync(first_df, metric, trials, timeout, progress_callback, data=data_by_symbol, mode="compete", tune_groups=tune_groups))
+                result = await run_optimizer_subprocess("prometheus", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=first_df, data=data_by_symbol, metric=metric, trials=trials, timeout=timeout, mode="compete", tune_groups=tune_groups)
                 result.update({"mode": "competing_symbols_optimization", "optimizer_mode": "compete", "selection_logic": "aligned_paper_rotator_selector", "symbols_requested": symbols, "symbols_loaded": list(data_by_symbol.keys())})
             else:
                 rows = []
@@ -547,10 +560,10 @@ async def _run_optimization_job(params: dict):
                     _opt_status.update({"progress": progress, "current_step": idx - 1, "total_steps": len(data_by_symbol)})
                     await broadcast({"type": "optimization", "status": "progress", "progress": progress})
                     if wf_opt:
-                        res = await loop.run_in_executor(executor, lambda d=df: _run_walkforward_sync(d, train_bars, test_bars, step_bars, trials, metric, timeout))
+                        res = await run_optimizer_subprocess("walkforward", is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, train_bars=train_bars, test_bars=test_bars, step_bars=step_bars, trials=trials, metric=metric, timeout=timeout)
                         res["rank_score"] = float(res.get("summary", {}).get("avg_profit_factor", 0)) * 100 + float(res.get("summary", {}).get("avg_win_rate", 0)) * 100
                     else:
-                        res = await loop.run_in_executor(executor, lambda d=df: _run_optimizer_sync(d, metric, trials, timeout, progress_callback, mode="single", tune_groups=tune_groups))
+                        res = await run_optimizer_subprocess("prometheus", progress_callback=progress_callback, is_cancelled=lambda: _opt_status.get("cancel_requested"), df=df, metric=metric, trials=trials, timeout=timeout, mode="single", tune_groups=tune_groups)
                         res["rank_score"] = float(res.get("best_value", -999))
                     res["symbol"] = symbol
                     rows.append(res)
@@ -581,6 +594,11 @@ async def dashboard(request: Request):
 @app.get("/scan", response_class=HTMLResponse)
 async def scan_page(request: Request):
     return templates.TemplateResponse("scan.html", {"request": request})
+
+
+@app.get("/fusion-watchlist", response_class=HTMLResponse)
+async def fusion_watchlist_page(request: Request):
+    return templates.TemplateResponse("fusion_watchlist.html", {"request": request})
 
 
 @app.get("/settings", response_class=HTMLResponse)

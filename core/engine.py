@@ -63,6 +63,15 @@ class PrometheusEngine:
                 journal.add("engine", f"real taker fee {cfg.SYMBOL}={real_fee*100:.4f}%", taker_fee=real_fee, symbol=cfg.SYMBOL)
         except Exception as e:
             logger.warning(f"[Engine] Could not fetch real taker fee: {e}")
+        # Live mode: seed risk.capital from the exchange's actual balance so
+        # sizing matches what the account can really support. Paper is skipped
+        # by sync_capital_from_exchange().
+        if cfg.TRADING_MODE == "live":
+            try:
+                sync = await self.orders.sync_capital_from_exchange()
+                journal.add("engine", f"live capital sync: {sync.get('status')}", **sync)
+            except Exception as e:
+                logger.warning(f"[Engine] Live capital sync on start failed: {e}")
         journal.add("engine", f"start mode={cfg.TRADING_MODE}/{mode} exchange={cfg.EXCHANGE} symbol={cfg.SYMBOL} tf={cfg.TIMEFRAME}", mode=cfg.TRADING_MODE, rotator=mode, exchange=cfg.EXCHANGE, symbol=cfg.SYMBOL, timeframe=cfg.TIMEFRAME)
         await asyncio.gather(self._candle_loop(), self._slow_data_loop())
 
@@ -405,7 +414,12 @@ class PrometheusEngine:
                     self.entry._load_xgb()
                     model = getattr(self.entry, "_xgb", None)
                     if model is not None and hasattr(model, "train_if_stale"):
-                        model.train_if_stale(df, max_age_hours=0)
+                        # Reuse a recent model instead of forcing a full retrain
+                        # on every startup, and run the (synchronous, CPU-heavy)
+                        # training off the event loop so it can't freeze the
+                        # websocket/HTTP server -- a forced retrain on every
+                        # auto-restart was pegging CPU and stalling health checks.
+                        await asyncio.to_thread(model.train_if_stale, df, 6)
                 self._xgb_trained_on_start = True
             except Exception as e:
                 logger.warning(f"[Engine] XGBoost startup training failed: {e}")
@@ -427,6 +441,18 @@ class PrometheusEngine:
                 if now - self._last_4h_update > 1800:
                     await self._update_4h_bias()
                     self._last_4h_update = now
+                # Live capital periodic re-sync (opt-in). Catches deposits,
+                # withdrawals, partial-fill drift, and live-vs-internal
+                # accounting divergence over time. Paper mode is skipped
+                # inside sync_capital_from_exchange().
+                if cfg.TRADING_MODE == "live" and bool(getattr(cfg, "LIVE_CAPITAL_AUTOSYNC", False)):
+                    interval = int(getattr(cfg, "LIVE_CAPITAL_AUTOSYNC_SEC", 900))
+                    if interval > 0 and now - getattr(self, "_last_capital_sync", 0) > interval:
+                        try:
+                            await self.orders.sync_capital_from_exchange()
+                        except Exception as e:
+                            logger.warning(f"[Engine] periodic capital sync failed: {e}")
+                        self._last_capital_sync = now
                 if now - self._last_xgb_retrain > 21600:
                     try:
                         train_symbol = self._symbols()[0]
@@ -435,7 +461,9 @@ class PrometheusEngine:
                             self.entry._load_xgb()
                             model = getattr(self.entry, "_xgb", None)
                             if model is not None and hasattr(model, "train_if_stale"):
-                                model.train_if_stale(df, max_age_hours=6)
+                                # Off-load to a thread so a periodic retrain
+                                # doesn't block the event loop / websockets.
+                                await asyncio.to_thread(model.train_if_stale, df, 6)
                                 journal.add("ml", f"XGBoost retrain checked symbol={train_symbol}", symbol=train_symbol)
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Fusion Watchlist</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.session-bar{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.session-chip{padding:4px 12px;border-radius:20px;font-size:0.78rem;font-weight:600;border:1px solid var(--border)}
+.session-chip.active{background:var(--accent);color:#000;border-color:var(--accent)}
+.class-badges{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:600}
+.badge-forex    {background:#1e3a5f;color:#7ec8e3}
+.badge-crypto   {background:#1a3a1a;color:#7ee87e}
+.badge-commodity{background:#3a2a00;color:#f0c040}
+.badge-index    {background:#2a0a3a;color:#c87ee8}
+.badge-stock    {background:#1a2a3a;color:#7eb8e8}
+.class-filter-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.class-check{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.85rem}
+.score-bar{display:inline-block;width:60px;height:6px;border-radius:3px;background:var(--border);vertical-align:middle;margin-right:6px;overflow:hidden}
+.score-fill{height:100%;border-radius:3px;background:var(--accent)}
+.side-long {color:#4caf50;font-weight:700}
+.side-short{color:#f44336;font-weight:700}
+.side-none {color:var(--muted)}
+td.rank-col{font-weight:700;color:var(--accent)}
+.utc-clock{font-size:0.8rem;color:var(--muted);margin-left:auto}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scan">Scanner</a>
+    <a href="/fusion-watchlist" class="active">Fusion Watchlist</a>
+    <a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a>
+    <a href="/robust-optimize">Robust</a>
+    <a href="/lab">Lab</a>
+    <a href="/train">Train ML</a>
+    <a href="/log-trade">Trade Logs</a>
+    <a href="/health-dashboard">Health</a>
+    <a href="/settings">Settings</a>
+  </div>
+</nav>
+
+<div class="container">
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+  <h1>🎯 Fusion Markets — Daily Watchlist</h1>
+  <span class="utc-clock" id="utc-clock"></span>
+</div>
+<p style="color:var(--muted);margin-bottom:20px">
+  Screens the full Fusion Markets universe (forex, crypto CFDs, commodities, indices)
+  and ranks the best opportunities to trade during the selected half-day session.
+  Uses the same fusion signal pipeline as the live engine.
+</p>
+
+<!-- Active sessions bar -->
+<div class="session-bar" id="session-bar"></div>
+
+<!-- Config card -->
+<div class="card">
+  <div class="card-header">Session &amp; Filters</div>
+  <div class="settings-grid" style="padding:20px">
+
+    <div class="field-group">
+      <label>Trading Session (half-day)</label>
+      <select id="session-select">
+        <option value="asian">Asian (00–08 UTC)</option>
+        <option value="london_open">London Open (07–12 UTC)</option>
+        <option value="overlap" selected>London / NY Overlap (13–17 UTC)</option>
+        <option value="ny">New York (14–20 UTC)</option>
+        <option value="eu_stocks">EU Stocks (07:00–15:30 UTC)</option>
+        <option value="us_stocks">US Stocks (13:30–20:00 UTC)</option>
+      </select>
+      <span class="hint">Instruments not active in this session are excluded.</span>
+    </div>
+
+    <div class="field-group">
+      <label>Timeframe</label>
+      <select id="tf-select">
+        <option value="15m">15m</option>
+        <option value="30m">30m</option>
+        <option value="1h" selected>1h</option>
+        <option value="4h">4h</option>
+      </select>
+    </div>
+
+    <div class="field-group">
+      <label>Candles per symbol</label>
+      <input id="limit-input" type="number" value="400" min="100" max="2000" step="100">
+    </div>
+
+    <div class="field-group" style="grid-column:1/-1">
+      <label>Asset Classes</label>
+      <div class="class-filter-row">
+        <label class="class-check"><input type="checkbox" id="cls-forex"     checked> <span class="badge badge-forex">FX</span> Forex</label>
+        <label class="class-check"><input type="checkbox" id="cls-crypto"    checked> <span class="badge badge-crypto">Crypto</span> Crypto CFD</label>
+        <label class="class-check"><input type="checkbox" id="cls-commodity" checked> <span class="badge badge-commodity">Commodity</span> Commodities</label>
+        <label class="class-check"><input type="checkbox" id="cls-index"     checked> <span class="badge badge-index">Index</span> Indices</label>
+        <label class="class-check"><input type="checkbox" id="cls-stock"     checked> <span class="badge badge-stock">Stock</span> Stock CFDs</label>
+      </div>
+    </div>
+
+  </div>
+  <div style="padding:0 20px 20px;display:flex;align-items:center;gap:16px">
+    <button class="btn btn-primary" onclick="runPicks()">🎯 Generate Daily Picks</button>
+    <span id="picks-status" style="color:var(--muted);font-size:0.85rem"></span>
+  </div>
+</div>
+
+<!-- Results -->
+<div class="card mt">
+  <div class="card-header" id="results-header">📋 Ranked Opportunities</div>
+  <div style="padding:0 12px 12px;overflow-x:auto">
+    <table class="trade-table">
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Symbol</th>
+          <th>Class</th>
+          <th>Sessions</th>
+          <th>Side</th>
+          <th>Tradable</th>
+          <th>Score /100</th>
+          <th>Confidence</th>
+          <th>Fusion</th>
+          <th>RR</th>
+          <th>ATR norm</th>
+          <th>Reason / Error</th>
+        </tr>
+      </thead>
+      <tbody id="picks-body">
+        <tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px">
+          Select a session and click Generate Daily Picks.
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Universe reference -->
+<div class="card mt">
+  <div class="card-header">🌐 Full Fusion Markets Universe</div>
+  <div style="padding:12px;overflow-x:auto">
+    <table class="trade-table" id="universe-table">
+      <thead>
+        <tr><th>Symbol</th><th>Class</th><th>Active Sessions</th><th>Live Now</th></tr>
+      </thead>
+      <tbody id="universe-body">
+        <tr><td colspan="4" style="color:var(--muted);padding:12px">Loading universe…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+
+<script>
+// ── helpers ──────────────────────────────────────────────────────────────
+function fmt(v, d=4){ return Number.isFinite(Number(v)) ? Number(v).toFixed(d) : '—' }
+function esc(s){ return String(s??'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])) }
+function pct(v){ return Number.isFinite(Number(v)) ? Number(v).toFixed(1)+'%' : '—' }
+function score100(v){ return Number.isFinite(Number(v)) ? Math.max(0,Math.min(Number(v),100)).toFixed(1) : '—' }
+
+const CLASS_BADGE = {
+  forex:     '<span class="badge badge-forex">FX</span>',
+  crypto:    '<span class="badge badge-crypto">Crypto</span>',
+  commodity: '<span class="badge badge-commodity">Commodity</span>',
+  index:     '<span class="badge badge-index">Index</span>',
+  stock:     '<span class="badge badge-stock">Stock</span>',
+};
+
+// ── UTC clock ─────────────────────────────────────────────────────────────
+function updateClock(){
+  const now = new Date();
+  const h = String(now.getUTCHours()).padStart(2,'0');
+  const m = String(now.getUTCMinutes()).padStart(2,'0');
+  const s = String(now.getUTCSeconds()).padStart(2,'0');
+  document.getElementById('utc-clock').textContent = `🕐 ${h}:${m}:${s} UTC`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── session chips ─────────────────────────────────────────────────────────
+const SESSIONS = {
+  asian:       {label:'Asian',             hours:[0,8]},
+  london_open: {label:'London Open',       hours:[7,12]},
+  overlap:     {label:'London/NY Overlap', hours:[13,17]},
+  ny:          {label:'New York',          hours:[14,20]},
+  eu_stocks:   {label:'EU Stocks',         hours:[7,16]},
+  us_stocks:   {label:'US Stocks',         hours:[13,20]},
+};
+
+function renderSessionBar(){
+  const h = new Date().getUTCHours();
+  const bar = document.getElementById('session-bar');
+  bar.innerHTML = Object.entries(SESSIONS).map(([k,v])=>{
+    const active = h >= v.hours[0] && h < v.hours[1];
+    return `<span class="session-chip${active?' active':''}">${active?'🟢 ':''}${esc(v.label)}</span>`;
+  }).join('');
+}
+renderSessionBar();
+setInterval(renderSessionBar, 60000);
+
+// ── auto-detect current session ───────────────────────────────────────────
+function autoSelectSession(){
+  const h = new Date().getUTCHours();
+  const priority = ['overlap','us_stocks','london_open','eu_stocks','ny','asian'];
+  for(const k of priority){
+    const v = SESSIONS[k];
+    if(h >= v.hours[0] && h < v.hours[1]){
+      document.getElementById('session-select').value = k;
+      return;
+    }
+  }
+}
+autoSelectSession();
+
+// ── load universe ─────────────────────────────────────────────────────────
+async function loadUniverse(){
+  try{
+    const res = await fetch('/api/fusion/universe');
+    const data = await res.json();
+    const tbody = document.getElementById('universe-body');
+    tbody.innerHTML = (data.universe||[]).map(item=>`
+      <tr>
+        <td><strong>${esc(item.display||item.symbol)}</strong><br><small style="color:var(--muted)">${esc(item.symbol)}</small></td>
+        <td>${CLASS_BADGE[item.class]||esc(item.class)}</td>
+        <td style="font-size:0.78rem">${(item.sessions||[]).map(s=>`<span style="white-space:nowrap">${esc(s)}</span>`).join('<br>')}</td>
+        <td style="text-align:center">${item.active_now?'🟢':'⚫'}</td>
+      </tr>`).join('');
+  }catch(e){
+    document.getElementById('universe-body').innerHTML =
+      `<tr><td colspan="4" style="color:var(--red)">Failed to load universe: ${esc(String(e))}</td></tr>`;
+  }
+}
+loadUniverse();
+
+// ── run picks ────────────────────────────────────────────────────────────
+async function runPicks(){
+  const session  = document.getElementById('session-select').value;
+  const tf       = document.getElementById('tf-select').value;
+  const limit    = parseInt(document.getElementById('limit-input').value) || 400;
+  const classes  = ['forex','crypto','commodity','index','stock']
+                    .filter(c => document.getElementById('cls-'+c)?.checked);
+
+  if(!classes.length){
+    document.getElementById('picks-status').textContent = 'Select at least one asset class.';
+    return;
+  }
+
+  const status = document.getElementById('picks-status');
+  const header = document.getElementById('results-header');
+  status.textContent = 'Scanning…';
+
+  const res = await fetch('/api/fusion/daily-picks',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session, classes, timeframe:tf, limit})
+  });
+  const data = await res.json();
+
+  if(!res.ok || data.error){
+    status.textContent = 'Error: '+(data.error||res.status);
+    return;
+  }
+
+  const rows   = data.symbols || [];
+  const tradable = rows.filter(r=>r.tradable && !r.error).length;
+  const failed = rows.filter(r=>r.error).length;
+  const best   = data.best;
+  status.textContent =
+    `Done — ${data.candidate_count} symbols scanned, ${tradable} tradable, ${failed} errors | ${data.scan_time_utc}`;
+  header.textContent =
+    `📋 Ranked Opportunities — ${esc(data.session_label)} — ${data.scan_date}`;
+
+  const tbody = document.getElementById('picks-body');
+  if(!rows.length){
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px">No results.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r,i)=>{
+    const scoreVal = Number.isFinite(Number(r.display_score)) ? Math.max(0,Math.min(Number(r.display_score),100)) : 0;
+    const scoreBar = `<span class="score-bar"><span class="score-fill" style="width:${scoreVal}%"></span></span>${score100(r.display_score)}`;
+    const side = String(r.side||'none').toLowerCase();
+    const sideCell = side==='long'||side==='buy'
+      ? `<span class="side-long">▲ LONG</span>`
+      : side==='short'||side==='sell'
+        ? `<span class="side-short">▼ SHORT</span>`
+        : `<span class="side-none">—</span>`;
+    const badge = CLASS_BADGE[r.asset_class] || '';
+    const sessions = (r.active_sessions||[]).map(s=>`<span style="font-size:0.72rem;white-space:nowrap">${esc(s)}</span>`).join('<br>');
+    const errStyle = r.error ? 'color:var(--red)' : 'color:var(--muted)';
+    return `<tr>
+      <td class="rank-col">#${i+1}</td>
+      <td><strong>${esc(r.display_symbol||r.symbol)}</strong><br><small style="color:var(--muted)">${esc(r.symbol)}</small></td>
+      <td>${badge}</td>
+      <td>${sessions}</td>
+      <td>${sideCell}</td>
+      <td style="text-align:center">${r.tradable?'✅':'—'}</td>
+      <td>${scoreBar}</td>
+      <td>${pct(r.confidence)}</td>
+      <td>${fmt(r.fusion_score,3)}</td>
+      <td>${fmt(r.risk_reward,2)}</td>
+      <td>${fmt(r.atr_norm,5)}</td>
+      <td style="max-width:260px;white-space:normal;font-size:0.78rem;${errStyle}">${esc(r.error||r.reason||'ok')}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+</body>
+</html>

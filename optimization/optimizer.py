@@ -5,6 +5,7 @@
 import asyncio
 import inspect
 import json
+from collections import OrderedDict
 from pathlib import Path
 
 import optuna
@@ -35,24 +36,44 @@ _OPT_KEYS = [
 ]
 
 SEED_PARAMS = [
-    # 3x-growth seed: matches the manually-tuned config (wide stop, asymmetric
-    # TP, equal split) so TPE explores around the strategy we actually run live.
+    # 3x-growth seed: matches the manually-tuned config we run live (wide stop,
+    # asymmetric TP, equal split) so TPE explores around the live strategy.
     dict(FUSION_THRESHOLD=0.28, MIN_RR_RATIO=2.5, ATR_SL_MULT=1.5, ATR_TP1_MULT=2.0, ATR_TP2_MULT=4.0,
-         TP1_EXIT_PCT=0.50, TP2_EXIT_PCT=0.50, MAX_TRADE_DURATION_BARS=36, EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=40, ROTATOR_MIN_SCORE=0.28, WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
-         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.20),
-    dict(FUSION_THRESHOLD=0.19, MIN_RR_RATIO=1.8, ATR_SL_MULT=1.2, ATR_TP1_MULT=1.2, ATR_TP2_MULT=2.2,
-         TP1_EXIT_PCT=0.65, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=28, EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
-         MAX_RISK_PER_TRADE=0.035, MAX_TRADES_PER_DAY=6, ROTATOR_MIN_SCORE=0.15, WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
-         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.30),
-    dict(FUSION_THRESHOLD=0.17, MIN_RR_RATIO=1.6, ATR_SL_MULT=1.1, ATR_TP1_MULT=1.0, ATR_TP2_MULT=1.9,
-         TP1_EXIT_PCT=0.75, TP2_EXIT_PCT=0.25, MAX_TRADE_DURATION_BARS=24, EMA_FAST=15, EMA_MID=40, EMA_SLOW=150, RSI_PERIOD=7,
-         MAX_RISK_PER_TRADE=0.03, MAX_TRADES_PER_DAY=7, ROTATOR_MIN_SCORE=0.20, WEIGHT_REGIME=0.15, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.10,
-         WEIGHT_LIQUIDATION=0.30, WEIGHT_ENTRY=0.35, REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
-    dict(FUSION_THRESHOLD=0.14, MIN_RR_RATIO=1.35, ATR_SL_MULT=0.95, ATR_TP1_MULT=0.85, ATR_TP2_MULT=1.55,
-         TP1_EXIT_PCT=0.90, TP2_EXIT_PCT=0.10, MAX_TRADE_DURATION_BARS=16, EMA_FAST=10, EMA_MID=30, EMA_SLOW=120, RSI_PERIOD=6,
-         MAX_RISK_PER_TRADE=0.025, MAX_TRADES_PER_DAY=10, ROTATOR_MIN_SCORE=0.10, WEIGHT_REGIME=0.14, WEIGHT_SENTIMENT=0.08, WEIGHT_WHALE=0.08,
-         WEIGHT_LIQUIDATION=0.32, WEIGHT_ENTRY=0.38, REGIME_BLOCK_THRESHOLD=0.20, HTF_BLOCK_THRESHOLD=0.25),
+         TP1_EXIT_PCT=0.50, TP2_EXIT_PCT=0.50, MAX_TRADE_DURATION_BARS=36,
+         EXIT_SIGNAL_FLIP_MIN_SCORE=0.20, EXIT_REGIME_FLIP_MIN_SCORE=0.30,
+         PROFIT_RATCHET_ATR_MULT=0.75, EARLY_KILL_BARS=2, EARLY_KILL_SL_PCT=0.70,
+         BREAKEVEN_BUFFER_PCT=0.0002, MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=40,
+         EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
+         ROTATOR_MIN_SCORE=0.28, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.20,
+         WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35),
+    # Seed A — current production defaults (updated to match improved settings)
+    dict(FUSION_THRESHOLD=0.22, MIN_RR_RATIO=2.5, ATR_SL_MULT=1.2, ATR_TP1_MULT=1.5, ATR_TP2_MULT=3.0,
+         TP1_EXIT_PCT=0.65, TP2_EXIT_PCT=0.35, MAX_TRADE_DURATION_BARS=36,
+         EXIT_SIGNAL_FLIP_MIN_SCORE=0.30, EXIT_REGIME_FLIP_MIN_SCORE=0.30,
+         PROFIT_RATCHET_ATR_MULT=0.75, EARLY_KILL_BARS=2, EARLY_KILL_SL_PCT=0.70,
+         BREAKEVEN_BUFFER_PCT=0.0002,
+         ROTATOR_MIN_SCORE=0.15, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.22,
+         WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
+         WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35),
+    # Seed B — aggressive TP structure, lower threshold
+    dict(FUSION_THRESHOLD=0.18, MIN_RR_RATIO=2.0, ATR_SL_MULT=1.0, ATR_TP1_MULT=1.4, ATR_TP2_MULT=2.8,
+         TP1_EXIT_PCT=0.70, TP2_EXIT_PCT=0.30, MAX_TRADE_DURATION_BARS=30,
+         EXIT_SIGNAL_FLIP_MIN_SCORE=0.25, EXIT_REGIME_FLIP_MIN_SCORE=0.28,
+         PROFIT_RATCHET_ATR_MULT=0.60, EARLY_KILL_BARS=2, EARLY_KILL_SL_PCT=0.65,
+         BREAKEVEN_BUFFER_PCT=0.0002,
+         ROTATOR_MIN_SCORE=0.12, REGIME_BLOCK_THRESHOLD=0.22, HTF_BLOCK_THRESHOLD=0.20,
+         WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.10,
+         WEIGHT_LIQUIDATION=0.27, WEIGHT_ENTRY=0.35),
+    # Seed C — tight SL, wide TP2, high threshold (quality-over-quantity)
+    dict(FUSION_THRESHOLD=0.26, MIN_RR_RATIO=2.8, ATR_SL_MULT=1.1, ATR_TP1_MULT=1.6, ATR_TP2_MULT=3.5,
+         TP1_EXIT_PCT=0.60, TP2_EXIT_PCT=0.40, MAX_TRADE_DURATION_BARS=40,
+         EXIT_SIGNAL_FLIP_MIN_SCORE=0.35, EXIT_REGIME_FLIP_MIN_SCORE=0.35,
+         PROFIT_RATCHET_ATR_MULT=0.80, EARLY_KILL_BARS=3, EARLY_KILL_SL_PCT=0.75,
+         BREAKEVEN_BUFFER_PCT=0.0003,
+         ROTATOR_MIN_SCORE=0.20, REGIME_BLOCK_THRESHOLD=0.28, HTF_BLOCK_THRESHOLD=0.24,
+         WEIGHT_REGIME=0.20, WEIGHT_SENTIMENT=0.10, WEIGHT_WHALE=0.08,
+         WEIGHT_LIQUIDATION=0.27, WEIGHT_ENTRY=0.35),
 ]
 
 
@@ -74,8 +95,14 @@ class PrometheusOptimizer:
         self._multi_prepared_data = None
         self._mode = "single"
         self._tune_groups = tune_groups
-        self._feature_cache: dict = {}
-        self._multi_feature_cache: dict = {}
+        # Bounded LRU caches of recomputed feature frames. Indicator-tuning
+        # signatures rarely repeat, so an unbounded cache just piles up full
+        # DataFrames (×N symbols in compete mode) and can OOM the process the
+        # live engine shares. A small cap keeps the common reuse without the
+        # multi-GB growth.
+        self._feature_cache: "OrderedDict" = OrderedDict()
+        self._multi_feature_cache: "OrderedDict" = OrderedDict()
+        self._feature_cache_max = 4
 
     def run(self, data=None, mode: str | None = None) -> dict:
         if data is not None:
@@ -110,9 +137,15 @@ class PrometheusOptimizer:
             if self._prepared_df is None or self._prepared_df.empty or len(self._prepared_df) < 100:
                 return {"error": "Feature preparation failed or returned too few candles"}
 
-        startup = min(12, max(3, int(self.n_trials * 0.25)))
+        # Give TPE enough random startup to cover the parameter space before it
+        # switches to exploitation.  At 13–16 active dimensions, ~30 % random
+        # trials (floor 10, cap 25) is the minimum for meaningful coverage.
+        startup = min(25, max(10, int(self.n_trials * 0.30)))
         sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=startup, multivariate=True)
-        pruner = (optuna.pruners.MedianPruner(n_startup_trials=max(5, startup), n_warmup_steps=1)
+        # Pruning is off by default: with single-step reporting (step=1) the
+        # MedianPruner has no progression signal and aggressively kills promising
+        # exploratory trials that haven't warmed up yet.
+        pruner = (optuna.pruners.MedianPruner(n_startup_trials=max(8, startup), n_warmup_steps=3)
                   if getattr(cfg, "OPTUNA_PRUNING", False)
                   else optuna.pruners.NopPruner())
         self.study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
@@ -166,6 +199,7 @@ class PrometheusOptimizer:
         if self._mode in ("compete", "competition") and self._multi_raw_data:
             cached = self._multi_feature_cache.get(sig)
             if cached is not None:
+                self._multi_feature_cache.move_to_end(sig)
                 return cached
             prepared_map = {}
             for symbol, raw in self._multi_raw_data.items():
@@ -176,13 +210,18 @@ class PrometheusOptimizer:
                 except Exception as e:
                     logger.debug(f"[Optimizer] feature recompute failed for {symbol}: {e}")
             self._multi_feature_cache[sig] = prepared_map
+            while len(self._multi_feature_cache) > self._feature_cache_max:
+                self._multi_feature_cache.popitem(last=False)
             return prepared_map
 
         cached = self._feature_cache.get(sig)
         if cached is not None:
+            self._feature_cache.move_to_end(sig)
             return cached
         prepared = compute_features(self._raw_df.copy())
         self._feature_cache[sig] = prepared
+        while len(self._feature_cache) > self._feature_cache_max:
+            self._feature_cache.popitem(last=False)
         return prepared
 
     def _objective(self, trial: optuna.Trial) -> float:
@@ -281,30 +320,26 @@ class PrometheusOptimizer:
             params.update({"WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5})
 
         if "exits" in groups:
-            sl_mult = trial.suggest_float("ATR_SL_MULT", 0.90, 2.10, step=0.05)
-            tp1_mult = trial.suggest_float("ATR_TP1_MULT", 1.00, 2.60, step=0.05)
-            min_tp2 = round(max(sl_mult * 1.15, tp1_mult + 0.15), 2)
-            max_tp2 = max(min_tp2 + 0.25, 5.20)
-            tp2_mult = trial.suggest_float("ATR_TP2_MULT", min_tp2, max_tp2, step=0.05)
-            rr_cap = max(1.05, min(3.40, tp2_mult / max(sl_mult, 1e-9)))
-            rr_low = min(1.30, rr_cap - 0.01)
-            min_rr = trial.suggest_float("MIN_RR_RATIO", rr_low, max(rr_low + 0.05, rr_cap), step=0.05)
-            tp1_exit = trial.suggest_float("TP1_EXIT_PCT", 0.55, 1.00, step=0.05)
-            tp2_exit = round(max(0.0, 1.0 - tp1_exit), 2)
-            be_buffer = trial.suggest_float("BREAKEVEN_BUFFER_PCT", 0.0005, 0.0035, step=0.0001)
-            sig_flip = trial.suggest_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.10, 0.35, step=0.02)
-            regime_flip = trial.suggest_float("EXIT_REGIME_FLIP_MIN_SCORE", 0.20, 0.45, step=0.02)
-            ratchet_mult = trial.suggest_float("PROFIT_RATCHET_ATR_MULT", 0.30, 1.10, step=0.05)
-            early_bars = trial.suggest_int("EARLY_KILL_BARS", 1, 4)
-            early_sl_pct = trial.suggest_float("EARLY_KILL_SL_PCT", 0.50, 0.90, step=0.05)
-            params.update({"ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult,
-                           "MIN_RR_RATIO": min_rr, "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit,
-                           "BREAKEVEN_BUFFER_PCT": be_buffer,
-                           "EXIT_SIGNAL_FLIP_MIN_SCORE": sig_flip,
-                           "EXIT_REGIME_FLIP_MIN_SCORE": regime_flip,
-                           "PROFIT_RATCHET_ATR_MULT": ratchet_mult,
-                           "EARLY_KILL_BARS": early_bars,
-                           "EARLY_KILL_SL_PCT": early_sl_pct})
+            # Fixed ranges (not dynamic) — dynamic ranges based on sl/tp1 values
+            # make the parameter space non-stationary for TPE and hurt convergence.
+            # These ranges already cover the live 3× config (SL 1.5, TP1 2.0,
+            # TP2 4.0, RR 2.5). The backtest engine's min-RR gate rejects invalid
+            # combinations naturally.
+            sl_mult   = trial.suggest_float("ATR_SL_MULT",  0.75, 1.90, step=0.05)
+            tp1_mult  = trial.suggest_float("ATR_TP1_MULT", 0.90, 2.20, step=0.05)
+            tp2_mult  = trial.suggest_float("ATR_TP2_MULT", 1.80, 4.50, step=0.10)
+            min_rr    = trial.suggest_float("MIN_RR_RATIO",  1.00, 3.00, step=0.10)
+            tp1_exit  = trial.suggest_float("TP1_EXIT_PCT",  0.50, 0.85, step=0.05)
+            tp2_exit  = round(1.0 - tp1_exit, 2)
+            sig_flip  = trial.suggest_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.10, 0.40, step=0.05)
+            early_bars    = trial.suggest_int("EARLY_KILL_BARS", 1, 4)
+            early_sl_pct  = trial.suggest_float("EARLY_KILL_SL_PCT", 0.50, 0.90, step=0.05)
+            params.update({
+                "ATR_SL_MULT": sl_mult, "ATR_TP1_MULT": tp1_mult, "ATR_TP2_MULT": tp2_mult,
+                "MIN_RR_RATIO": min_rr, "TP1_EXIT_PCT": tp1_exit, "TP2_EXIT_PCT": tp2_exit,
+                "EXIT_SIGNAL_FLIP_MIN_SCORE": sig_flip,
+                "EARLY_KILL_BARS": early_bars, "EARLY_KILL_SL_PCT": early_sl_pct,
+            })
 
         if "thresholds" in groups:
             params["FUSION_THRESHOLD"] = trial.suggest_float("FUSION_THRESHOLD", 0.05, 0.32, step=0.01)
@@ -387,11 +422,27 @@ class PrometheusOptimizer:
         # ── Legacy metrics – kept for UI selector compatibility ──────────────
         # These still use trade_factor so they behave as before for anyone who
         # selects them explicitly. Only target_150 drops volume pressure.
-        n_floor, n_sweet = 30.0, 100.0
+        #
+        # PF hard gate: realistic edge needs PF > ~1.3 to survive live slippage
+        # and fees. Anything below is overfitting / gaming the score function
+        # via high win-rate-with-tiny-wins. Configurable via OPTUNA_MIN_PF.
+        min_pf = float(getattr(cfg, "OPTUNA_MIN_PF", 1.3))
+        if n >= 10 and pf > 0 and pf < min_pf:
+            # Smooth gradient toward the gate, so the optimizer can learn to
+            # climb toward higher PF rather than seeing a flat penalty.
+            return -0.3 + 0.25 * (pf / min_pf) - 0.05 * max(0.0, dd - 0.10)
+
+        # Trade-volume factor: two-stage ramp.
+        # n_floor = 15 (minimum for statistical validity)
+        # n_sweet = 50 (realistic for 1500-candle walk-forward on 30m/1h)
+        n_floor, n_sweet = 15.0, 50.0
         below = n / (n + 8.0)
-        above = max(0.0, min(1.0, (n - n_floor) / (n_sweet - n_floor)))
+        above = max(0.0, min(1.0, (n - n_floor) / max(1.0, n_sweet - n_floor)))
         trade_factor = 0.03 + 0.50 * below + 0.47 * above
-        trade_bonus  = 0.18 * (n / (n + 30.0))
+        # Additive density bonus saturates around 40 trades.
+        # (time_penalty / drawdown_quality / ruin_penalty already defined above
+        #  as shared guards for all metrics, including target_150.)
+        trade_bonus = 0.18 * (n / (n + 20.0))
 
         if self.metric == "win_rate":
             return wr * trade_factor * time_penalty * ruin_penalty + trade_bonus * ruin_penalty
