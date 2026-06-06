@@ -296,16 +296,28 @@ def reload_from_sources():
     EXIT_ON_REGIME_FLIP = get_bool("EXIT_ON_REGIME_FLIP", "true")
     EXIT_REGIME_FLIP_MIN_SCORE = get_float("EXIT_REGIME_FLIP_MIN_SCORE", 0.30)
     PROFIT_RATCHET_ATR_MULT = get_float("PROFIT_RATCHET_ATR_MULT", 0.75)
+    global TRAIL_BEFORE_TP1
+    # When False, hold the initial fixed stop until TP1 is hit (don't ratchet
+    # the stop up on early in-favour moves), so normal pullbacks don't stop a
+    # trade out before it reaches its first target.
+    TRAIL_BEFORE_TP1 = get_bool("TRAIL_BEFORE_TP1", "true")
     EARLY_KILL_ENABLED = get_bool("EARLY_KILL_ENABLED", "true")
     EARLY_KILL_BARS = get_int("EARLY_KILL_BARS", 2)
-    EARLY_KILL_SL_PCT = get_float("EARLY_KILL_SL_PCT", 0.70)
+    # Soften the early-kill: only cut a fresh trade if it's already ~90% of the
+    # way to its stop within the first EARLY_KILL_BARS bars (i.e. about to stop
+    # out anyway). At 0.70 normal noise was being realised as losses too soon.
+    EARLY_KILL_SL_PCT = get_float("EARLY_KILL_SL_PCT", 0.90)
     LIQUIDATION_VETO_THRESHOLD = get_float("LIQUIDATION_VETO_THRESHOLD", 0.45)
     LIQUIDATION_SOFT_PENALTY_THRESHOLD = get_float("LIQUIDATION_SOFT_PENALTY_THRESHOLD", 0.30)
     LIQUIDATION_HARD_VETO_THRESHOLD = get_float("LIQUIDATION_HARD_VETO_THRESHOLD", 0.70)
     LIQUIDATION_PENALTY_FACTOR = get_float("LIQUIDATION_PENALTY_FACTOR", 0.50)
     global EXIT_ON_SIGNAL_FLIP, EXIT_SIGNAL_FLIP_MIN_SCORE, MAX_CONCURRENT_PAPER_TRADES
     EXIT_ON_SIGNAL_FLIP = get_bool("EXIT_ON_SIGNAL_FLIP", "true")
-    EXIT_SIGNAL_FLIP_MIN_SCORE = get_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.20)
+    # Only bail out when the opposite signal is genuinely strong -- noticeably
+    # stronger than the 0.28 entry threshold. At the old 0.20 a trade entered
+    # at 0.28 was force-closed the instant the score wobbled to -0.20, so
+    # positions rarely survived to reach TP1 (2xATR) / TP2 (4xATR).
+    EXIT_SIGNAL_FLIP_MIN_SCORE = get_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.45)
     MAX_CONCURRENT_PAPER_TRADES = get_int("MAX_CONCURRENT_PAPER_TRADES", 6)
     OPTUNA_DIRECTION = "maximize"
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
@@ -354,8 +366,15 @@ def reload_from_sources():
     global REGIME_CHAOS_COOLDOWN_BARS, REGIME_BULL_SCORE_THRESHOLD, REGIME_BEAR_SCORE_THRESHOLD
     global XGB_LABEL_LOOKAHEAD
     global KUCOIN_API_KEY, KUCOIN_API_SECRET, KUCOIN_API_PASSWORD
-    PAPER_FORCE_TRADE_ON_SIGNAL = get_bool("PAPER_FORCE_TRADE_ON_SIGNAL", "true")
-    PAPER_FORCE_MIN_SCORE = get_float("PAPER_FORCE_MIN_SCORE", 0.22)
+    # Paper force-trade is OFF by default so paper takes only the same
+    # fully-qualified signals that live does (paper == live behaviour).
+    # When it was on, signals that fusion explicitly BLOCKED (counter-trend,
+    # below-threshold, low R:R, liquidation-contrarian) were still traded in
+    # paper as long as |score| >= PAPER_FORCE_MIN_SCORE (0.22, *below* the
+    # 0.28 entry threshold) -- i.e. the bot took exactly the trades it had
+    # decided were not worth taking, which is a major source of losers.
+    PAPER_FORCE_TRADE_ON_SIGNAL = get_bool("PAPER_FORCE_TRADE_ON_SIGNAL", "false")
+    PAPER_FORCE_MIN_SCORE = get_float("PAPER_FORCE_MIN_SCORE", 0.30)
     LIVE_OHLCV_LIMIT = get_int("LIVE_OHLCV_LIMIT", 600)
     ROTATOR_MAX_SYMBOLS = get_int("ROTATOR_MAX_SYMBOLS", 5)
     MAX_UI_SYMBOLS = get_int("MAX_UI_SYMBOLS", 7)

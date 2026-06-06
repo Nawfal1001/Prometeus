@@ -19,6 +19,10 @@ env/
 data/paper_trades.json
 config/user_settings.json
 config/optuna_results.json
+
+# Raw per-seed optimization outputs (reproducible via tools/opt; final
+# synthesized config is committed separately)
+config/opt_*.json
 models/*.pkl
 models/*.joblib
 

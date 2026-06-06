@@ -1,0 +1,86 @@
+{
+  "_README": "Synthetic-data Optuna optimization results (3 asset classes, 2 optimizer seeds each, out-of-sample validated). These are DIRECTIONAL recommendations: the synthetic generator trends cleaner than real markets, so the structure/direction of these settings is trustworthy but the exact floats and the headline win-rates/PF are optimistic. Re-validate on real candles via the Render backtest before relying on them live. This file is documentation only and is NOT auto-loaded by settings (that would be config/optimized_params.json).",
+  "method": {
+    "harness": "tools/opt/optimize.py",
+    "exit_engine": "core/execution/exit_manager.py (real production code)",
+    "sizing": "core/risk/position_sizer.py (real production code)",
+    "entry_model": "EMA crossover + strength threshold on synthetic OHLCV (NOT the production fusion entry)",
+    "validation": "in-sample seeds 1000-1004, out-of-sample seeds 5000-5004"
+  },
+  "applies_to_production": {
+    "directly_applicable_exit_risk_keys": [
+      "ATR_SL_MULT", "ATR_TP1_MULT", "ATR_TP2_MULT", "TP1_EXIT_PCT",
+      "TP2_EXIT_PCT", "PROFIT_RATCHET_ATR_MULT", "TRAIL_BEFORE_TP1",
+      "EARLY_KILL_ENABLED", "MAX_TRADE_DURATION_BARS"
+    ],
+    "directional_only_entry_keys": "EMA_FAST/EMA_SLOW/ENTRY_THR/ATR_GATE_MULT are specific to the harness's EMA entry and do NOT map to the production fusion entry. Their lesson translates only as: be more selective (raise FUSION_THRESHOLD / MIN_ATR_NORM, only trade adequate volatility)."
+  },
+  "crypto": {
+    "verdict": "Momentum has a clear edge on trending crypto. Let winners run.",
+    "config": {
+      "ATR_SL_MULT": 2.5,
+      "ATR_TP1_MULT": 2.4,
+      "ATR_TP2_MULT": 6.5,
+      "TP1_EXIT_PCT": 0.15,
+      "TP2_EXIT_PCT": 0.55,
+      "PROFIT_RATCHET_ATR_MULT": 2.0,
+      "TRAIL_BEFORE_TP1": false,
+      "EARLY_KILL_ENABLED": false,
+      "MAX_TRADE_DURATION_BARS": 84
+    },
+    "in_sample": {"win_rate": 0.715, "mean_return": 1.587, "profit_factor": 3.67, "mean_max_dd": 0.094},
+    "out_of_sample": {"win_rate": 0.654, "mean_return": 1.274, "profit_factor": 2.79, "mean_max_dd": 0.116},
+    "key_insights": [
+      "Let winners run: distant TP1/TP2 + long max-duration win.",
+      "Do NOT trail before TP1; trail loosely after (ratchet ~2.0 ATR).",
+      "Drop early-kill (near-zero effect, unstable).",
+      "Be selective on entries + use a mid-volatility gate.",
+      "Wide stops (~2.2-2.7 ATR) are fine given the far targets."
+    ]
+  },
+  "stocks": {
+    "verdict": "Marginally tradable; tighter stops + selectivity. Gaps punish over-trading.",
+    "config": {
+      "ATR_SL_MULT": 1.3,
+      "ATR_TP1_MULT": 1.8,
+      "ATR_TP2_MULT": 6.5,
+      "TP1_EXIT_PCT": 0.40,
+      "TP2_EXIT_PCT": 0.35,
+      "PROFIT_RATCHET_ATR_MULT": 0.55,
+      "TRAIL_BEFORE_TP1": true,
+      "EARLY_KILL_ENABLED": false,
+      "MAX_TRADE_DURATION_BARS": 60
+    },
+    "in_sample": {"win_rate": 0.372, "mean_return": 0.094, "profit_factor": 1.45, "mean_max_dd": 0.043},
+    "out_of_sample": {"win_rate": 0.286, "mean_return": -0.015, "profit_factor": 0.98, "mean_max_dd": 0.082},
+    "key_insights": [
+      "Trail BEFORE TP1 here (opposite of crypto) to capture upward drift.",
+      "Keep stops tight (~1.3 ATR): gaps make wide stops expensive.",
+      "Selectivity beats frequency; over-trading collapses out-of-sample.",
+      "Loose ratchet + wide TP2 to ride drift trends."
+    ]
+  },
+  "forex": {
+    "verdict": "NOT robustly tradable with a momentum entry (mean-reverting). Negative out-of-sample.",
+    "config": {
+      "ATR_SL_MULT": 2.0,
+      "ATR_TP1_MULT": 0.65,
+      "ATR_TP2_MULT": 1.2,
+      "TP1_EXIT_PCT": 0.55,
+      "TP2_EXIT_PCT": 0.20,
+      "PROFIT_RATCHET_ATR_MULT": 0.55,
+      "TRAIL_BEFORE_TP1": true,
+      "EARLY_KILL_ENABLED": true,
+      "MAX_TRADE_DURATION_BARS": 40
+    },
+    "in_sample": {"win_rate": 0.742, "mean_return": -0.0078, "profit_factor": 1.128, "mean_max_dd": 0.0453},
+    "out_of_sample": {"win_rate": 0.731, "mean_return": -0.0228, "profit_factor": 0.873, "mean_max_dd": 0.0543},
+    "key_insights": [
+      "High win-rate is a trap: avg loss 2-4x avg win (negative skew).",
+      "Take profit FAST (TP1 ~0.6 ATR); reversion eats far targets.",
+      "If pursued, use a mean-reversion entry, not momentum.",
+      "Maximum selectivity is the only lever that keeps it near break-even."
+    ]
+  },
+  "cross_asset_insight": "Optimal pre-TP1 trailing is asset-dependent: OFF for crypto (let strong trends run), ON for stocks/forex (capture drift / cut reversion). Universal wins across all three: drop early-kill, keep the post-TP1 ratchet loose, gate on volatility, and prefer selectivity over trade count."
+}
