@@ -30,6 +30,7 @@ from dashboard.api_optimize_multi import router as optimize_multi_router
 from dashboard.api_lab import router as lab_router
 from dashboard.api_fusion_watchlist import router as fusion_watchlist_router
 from dashboard.api_fx import router as fx_router
+from dashboard.api_fs_lab import router as fs_lab_router
 from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
@@ -64,6 +65,7 @@ app.include_router(optimize_multi_router)
 app.include_router(lab_router)
 app.include_router(fusion_watchlist_router)
 app.include_router(fx_router)
+app.include_router(fs_lab_router)
 
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()
@@ -635,6 +637,11 @@ async def robust_optimize_page(request: Request):
 @app.get("/lab", response_class=HTMLResponse)
 async def lab_page(request: Request):
     return templates.TemplateResponse("lab.html", {"request": request})
+
+
+@app.get("/fs-lab", response_class=HTMLResponse)
+async def fs_lab_page(request: Request):
+    return templates.TemplateResponse("fs_lab.html", {"request": request})
 
 
 @app.get("/train", response_class=HTMLResponse)
