@@ -40,7 +40,7 @@ SEED_PARAMS = [
     # wide stop 2.5, far TP2 6.5, small early scale-out, loose ratchet runner) so TPE
     # warm-starts at the known-good point and explores around it. Must stay inside the
     # exit search ranges below, or Optuna can never reproduce the live strategy.
-    dict(FUSION_THRESHOLD=0.28, MIN_RR_RATIO=2.5, ATR_SL_MULT=2.5, ATR_TP1_MULT=2.4, ATR_TP2_MULT=6.5,
+    dict(FUSION_THRESHOLD=0.19, MIN_RR_RATIO=2.5, ATR_SL_MULT=2.5, ATR_TP1_MULT=2.4, ATR_TP2_MULT=6.5,
          TP1_EXIT_PCT=0.15, TP2_EXIT_PCT=0.55, MAX_TRADE_DURATION_BARS=84,
          EXIT_SIGNAL_FLIP_MIN_SCORE=0.20, EXIT_REGIME_FLIP_MIN_SCORE=0.30,
          PROFIT_RATCHET_ATR_MULT=2.0, EARLY_KILL_BARS=2, EARLY_KILL_SL_PCT=0.70,

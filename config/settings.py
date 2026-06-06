@@ -198,7 +198,7 @@ def reload_from_sources():
     MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 40)
     MAX_CONSEC_LOSSES = get_int("MAX_CONSEC_LOSSES", 4)
 
-    FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.28)
+    FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.19)
     MIN_RR_RATIO = get_float("MIN_RR_RATIO", 2.5)
 
     STOP_LOSS_PCT = get_float("STOP_LOSS_PCT", 0.007)
