@@ -266,6 +266,19 @@ def reload_from_sources():
     FEAR_GREED_BULL_THRESHOLD = get_int("FEAR_GREED_BULL_THRESHOLD", 60)
     FEAR_GREED_BEAR_THRESHOLD = get_int("FEAR_GREED_BEAR_THRESHOLD", 40)
 
+    # --- Sentiment layer upgrades (see core/layers/sentiment.py) ---
+    global SENTIMENT_CONTRARIAN_EXTREMES, SENTIMENT_GREED_THRESHOLD, SENTIMENT_FEAR_THRESHOLD
+    global SENTIMENT_CONTRARIAN_STRENGTH, SENTIMENT_USE_DERIVATIVES, SENTIMENT_DERIV_WEIGHT
+    # Contrarian handling of Fear & Greed extremes: at extreme greed fade/flip to
+    # caution, at extreme fear toward opportunity.
+    SENTIMENT_CONTRARIAN_EXTREMES = get_bool("SENTIMENT_CONTRARIAN_EXTREMES", "true")
+    SENTIMENT_GREED_THRESHOLD = get_float("SENTIMENT_GREED_THRESHOLD", 75.0)
+    SENTIMENT_FEAR_THRESHOLD = get_float("SENTIMENT_FEAR_THRESHOLD", 25.0)
+    SENTIMENT_CONTRARIAN_STRENGTH = get_float("SENTIMENT_CONTRARIAN_STRENGTH", 0.5)
+    # Blend real per-symbol positioning (funding/OI/order-book) into sentiment.
+    SENTIMENT_USE_DERIVATIVES = get_bool("SENTIMENT_USE_DERIVATIVES", "true")
+    SENTIMENT_DERIV_WEIGHT = get_float("SENTIMENT_DERIV_WEIGHT", 0.5)
+
     REGIME_BULL_FUNDING_THRESHOLD = get_float("REGIME_BULL_FUNDING", 0.01)
     REGIME_CHAOS_VOLATILITY = get_float("REGIME_CHAOS_VOL", 0.05)
 

@@ -20,6 +20,7 @@ class SentimentEngine:
         self.cache_ttl = 3600
         self._seeded = False
         self._has_real_sentiment = False
+        self.last_source = "fear_greed"
         self._seed_from_fear_greed()
 
     def _seed_from_fear_greed(self):
@@ -70,21 +71,76 @@ class SentimentEngine:
             return 0.0
         return sum(dq) / len(dq)
 
+    def _fg_contrarian(self, fg_value: float) -> float:
+        """Convert Fear & Greed (0-100) to a [-1,1] score.
+
+        Linear in the normal band, but contrarian at extremes when enabled:
+        extreme greed fades/flips bearish (crowded), extreme fear turns
+        bullish (capitulation). Transition is smooth at the thresholds.
+        """
+        n = max(-1.0, min(1.0, (fg_value - 50.0) / 50.0))
+        if not getattr(cfg, "SENTIMENT_CONTRARIAN_EXTREMES", True):
+            return n
+        greed = float(getattr(cfg, "SENTIMENT_GREED_THRESHOLD", 75.0))
+        fear = float(getattr(cfg, "SENTIMENT_FEAR_THRESHOLD", 25.0))
+        strength = float(getattr(cfg, "SENTIMENT_CONTRARIAN_STRENGTH", 0.5))
+        if fg_value >= greed:
+            excess = (fg_value - greed) / max(100.0 - greed, 1e-9)  # 0..1
+            return max(-1.0, min(1.0, n * (1.0 - excess) - strength * excess))
+        if fg_value <= fear:
+            excess = (fear - fg_value) / max(fear, 1e-9)            # 0..1
+            return max(-1.0, min(1.0, n * (1.0 - excess) + strength * excess))
+        return n
+
+    def _real_positioning_score(self, symbol: str | None):
+        """Per-symbol contrarian positioning from funding/OI + order-book
+        pressure (data the bot already fetches). Returns [-1,1] or None when
+        no API keys/data are available (so we fall back to Fear & Greed)."""
+        if not symbol or not getattr(cfg, "SENTIMENT_USE_DERIVATIVES", True):
+            return None
+        parts = []
+        try:
+            from core.layers.api_confirmations import (
+                coinanalyse_derivatives_pressure,
+                cryptocompare_pressure,
+            )
+            d = coinanalyse_derivatives_pressure(symbol)
+            if d and d.get("score") is not None:
+                parts.append(max(-1.0, min(1.0, float(d["score"]) / 0.6)))
+            cc = cryptocompare_pressure(symbol)
+            if cc is not None:
+                parts.append(max(-1.0, min(1.0, float(cc) / 0.35)))
+        except Exception as e:
+            logger.debug(f"[Sentiment] positioning fetch failed for {symbol}: {e}")
+        if not parts:
+            return None
+        return max(-1.0, min(1.0, sum(parts) / len(parts)))
+
     def get_layer_score(self, symbol: str | None = None) -> float:
         try:
-            # Fear & Greed index is crypto-specific — return neutral for other asset classes
+            # Fear & Greed index is crypto-specific — return neutral for other classes
             if symbol and not is_crypto(symbol):
                 return 0.0
             self.update()
-            fg = max(-1.0, min(1.0, (float(self.fear_greed) - 50.0) / 50.0))
+            fg = self._fg_contrarian(float(self.fear_greed))
 
-            if not self._has_real_sentiment:
-                return float(fg)
+            # Blend in real, per-symbol positioning when available
+            pos = self._real_positioning_score(symbol)
+            if pos is not None:
+                w = float(getattr(cfg, "SENTIMENT_DERIV_WEIGHT", 0.5))
+                w = max(0.0, min(1.0, w))
+                self.last_source = "fg+positioning"
+                return max(-1.0, min(1.0, (1.0 - w) * fg + w * pos))
 
-            news = self._avg(self.news_sentiment)
-            social = self._avg(self.social_sentiment)
-            score = 0.45 * news + 0.35 * social + 0.20 * fg
-            return max(-1.0, min(1.0, float(score)))
+            # Optional real news/social path (kept for when a feed is wired)
+            if self._has_real_sentiment:
+                news = self._avg(self.news_sentiment)
+                social = self._avg(self.social_sentiment)
+                self.last_source = "news+social"
+                return max(-1.0, min(1.0, 0.45 * news + 0.35 * social + 0.20 * fg))
+
+            self.last_source = "fear_greed"
+            return float(fg)
         except Exception as e:
             logger.warning(f"[Sentiment] score failed: {e}")
             return 0.0
