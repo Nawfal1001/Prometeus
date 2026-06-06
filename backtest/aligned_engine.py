@@ -1,5 +1,6 @@
 import config.settings as cfg
 from backtest.engine import MultiSymbolBacktestEngine, TAKER_FEE, SLIPPAGE
+from backtest.validation import label_regime
 from core.selection.candidate_selector import CandidateSelector
 from core.memory.symbol_memory import SymbolMemory
 
@@ -143,6 +144,7 @@ class AlignedMultiSymbolBacktestEngine(MultiSymbolBacktestEngine):
                         "bar": i,
                         "entry_bar": entry_bar,
                         "fusion_score": entry_score,
+                        "regime": entry_regime,
                     })
                     in_trade = False
                     active_symbol = None
@@ -178,6 +180,7 @@ class AlignedMultiSymbolBacktestEngine(MultiSymbolBacktestEngine):
             active_symbol = symbol
             trade_side = int(sig["direction"])
             entry_score = float(sig.get("fusion_score", 0))
+            entry_regime = label_regime(row)   # regime tag captured AT ENTRY
             entry_capital = capital
             close = float(row["close"])
             high = float(row["high"])

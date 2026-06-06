@@ -295,6 +295,9 @@ class PrometheusOptimizer:
             metrics["n_returns"] = results.get("n_returns", 0)
             metrics["window_returns"] = [w.get("window_return", 0.0)
                                          for w in results.get("window_stats", [])]
+            # Fixed-length per-time-bucket returns — aligned across all trials in
+            # BOTH single and compete modes (compete has no walk-forward windows).
+            metrics["bucket_returns"] = results.get("bucket_returns", [])
             metrics["regime_breakdown"] = results.get("regime_breakdown", {})
             self.trial_results.append({"trial": trial.number, "score": round(score, 4), "params": params, "metrics": metrics})
             if score > self.best_value:
@@ -557,15 +560,17 @@ class PrometheusOptimizer:
             if len(trials) < 2:
                 return {"note": "need >=2 trials for overfitting analysis"}
 
-            # PBO: build (windows x configs) matrix of per-window returns.
-            cols, n_win = [], min((len(t["metrics"].get("window_returns", [])) for t in trials), default=0)
-            for t in trials:
-                wr = t["metrics"].get("window_returns", [])
-                if n_win >= 2 and len(wr) >= n_win:
-                    cols.append(wr[:n_win])
-            pbo = (cscv_pbo(np.array(cols).T, n_splits=min(16, n_win))
-                   if len(cols) >= 2 and n_win >= 2
-                   else {"pbo": None, "note": "not enough per-window data (try more candles / fewer windows)"})
+            # PBO: build a (periods x configs) matrix. Prefer per-time-bucket
+            # returns (present in single AND compete mode); fall back to
+            # walk-forward per-window returns if buckets are unavailable.
+            def _series(t):
+                b = t["metrics"].get("bucket_returns") or []
+                return b if len(b) >= 2 else t["metrics"].get("window_returns", [])
+            n_obs = min((len(_series(t)) for t in trials), default=0)
+            cols = [_series(t)[:n_obs] for t in trials if len(_series(t)) >= n_obs and n_obs >= 2]
+            pbo = (cscv_pbo(np.array(cols).T, n_splits=min(16, n_obs))
+                   if len(cols) >= 2 and n_obs >= 2
+                   else {"pbo": None, "note": "not enough per-period data (need more trades / candles)"})
 
             # Deflated Sharpe for the BEST trial vs the number of configs tried.
             best = max(trials, key=lambda t: t.get("score", -1e9))

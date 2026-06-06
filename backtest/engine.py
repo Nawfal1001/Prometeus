@@ -455,7 +455,20 @@ class BacktestEngine:
             skew, kurt = 0.0, 3.0
         tp1_count = sum(1 for t in trades if t.get("tp1_hit", False))
         time_count = sum(1 for t in trades if t.get("exit_type") == "TIME")
-        out = {"total_trades": len(trades), "win_rate": round(wr, 4), "avg_win_usdt": round(aw, 4), "avg_loss_usdt": round(al, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(ret, 4), "final_capital": round(final, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "max_consec_losses": 0, "tp1_hit_rate": round(tp1_count / len(trades), 4), "time_exit_rate": round(time_count / len(trades), 4), "slippage_pct": SLIPPAGE * 100, "fee_pct": TAKER_FEE * 100, "trades": trades[-50:], "go_live_ready": self._go_live(wr, max_dd, pf, len(trades)), "sharpe_per_obs": round(sharpe_obs, 6), "ret_skew": round(skew, 4), "ret_kurtosis": round(kurt, 4), "n_returns": int(r_arr.size)}
+        # Fixed-length per-time-bucket returns for the CSCV / PBO matrix. Binning
+        # trades by bar into K equal buckets yields a SAME-length vector for every
+        # config (single OR compete mode), so configs are directly comparable
+        # across the optimizer's trials regardless of how many trades each made.
+        K = 12
+        bucket_returns = [0.0] * K
+        bars_arr = df_t["bar"].values if "bar" in df_t.columns else np.arange(len(df_t))
+        b0, b1 = float(np.min(bars_arr)), float(np.max(bars_arr))
+        if b1 > b0:
+            width = (b1 - b0) / K
+            for _bar, _pnl in zip(df_t["bar"].values, df_t["pnl"].values):
+                idx = min(K - 1, int((float(_bar) - b0) / width))
+                bucket_returns[idx] += float(_pnl) / max(initial, 1e-9)
+        out = {"total_trades": len(trades), "win_rate": round(wr, 4), "avg_win_usdt": round(aw, 4), "avg_loss_usdt": round(al, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(ret, 4), "final_capital": round(final, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "max_consec_losses": 0, "tp1_hit_rate": round(tp1_count / len(trades), 4), "time_exit_rate": round(time_count / len(trades), 4), "slippage_pct": SLIPPAGE * 100, "fee_pct": TAKER_FEE * 100, "trades": trades[-50:], "go_live_ready": self._go_live(wr, max_dd, pf, len(trades)), "sharpe_per_obs": round(sharpe_obs, 6), "ret_skew": round(skew, 4), "ret_kurtosis": round(kurt, 4), "n_returns": int(r_arr.size), "bucket_returns": [round(x, 6) for x in bucket_returns]}
         if symbol:
             out["symbol"] = symbol
         return out
@@ -498,6 +511,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
             "symbols_loaded": list(aligned.keys()),
             "symbols_traded": selection_stats,
             "equity_curve": self._equity_curve(trades),
+            "regime_breakdown": regime_conditional_metrics(trades),
         })
         return result
 
