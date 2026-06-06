@@ -74,6 +74,17 @@
   </div>
 </div>
 
+<!-- Live ranked signals (from the running engine) -->
+<div class="card mt">
+  <div class="card-header">📡 Live Ranked Signals <span style="font-size:11px;color:var(--muted);font-weight:400">— from the running engine</span></div>
+  <div style="overflow-x:auto">
+  <table class="trade-table">
+    <thead><tr><th>#</th><th>Symbol</th><th>Side</th><th>Tradable</th><th>Score</th><th>Confidence</th><th>Fusion</th><th>RR</th><th>Price</th><th>Reason</th></tr></thead>
+    <tbody id="fxe-sig-body"><tr><td colspan="10" style="color:var(--muted)">Start the engine to see live signals</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
 <!-- Recent closed trades -->
 <div class="card mt">
   <div class="card-header">🧾 Recent Closed Trades</div>
@@ -135,11 +146,22 @@
 
 <!-- Backtest panel -->
 <div class="card mt">
-  <div class="card-header">📈 Single-symbol Backtest</div>
+  <div class="card-header">📈 Backtest (single or multi-symbol)</div>
   <div class="settings-grid" style="padding:20px">
     <div class="field-group">
+      <label>Mode</label>
+      <select id="bt-mode" onchange="btToggleMode()">
+        <option value="single" selected>Single symbol</option>
+        <option value="multi">Multi-symbol ranking</option>
+      </select>
+    </div>
+    <div class="field-group" id="bt-single-box">
       <label>Symbol</label>
       <input id="bt-symbol" value="EURUSD">
+    </div>
+    <div class="field-group" id="bt-multi-box" style="display:none">
+      <label>Symbols (comma-separated)</label>
+      <input id="bt-symbols" value="EURUSD,GBPUSD,XAUUSD,USOIL,SPX500,NAS100" style="width:100%">
     </div>
     <div class="field-group">
       <label>Timeframe</label>
@@ -155,6 +177,12 @@
   <div style="padding:0 20px 20px">
     <button class="btn btn-primary" onclick="runBacktest()">🔬 Run Backtest</button>
     <span id="bt-status" style="margin-left:12px;color:var(--muted)"></span>
+  </div>
+  <div id="bt-rank" style="padding:0 20px 12px;display:none">
+    <table class="trade-table">
+      <thead><tr><th>#</th><th>Symbol</th><th>Trades</th><th>Win%</th><th>Return</th><th>PF</th><th>MaxDD</th><th>Status</th></tr></thead>
+      <tbody id="bt-rank-body"></tbody>
+    </table>
   </div>
   <div id="bt-results" style="padding:0 20px 20px;display:none">
     <pre id="bt-json" style="font-size:12px;background:var(--card-bg);padding:12px;border-radius:6px;overflow-x:auto;max-height:300px"></pre>
@@ -295,21 +323,50 @@ async function runScan(){
   } catch(e){st.textContent='Error: '+e.message;}
 }
 
+function btToggleMode(){
+  const multi = document.getElementById('bt-mode').value==='multi';
+  document.getElementById('bt-single-box').style.display = multi?'none':'block';
+  document.getElementById('bt-multi-box').style.display = multi?'block':'none';
+}
+
 async function runBacktest(){
-  const symbol = document.getElementById('bt-symbol').value.trim()||'EURUSD';
+  const multi = document.getElementById('bt-mode').value==='multi';
   const timeframe = document.getElementById('bt-timeframe').value;
   const limit = parseInt(document.getElementById('bt-limit').value)||1500;
   const st = document.getElementById('bt-status');
-  st.textContent = 'Running…';
+  st.textContent = 'Running… (this may take a while)';
   document.getElementById('bt-results').style.display='none';
+  document.getElementById('bt-rank').style.display='none';
   try {
+    let body;
+    if(multi){
+      const symbols = document.getElementById('bt-symbols').value.split(',').map(s=>s.trim()).filter(Boolean);
+      body = {symbols,timeframe,limit};
+    } else {
+      body = {symbol:document.getElementById('bt-symbol').value.trim()||'EURUSD',timeframe,limit};
+    }
     const res = await fetch('/api/fx/backtest',{method:'POST',headers:{'Content-Type':'application/json'},
-                             body:JSON.stringify({symbol,timeframe,limit})});
+                             body:JSON.stringify(body)});
     const data = await res.json();
     if(!res.ok||data.error){st.textContent='Error: '+(data.error||res.status);return;}
-    const s = `${symbol} | trades:${data.n_trades||0} | WR:${fmt(data.win_rate,1)}% | PF:${fmt(data.profit_factor,2)} | MaxDD:${fmt(data.max_drawdown,1)}% | Final:$${fmt(data.final_capital,2)}`;
-    st.textContent = s;
-    document.getElementById('bt-json').textContent = JSON.stringify(data,null,2);
+    if(multi && Array.isArray(data.symbols)){
+      const rows = data.symbols;
+      document.getElementById('bt-rank-body').innerHTML = rows.map((r,i)=>`<tr>
+        <td>#${i+1}</td><td><b>${esc(r.symbol)}</b></td>
+        <td>${r.error?'—':(r.total_trades??0)}</td>
+        <td>${r.error?'—':pct100(r.win_rate*100)}</td>
+        <td>${r.error?'—':pct100(r.total_return*100)}</td>
+        <td>${r.error?'—':fmt(r.profit_factor,2)}</td>
+        <td>${r.error?'—':pct100(r.max_drawdown*100)}</td>
+        <td style="color:${r.error?'var(--red)':'var(--green)'}">${r.error?esc(r.error):'✅ OK'}</td>
+      </tr>`).join('');
+      document.getElementById('bt-rank').style.display='block';
+      st.textContent = `Done — best: ${data.best?.symbol||'none'}`;
+      document.getElementById('bt-json').textContent = JSON.stringify(data.best||data,null,2);
+    } else {
+      st.textContent = `${data.symbol} | trades:${data.total_trades||0} | WR:${fmt(data.win_rate*100,1)}% | PF:${fmt(data.profit_factor,2)} | MaxDD:${fmt(data.max_drawdown*100,1)}% | Final:$${fmt(data.final_capital,2)}`;
+      document.getElementById('bt-json').textContent = JSON.stringify(data,null,2);
+    }
     document.getElementById('bt-results').style.display='block';
   } catch(e){st.textContent='Error: '+e.message;}
 }
@@ -398,6 +455,20 @@ async function fxLoadState(){
         <td style="font-size:11px;color:var(--muted)">${esc(t.entry_time||t.opened_at||'')}</td>
       </tr>`;
     }).join('') : '<tr><td colspan="9" style="color:var(--muted)">No open positions</td></tr>';
+
+    const sigs=d.ranked||[];
+    document.getElementById('fxe-sig-body').innerHTML = sigs.length ? sigs.map((r,i)=>`<tr>
+      <td>#${i+1}</td>
+      <td><b>${esc(r.symbol)}</b></td>
+      <td style="color:${r.side==='long'?'var(--green)':r.side==='short'?'var(--red)':'var(--muted)'}">${esc(r.side||'—')}</td>
+      <td>${r.tradable?'✅':'—'}</td>
+      <td>${rank100(r.score)}</td>
+      <td>${pct100((r.confidence||0)*100)}</td>
+      <td>${fmt(r.fusion_score,3)}</td>
+      <td>${fmt(r.rr_ratio,2)}</td>
+      <td>${fmt(r.price, (r.price>100?2:5))}</td>
+      <td style="max-width:240px;white-space:normal;font-size:11px;color:var(--muted)">${esc(r.reason||'')}</td>
+    </tr>`).join('') : `<tr><td colspan="10" style="color:var(--muted)">${d.running?'No ranked signals yet (engine warming up / outside session)':'Start the engine to see live signals'}</td></tr>`;
 
     const log=(d.trade_log||[]).slice().reverse();
     document.getElementById('fxe-log-body').innerHTML = log.length ? log.map((t,i)=>`<tr>

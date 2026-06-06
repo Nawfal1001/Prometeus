@@ -78,30 +78,77 @@ async def fx_universe():
 
 @router.post("/api/fx/backtest")
 async def fx_backtest(request: Request):
+    """Single-symbol or multi-symbol ranked backtest on the non-crypto engine.
+
+    Pass `symbols` (list or comma string) for a ranked multi-symbol run, or
+    `symbol` for a single instrument. Uses the non-crypto weight profile +
+    NonCryptoXGBoostModel so results match the live FX engine.
+    """
     try:
         body = await request.json()
-        symbol = body.get("symbol", "EURUSD")
         timeframe = body.get("timeframe") or getattr(cfg, "NON_CRYPTO_TIMEFRAME", "1h")
         limit = int(body.get("limit", 1500))
 
         from core.exchange.factory import get_exchange
+        from core.models.feature_engine import compute_features
+        from backtest.engine import BacktestEngine
+        from core.models.non_crypto_model import NonCryptoXGBoostModel
+
+        def _new_engine():
+            eng = BacktestEngine(weights_override=NON_CRYPTO_WEIGHTS)
+            eng._load_xgb(model_cls=NonCryptoXGBoostModel)
+            return eng
+
+        symbols = body.get("symbols")
         exchange = get_exchange()
+
+        # ---- multi-symbol ranked run ----
+        if symbols:
+            if isinstance(symbols, str):
+                symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+            rows = []
+            try:
+                for sym in symbols:
+                    try:
+                        df = await exchange.get_ohlcv(sym, timeframe, limit=limit)
+                        if df is None or df.empty:
+                            rows.append({"symbol": sym, "error": "No data returned"})
+                            continue
+                        feat = compute_features(df.copy())
+                        if feat is None or feat.empty:
+                            rows.append({"symbol": sym, "error": "Feature prep failed"})
+                            continue
+                        res = await asyncio.to_thread(_new_engine().walk_forward, feat)
+                        res["symbol"] = sym
+                        rows.append(res)
+                    except Exception as e:
+                        rows.append({"symbol": sym, "error": str(e)})
+            finally:
+                await exchange.close()
+
+            def _score(r):
+                if r.get("error"):
+                    return -1e9
+                return (float(r.get("profit_factor", 0)) * 100
+                        + float(r.get("win_rate", 0)) * 100
+                        + float(r.get("total_return", 0)) * 50
+                        - abs(float(r.get("max_drawdown", 0))) * 50)
+
+            ranked = sorted(rows, key=_score, reverse=True)
+            return {"mode": "multi_backtest", "timeframe": timeframe, "limit": limit,
+                    "symbols": ranked, "best": ranked[0] if ranked else None,
+                    "weight_profile": NON_CRYPTO_WEIGHTS}
+
+        # ---- single-symbol run ----
+        symbol = body.get("symbol", "EURUSD")
         df = await exchange.get_ohlcv(symbol, timeframe, limit=limit)
         await exchange.close()
-
         if df is None or df.empty:
             return JSONResponse({"error": f"No data for {symbol}"}, status_code=400)
-
-        from core.models.feature_engine import compute_features
         df = compute_features(df.copy())
         if df is None or df.empty:
             return JSONResponse({"error": "Feature preparation failed"}, status_code=500)
-
-        from backtest.engine import BacktestEngine
-        from core.models.non_crypto_model import NonCryptoXGBoostModel
-        engine = BacktestEngine(weights_override=NON_CRYPTO_WEIGHTS)
-        engine._load_xgb(model_cls=NonCryptoXGBoostModel)
-        results = await asyncio.to_thread(engine.walk_forward, df)
+        results = await asyncio.to_thread(_new_engine().walk_forward, df)
         results["symbol"] = symbol
         results["timeframe"] = timeframe
         results["weight_profile"] = NON_CRYPTO_WEIGHTS

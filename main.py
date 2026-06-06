@@ -256,6 +256,19 @@ async def fx_state():
             out["stats"] = fx_engine.orders.get_stats()
             out["open_trades"] = fx_engine.orders.get_open_trades()
             out["trade_log"] = fx_engine.orders.risk.trade_history[-50:]
+            ranked = getattr(fx_engine, "_rotator_ranked", []) or []
+            out["ranked"] = [{
+                "symbol": r.get("symbol"),
+                "score": r.get("final_score"),
+                "side": (r.get("signal") or {}).get("side"),
+                "trade": (r.get("signal") or {}).get("trade"),
+                "tradable": (r.get("signal") or {}).get("trade"),
+                "confidence": (r.get("signal") or {}).get("confidence"),
+                "fusion_score": (r.get("signal") or {}).get("fusion_score"),
+                "rr_ratio": (r.get("signal") or {}).get("rr_ratio"),
+                "price": r.get("price"),
+                "reason": (r.get("signal") or {}).get("reason"),
+            } for r in ranked[:12]]
         except Exception as e:
             out["warn"] = f"engine state read failed: {e}"
     else:
