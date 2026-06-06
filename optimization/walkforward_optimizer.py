@@ -7,6 +7,7 @@ import pandas as pd
 
 from optimization.optimizer import PrometheusOptimizer
 from backtest.engine import BacktestEngine
+from backtest.validation import embargo_size
 
 
 class WalkForwardOptimizer:
@@ -34,12 +35,20 @@ class WalkForwardOptimizer:
         start = 0
         all_results = []
 
-        while start + self.train_bars + self.test_bars <= len(self.df):
+        # Purge an embargo gap between in-sample (train) and out-of-sample (test)
+        # so feature lookback + label lookahead can't leak across the boundary
+        # (López de Prado purged k-fold). Without it the OOS test is optimistic.
+        import config.settings as _cfg
+        embargo = embargo_size(int(getattr(_cfg, "EMA_SLOW", 150)),
+                               int(getattr(_cfg, "MAX_TRADE_DURATION_BARS", 32)))
+
+        while start + self.train_bars + embargo + self.test_bars <= len(self.df):
             train_df = self.df.iloc[start:start + self.train_bars].copy()
-            test_df = self.df.iloc[start + self.train_bars:start + self.train_bars + self.test_bars].copy()
+            test_lo = start + self.train_bars + embargo
+            test_df = self.df.iloc[test_lo:test_lo + self.test_bars].copy()
 
             logger.info(
-                f"[WF-OPT] Window start={start} train={len(train_df)} test={len(test_df)}"
+                f"[WF-OPT] Window start={start} train={len(train_df)} embargo={embargo} test={len(test_df)}"
             )
 
             optimizer = PrometheusOptimizer(
@@ -72,6 +81,7 @@ class WalkForwardOptimizer:
             result = {
                 "window_start": start,
                 "train_bars": len(train_df),
+                "embargo": embargo,
                 "test_bars": len(test_df),
                 "best_params": best_params,
                 "optimization": opt_result,

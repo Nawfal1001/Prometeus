@@ -9,6 +9,10 @@ from core.models.feature_engine import compute_features
 import config.settings as cfg
 from core.risk.edge_guard import AdaptiveEdgeGuard
 from core.risk.regime_memory import RegimeMemory
+from backtest.validation import (
+    embargo_size, purged_walkforward_windows, label_regime,
+    regime_conditional_metrics,
+)
 
 TAKER_FEE = 0.0005
 SLIPPAGE = 0.0003
@@ -47,35 +51,63 @@ class BacktestEngine:
         self._load_xgb()
         return self.walk_forward(df) if mode == "walkforward" else self._simple_split(df)
 
-    def walk_forward(self, df, train_bars=700, test_bars=200, step_bars=100):
+    def walk_forward(self, df, train_bars=700, test_bars=200, embargo=None):
+        """Honest (purged + embargoed) walk-forward.
+
+        Two leakage fixes vs the old rolling scheme:
+          • Test windows are NON-OVERLAPPING — the old step_bars=100 with
+            test_bars=200 double-counted half of every test window, inflating
+            trade counts and every aggregate metric.
+          • An ``embargo`` gap (= longest feature lookback + max label lookahead)
+            is purged between each train block and its test block, so rolling
+            features and still-open trades can't leak across the boundary.
+        """
         df = self._prepare(df)
         usable = len(df)
         if usable < test_bars:
             return {"error": f"Not enough candles: {usable}. Need {test_bars}."}
 
-        all_trades, window_stats, start = [], [], 0
-        if usable < train_bars + test_bars:
+        if embargo is None:
+            embargo = embargo_size(
+                int(getattr(cfg, "EMA_SLOW", 150)),
+                int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 32)),
+            )
+
+        all_trades, window_stats = [], []
+        windows = list(purged_walkforward_windows(usable, train_bars, test_bars, embargo))
+
+        if not windows:
+            # Data too short for even one purged window — single in-sample pass.
             trades, _ = self._simulate(df, 0)
             if not trades:
                 return self._no_trade_error(df)
             r = self._metrics(trades)
-            r.update({"windows": 1, "mode": "strategy-fallback", "window_stats": [{"start": 0, "trades": len(trades), "win_rate": sum(1 for t in trades if t["pnl"] > 0) / len(trades), "capital": trades[-1]["capital"]}], "equity_curve": self._equity_curve(trades)})
+            r.update({"windows": 1, "mode": "strategy-fallback", "embargo": embargo,
+                      "window_stats": [{"start": 0, "trades": len(trades), "win_rate": sum(1 for t in trades if t["pnl"] > 0) / len(trades), "capital": trades[-1]["capital"]}],
+                      "equity_curve": self._equity_curve(trades),
+                      "regime_breakdown": regime_conditional_metrics(trades)})
             return r
 
-        while start + train_bars + test_bars <= usable:
-            warmup = min(int(getattr(cfg, "EMA_SLOW", 150)), start + train_bars)
-            test_df_raw = df.iloc[(start + train_bars - warmup): start + train_bars + test_bars]
+        initial = float(getattr(cfg, "INITIAL_CAPITAL", 50))
+        for (_tr_lo, _tr_hi), (te_lo, te_hi) in windows:
+            warmup = min(int(getattr(cfg, "EMA_SLOW", 150)), te_lo)
+            test_df_raw = df.iloc[(te_lo - warmup): te_hi]
             test_df = self._prepare(test_df_raw).iloc[warmup:]
-            trades, capital = self._simulate(test_df, start + train_bars)
+            trades, capital = self._simulate(test_df, te_lo)
             all_trades.extend(trades)
             if trades:
-                window_stats.append({"start": start, "trades": len(trades), "win_rate": sum(1 for t in trades if t["pnl"] > 0) / len(trades), "capital": capital})
-            start += step_bars
+                window_stats.append({"start": te_lo, "trades": len(trades),
+                                     "win_rate": sum(1 for t in trades if t["pnl"] > 0) / len(trades),
+                                     "capital": capital,
+                                     "window_return": round(capital / initial - 1.0, 6)})
 
         if not all_trades:
             return self._no_trade_error(df)
         r = self._metrics(all_trades)
-        r.update({"windows": len(window_stats), "window_stats": window_stats, "mode": "walk-forward-strategy", "equity_curve": self._equity_curve(all_trades)})
+        r.update({"windows": len(window_stats), "window_stats": window_stats,
+                  "mode": "purged-walk-forward", "embargo": embargo,
+                  "equity_curve": self._equity_curve(all_trades),
+                  "regime_breakdown": regime_conditional_metrics(all_trades)})
         return r
 
     def _simple_split(self, df, train_ratio=0.7):
@@ -312,7 +344,7 @@ class BacktestEngine:
                         self.regime_memory.update({"atr_norm": float(row.get("atr_norm", 0.003)), "vol_zscore": float(row.get("vol_zscore", 0)), "ema_stack": float(row.get("ema_stack", 0)), "fusion_score": entry_score}, total_pnl)
                     except Exception as e:
                         logger.debug(f"[Backtest] regime_memory.update skipped: {e}")
-                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score})
+                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score, "regime": entry_regime})
                     in_trade = False
                     remaining = 1.0
                     realized_pnl = 0.0
@@ -334,6 +366,7 @@ class BacktestEngine:
                 continue
             trade_side = int(sig["direction"])
             entry_score = float(sig.get("fusion_score", 0))
+            entry_regime = label_regime(row)   # regime tag captured AT ENTRY
             entry_capital = capital
             entry_confidence_mult = float(sig.get("confidence_mult", 1.0) or 1.0)
             entry_px = close * (1 + trade_side * SLIPPAGE)
@@ -409,9 +442,20 @@ class BacktestEngine:
         gw = float(wins["pnl"].sum()) if len(wins) else 0.0
         gl = abs(float(losses["pnl"].sum())) if len(losses) else 1e-9
         pf = gw / gl
+        # Per-observation (per-trade) return moments — inputs for the Deflated
+        # Sharpe Ratio computed downstream in the optimizer.
+        r_arr = np.asarray(rets, dtype=float)
+        r_arr = r_arr[np.isfinite(r_arr)]
+        sharpe_obs = float(r_arr.mean() / r_arr.std(ddof=1)) if r_arr.size > 1 and r_arr.std(ddof=1) > 0 else 0.0
+        if r_arr.size > 2 and r_arr.std() > 0:
+            z = (r_arr - r_arr.mean()) / r_arr.std()
+            skew = float((z ** 3).mean())
+            kurt = float((z ** 4).mean())   # non-excess (normal == 3)
+        else:
+            skew, kurt = 0.0, 3.0
         tp1_count = sum(1 for t in trades if t.get("tp1_hit", False))
         time_count = sum(1 for t in trades if t.get("exit_type") == "TIME")
-        out = {"total_trades": len(trades), "win_rate": round(wr, 4), "avg_win_usdt": round(aw, 4), "avg_loss_usdt": round(al, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(ret, 4), "final_capital": round(final, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "max_consec_losses": 0, "tp1_hit_rate": round(tp1_count / len(trades), 4), "time_exit_rate": round(time_count / len(trades), 4), "slippage_pct": SLIPPAGE * 100, "fee_pct": TAKER_FEE * 100, "trades": trades[-50:], "go_live_ready": self._go_live(wr, max_dd, pf, len(trades))}
+        out = {"total_trades": len(trades), "win_rate": round(wr, 4), "avg_win_usdt": round(aw, 4), "avg_loss_usdt": round(al, 4), "rr_ratio": round(rr, 2), "max_drawdown": round(max_dd, 4), "total_return": round(ret, 4), "final_capital": round(final, 2), "sharpe_ratio": round(sharpe, 2), "profit_factor": round(pf, 2), "max_consec_losses": 0, "tp1_hit_rate": round(tp1_count / len(trades), 4), "time_exit_rate": round(time_count / len(trades), 4), "slippage_pct": SLIPPAGE * 100, "fee_pct": TAKER_FEE * 100, "trades": trades[-50:], "go_live_ready": self._go_live(wr, max_dd, pf, len(trades)), "sharpe_per_obs": round(sharpe_obs, 6), "ret_skew": round(skew, 4), "ret_kurtosis": round(kurt, 4), "n_returns": int(r_arr.size)}
         if symbol:
             out["symbol"] = symbol
         return out
@@ -576,7 +620,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
                             consec_losses = 0
-                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": i, "entry_bar": entry_bar, "fusion_score": entry_score})
+                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": i, "entry_bar": entry_bar, "fusion_score": entry_score, "regime": entry_regime})
                     in_trade = False
                     active_symbol = None
                     remaining = 1.0
@@ -610,6 +654,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
             active_symbol = symbol
             trade_side = int(sig["direction"])
             entry_score = float(sig.get("fusion_score", 0))
+            entry_regime = label_regime(row)   # regime tag captured AT ENTRY
             entry_capital = capital
             entry_confidence_mult = float(sig.get("confidence_mult", 1.0) or 1.0)
             close = float(row["close"])

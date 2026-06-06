@@ -15,6 +15,7 @@ import config.settings as cfg
 from config.settings import save_user_settings
 from backtest.engine import BacktestEngine
 from backtest.aligned_engine import AlignedMultiSymbolBacktestEngine
+from backtest.validation import cscv_pbo, deflated_sharpe_ratio
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -178,7 +179,11 @@ class PrometheusOptimizer:
         self.best_value = best.value
         result = self._build_result()
         self._save_results(result)
-        logger.info(f"[Optimizer] Done | mode={self._mode} best={self.best_value:.4f} in {len(self.study.trials)} trials")
+        ov = result.get("overfitting", {})
+        pbo = (ov.get("pbo") or {}).get("pbo")
+        dsr = (ov.get("deflated_sharpe") or {}).get("deflated_sharpe")
+        logger.info(f"[Optimizer] Done | mode={self._mode} best={self.best_value:.4f} in {len(self.study.trials)} trials "
+                    f"| PBO={pbo} DeflatedSharpe={dsr} verdict={ov.get('verdict')}")
         return result
 
     def apply_best(self):
@@ -282,6 +287,15 @@ class PrometheusOptimizer:
             if self._mode in ("compete", "competition"):
                 metrics["symbols_traded"] = results.get("symbols_traded", {})
                 metrics["symbols_loaded"] = results.get("symbols_loaded", [])
+            # Per-observation Sharpe moments (for Deflated Sharpe) and per-window
+            # returns (for the CSCV / PBO matrix across trials).
+            metrics["sharpe_per_obs"] = results.get("sharpe_per_obs", 0.0)
+            metrics["ret_skew"] = results.get("ret_skew", 0.0)
+            metrics["ret_kurtosis"] = results.get("ret_kurtosis", 3.0)
+            metrics["n_returns"] = results.get("n_returns", 0)
+            metrics["window_returns"] = [w.get("window_return", 0.0)
+                                         for w in results.get("window_stats", [])]
+            metrics["regime_breakdown"] = results.get("regime_breakdown", {})
             self.trial_results.append({"trial": trial.number, "score": round(score, 4), "params": params, "metrics": metrics})
             if score > self.best_value:
                 self.best_value = score
@@ -523,7 +537,68 @@ class PrometheusOptimizer:
                 importance = {k: round(v, 4) for k, v in raw.items()}
         except Exception:
             pass
-        return {"best_value": round(self.best_value, 4), "best_params": self.best_params, "best_metric": self.metric, "mode": self._mode, "n_trials": len(self.study.trials) if self.study else 0, "trial_results": self.trial_results, "top_10": top_10, "importance": importance}
+        overfitting = self._overfitting_report()
+        return {"best_value": round(self.best_value, 4), "best_params": self.best_params, "best_metric": self.metric, "mode": self._mode, "n_trials": len(self.study.trials) if self.study else 0, "trial_results": self.trial_results, "top_10": top_10, "importance": importance, "overfitting": overfitting}
+
+    def _overfitting_report(self) -> dict:
+        """Honest multiple-testing diagnostics over all completed trials:
+
+          • PBO (CSCV)     — probability the selected config is no better than
+                             the median config out-of-sample. >0.5 ⇒ the search
+                             is, on balance, picking overfit configs.
+          • Deflated Sharpe — the best config's Sharpe corrected for how many
+                             configs we tried. <0.95 ⇒ likely not a real edge.
+          • Regime breakdown of the best config — is the edge regime-robust, or
+                             a bet on one regime continuing?
+        """
+        try:
+            import numpy as np
+            trials = [t for t in self.trial_results if t.get("metrics")]
+            if len(trials) < 2:
+                return {"note": "need >=2 trials for overfitting analysis"}
+
+            # PBO: build (windows x configs) matrix of per-window returns.
+            cols, n_win = [], min((len(t["metrics"].get("window_returns", [])) for t in trials), default=0)
+            for t in trials:
+                wr = t["metrics"].get("window_returns", [])
+                if n_win >= 2 and len(wr) >= n_win:
+                    cols.append(wr[:n_win])
+            pbo = (cscv_pbo(np.array(cols).T, n_splits=min(16, n_win))
+                   if len(cols) >= 2 and n_win >= 2
+                   else {"pbo": None, "note": "not enough per-window data (try more candles / fewer windows)"})
+
+            # Deflated Sharpe for the BEST trial vs the number of configs tried.
+            best = max(trials, key=lambda t: t.get("score", -1e9))
+            bm = best["metrics"]
+            sharpes = [float(t["metrics"].get("sharpe_per_obs", 0.0) or 0.0) for t in trials]
+            sr_var = float(np.var(sharpes, ddof=1)) if len(sharpes) > 1 else 0.0
+            dsr = deflated_sharpe_ratio(
+                sharpe=float(bm.get("sharpe_per_obs", 0.0) or 0.0),
+                n_obs=int(bm.get("n_returns", 0) or 0),
+                n_trials=len(trials),
+                sharpe_variance=sr_var,
+                skew=float(bm.get("ret_skew", 0.0) or 0.0),
+                kurtosis=float(bm.get("ret_kurtosis", 3.0) or 3.0),
+            )
+            return {
+                "pbo": pbo,
+                "deflated_sharpe": dsr,
+                "best_regime_breakdown": bm.get("regime_breakdown", {}),
+                "verdict": self._overfitting_verdict(pbo.get("pbo"), dsr.get("deflated_sharpe")),
+            }
+        except Exception as e:
+            logger.debug(f"[Optimizer] overfitting report skipped: {e}")
+            return {"note": f"overfitting analysis failed: {e}"}
+
+    @staticmethod
+    def _overfitting_verdict(pbo, dsr) -> str:
+        if pbo is None or dsr is None:
+            return "insufficient_data"
+        if pbo <= 0.30 and dsr >= 0.90:
+            return "edge_likely_real"
+        if pbo >= 0.50 or dsr <= 0.50:
+            return "likely_overfit"
+        return "inconclusive"
 
     def _save_results(self, result: dict):
         try:
