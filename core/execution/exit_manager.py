@@ -53,6 +53,9 @@ class AdvancedExitManager:
     def profit_ratchet_mult(self): return float(getattr(cfg, "PROFIT_RATCHET_ATR_MULT", 0.6))
 
     @property
+    def trail_before_tp1(self): return bool(getattr(cfg, "TRAIL_BEFORE_TP1", True))
+
+    @property
     def early_kill_bars(self): return int(getattr(cfg, "EARLY_KILL_BARS", 2))
 
     @property
@@ -109,14 +112,18 @@ class AdvancedExitManager:
         direction = int(trade["direction"])
         trade["peak_price"] = max(float(trade.get("peak_price", high)), high)
         trade["trough_price"] = min(float(trade.get("trough_price", low)), low)
-        trade["trailing_sl"] = self.ratchet_stop(
-            current_sl=float(trade.get("trailing_sl", trade.get("stop_loss"))),
-            direction=direction,
-            peak_price=float(trade["peak_price"]),
-            trough_price=float(trade["trough_price"]),
-            atr_abs=float(trade.get("atr_abs", 0)),
-            profit_mode=bool(trade.get("tp1_hit")),
-        )
+        # Only trail the stop before TP1 if TRAIL_BEFORE_TP1 is on. When off,
+        # the initial fixed stop is held until the first target is banked, so a
+        # trade isn't ratcheted out by a normal pullback before it reaches TP1.
+        if self.trail_before_tp1 or bool(trade.get("tp1_hit")):
+            trade["trailing_sl"] = self.ratchet_stop(
+                current_sl=float(trade.get("trailing_sl", trade.get("stop_loss"))),
+                direction=direction,
+                peak_price=float(trade["peak_price"]),
+                trough_price=float(trade["trough_price"]),
+                atr_abs=float(trade.get("atr_abs", 0)),
+                profit_mode=bool(trade.get("tp1_hit")),
+            )
         remaining = float(trade.get("remaining_pct", 1.0))
         if remaining <= 0:
             return events

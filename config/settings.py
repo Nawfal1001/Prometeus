@@ -296,6 +296,11 @@ def reload_from_sources():
     EXIT_ON_REGIME_FLIP = get_bool("EXIT_ON_REGIME_FLIP", "true")
     EXIT_REGIME_FLIP_MIN_SCORE = get_float("EXIT_REGIME_FLIP_MIN_SCORE", 0.30)
     PROFIT_RATCHET_ATR_MULT = get_float("PROFIT_RATCHET_ATR_MULT", 0.75)
+    global TRAIL_BEFORE_TP1
+    # When False, hold the initial fixed stop until TP1 is hit (don't ratchet
+    # the stop up on early in-favour moves), so normal pullbacks don't stop a
+    # trade out before it reaches its first target.
+    TRAIL_BEFORE_TP1 = get_bool("TRAIL_BEFORE_TP1", "true")
     EARLY_KILL_ENABLED = get_bool("EARLY_KILL_ENABLED", "true")
     EARLY_KILL_BARS = get_int("EARLY_KILL_BARS", 2)
     # Soften the early-kill: only cut a fresh trade if it's already ~90% of the
