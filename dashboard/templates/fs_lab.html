@@ -53,6 +53,26 @@
 
 /* ── Go-live badge ───────────────────────────────────────────────────── */
 .go-live-yes{color:#10b981;font-weight:700}.go-live-no{color:#6b7280}
+
+/* ── Compete panel ───────────────────────────────────────────────────── */
+.tag-compete{background:rgba(245,158,11,.15);color:#f59e0b}
+.compete-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.compete-grid{grid-template-columns:1fr}}
+
+/* Progress bar €50 → €150 */
+.prog-wrap{margin-bottom:14px}
+.prog-label{display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px}
+.prog-track{height:12px;background:rgba(255,255,255,.07);border-radius:999px;overflow:hidden;position:relative}
+.prog-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,#f59e0b,#10b981);transition:width .4s ease;min-width:2px}
+.prog-target-line{position:absolute;top:0;right:0;width:2px;height:100%;background:#10b981;opacity:.6}
+.prog-hit{animation:pulse 1s infinite alternate}
+@keyframes pulse{from{box-shadow:0 0 0 0 rgba(16,185,129,.4)}to{box-shadow:0 0 0 6px rgba(16,185,129,0)}}
+
+/* Per-symbol table */
+.sym-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+.sym-table th{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);color:var(--muted);font-weight:600;text-align:left}
+.sym-table td{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.06)}
+.sym-table tr:last-child td{border:none}
 </style>
 </head>
 <body>
@@ -154,13 +174,31 @@
       </div>
 
       <div class="card" style="margin-bottom:14px">
+        <div class="card-header">⚔ Compete Symbols</div>
+        <div style="padding:14px">
+          <div class="field-group" style="margin-bottom:10px">
+            <label>Symbols (comma separated)</label>
+            <input id="compete_symbols" value="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT">
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label>Initial Balance (€)</label>
+              <input id="initial_balance" type="number" step="1" value="50">
+            </div>
+            <div class="field-group"><label>Target (€)</label>
+              <input id="target" type="number" step="10" value="150">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
         <div class="card-header">🧬 Optuna Settings</div>
         <div style="padding:14px">
           <div class="field-row">
             <div class="field-group"><label>Trials</label>
               <input id="trials" type="number" min="10" max="500" step="10" value="50">
             </div>
-            <div class="field-group"><label>Metric</label>
+            <div class="field-group"><label>Single Metric</label>
               <select id="opt_metric">
                 <option value="profit_factor" selected>Profit Factor</option>
                 <option value="calmar">Calmar Ratio</option>
@@ -180,9 +218,12 @@
       </div>
 
       <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="btn btn-primary" onclick="runCompare()" style="width:100%">⚔ Compare FS vs Paper</button>
+        <button class="btn btn-primary" onclick="runCompete()" style="width:100%;background:linear-gradient(135deg,#f59e0b,#d97706)">⚔ Compete €50→€150</button>
+        <button class="btn btn-primary" onclick="runCompeteOptuna()" style="width:100%;background:linear-gradient(135deg,#10b981,#059669)">🧬 Optimise Compete (€150 target)</button>
+        <hr style="border-color:rgba(255,255,255,.08);margin:4px 0">
+        <button class="btn btn-primary" onclick="runCompare()" style="width:100%">📊 Compare FS vs Paper</button>
         <button class="btn btn-primary" onclick="runFSOnly()" style="width:100%">▶ FS Backtest Only</button>
-        <button class="btn btn-primary" onclick="runOptuna()" style="width:100%">🧬 Run Optuna</button>
+        <button class="btn btn-primary" onclick="runOptuna()" style="width:100%">🧬 Run Optuna (single)</button>
         <button class="btn btn-secondary" onclick="applyBestParams()" id="btn-apply" style="width:100%;display:none">✅ Apply Best Params</button>
         <button class="btn btn-secondary" onclick="clearAll()" style="width:100%">🧹 Clear</button>
       </div>
@@ -246,6 +287,68 @@
     </div>
 
   </div><!-- end fs-grid -->
+
+  <!-- ── Compete Results (full width) ──────────────────────────────── -->
+  <div class="card" style="margin-top:16px" id="compete-section">
+    <div class="card-header">
+      ⚔ Compete Results
+      <span class="section-tag tag-compete">€50 → €150 compounding</span>
+      <span id="compete-hit-badge" style="display:none;margin-left:8px;padding:3px 10px;background:rgba(16,185,129,.2);color:#10b981;border-radius:4px;font-size:12px;font-weight:700">🎯 TARGET HIT</span>
+    </div>
+    <div style="padding:16px">
+      <div id="compete-empty" style="color:var(--muted);padding:30px 0;text-align:center">
+        Run <b>Compete €50→€150</b> to see multi-symbol compounding results.
+      </div>
+      <div id="compete-results" style="display:none">
+
+        <!-- Progress bar -->
+        <div class="prog-wrap">
+          <div class="prog-label">
+            <span style="color:var(--muted)">Start: <b id="prog-start">€50</b></span>
+            <span>Current: <b id="prog-current" class="yellow">—</b></span>
+            <span style="color:#10b981">Target: <b id="prog-target">€150</b></span>
+          </div>
+          <div class="prog-track">
+            <div class="prog-fill" id="prog-fill" style="width:0%"></div>
+            <div class="prog-target-line"></div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px;text-align:right" id="prog-pct-label"></div>
+        </div>
+
+        <div class="compete-grid">
+          <!-- Left: metrics + equity curve -->
+          <div>
+            <div class="m4" id="compete-metrics"></div>
+            <div class="spark-wrap" style="height:100px">
+              <svg id="compete-curve" viewBox="0 0 400 100" preserveAspectRatio="none" style="height:100px"></svg>
+            </div>
+            <div class="m2" id="compete-metrics2"></div>
+          </div>
+
+          <!-- Right: per-symbol breakdown + Optuna compete results -->
+          <div>
+            <div style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px">PER-SYMBOL BREAKDOWN</div>
+            <table class="sym-table">
+              <thead><tr><th>Symbol</th><th>Trades</th><th>Win Rate</th><th>PnL (€)</th></tr></thead>
+              <tbody id="sym-breakdown"></tbody>
+            </table>
+
+            <div id="compete-opt-section" style="display:none;margin-top:16px">
+              <div style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px">OPTUNA BEST PARAMS (€150 target)</div>
+              <div class="mcard" style="margin-bottom:8px">
+                <div class="label">Best score</div>
+                <div class="val green" id="copt-best-val">—</div>
+              </div>
+              <div class="trial-wrap"><svg id="copt-trial-curve" viewBox="0 0 400 60" preserveAspectRatio="none"></svg></div>
+              <table class="ptable" style="margin-top:6px"><tbody id="copt-params"></tbody></table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -456,12 +559,149 @@ function applyBestParams(){
   log('Best Optuna params applied to form fields.');
 }
 
+// ─── Compete ──────────────────────────────────────────────────────────────
+function competePayload(){
+  return {
+    symbols: v('compete_symbols'),
+    timeframe: v('timeframe'),
+    limit: iv('limit'),
+    fee: fv('fee'),
+    allow_short: bv('allow_short'),
+    initial_balance: fv('initial_balance'),
+    target: fv('target'),
+    edge_threshold: fv('edge_threshold'),
+    z_window: iv('z_window'),
+    phase_window: iv('phase_window'),
+    max_hold_bars: iv('max_hold_bars'),
+    take_profit: fv('take_profit'),
+    stop_loss: fv('stop_loss'),
+    use_torsion_amp: bv('use_torsion_amp'),
+  };
+}
+
+function renderCompete(c, initial, target){
+  const hit = c.target_hit;
+  const prog = Math.min(Math.max(c.target_progress_pct||0, 0), 100);
+  const final = c.final_capital||initial;
+
+  // Progress bar
+  $('prog-start').textContent = '€'+initial.toFixed(0);
+  $('prog-target').textContent = '€'+target.toFixed(0);
+  $('prog-current').textContent = '€'+final.toFixed(2);
+  $('prog-fill').style.width = prog+'%';
+  $('prog-pct-label').textContent = prog.toFixed(1)+'% of the way to target';
+  if(hit){
+    $('prog-fill').classList.add('prog-hit');
+    $('compete-hit-badge').style.display='inline';
+  } else {
+    $('prog-fill').classList.remove('prog-hit');
+    $('compete-hit-badge').style.display='none';
+  }
+
+  // Metric cards
+  const ret=c.total_return||0, dd=c.max_drawdown||0;
+  $('compete-metrics').innerHTML =
+    metricCard('Final Capital', '€'+final.toFixed(2), hit?'green':'blue') +
+    metricCard('Return', pct(ret), clr(ret)) +
+    metricCard('Win Rate', pct(c.win_rate), clr(c.win_rate-0.5)) +
+    metricCard('Max DD', pct(dd), clr(-dd));
+  $('compete-metrics2').innerHTML =
+    metricCard('Profit Factor', num(c.profit_factor), clr(c.profit_factor-1)) +
+    metricCard('Total Trades', c.total_trades||'—');
+
+  // Equity curve — draw target line too
+  const svg=$('compete-curve');
+  const data=c.equity_curve||[];
+  if(data.length>1){
+    const W=400,H=100,pad=4;
+    const allVals=[...data,target,initial];
+    const mn=Math.min(...allVals), mx=Math.max(...allVals);
+    const rng=mx-mn||1;
+    const pts=data.map((val,i)=>{
+      const x=pad+(i/(data.length-1))*(W-2*pad);
+      const y=H-pad-((val-mn)/rng)*(H-2*pad);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const first=pts.split(' ')[0].split(',');
+    const last=pts.split(' ').slice(-1)[0].split(',');
+    // Target line Y
+    const ty=H-pad-((target-mn)/rng)*(H-2*pad);
+    const color=hit?'#10b981':'#f59e0b';
+    svg.innerHTML=`
+      <defs><linearGradient id="gcmp" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity=".3"/>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+      </linearGradient></defs>
+      <line x1="${pad}" y1="${ty.toFixed(1)}" x2="${W-pad}" y2="${ty.toFixed(1)}" stroke="#10b981" stroke-width="1" stroke-dasharray="4,3" opacity=".5"/>
+      <polygon points="${pts} ${last[0]},${H} ${first[0]},${H}" fill="url(#gcmp)"/>
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"/>`;
+  }
+
+  // Per-symbol breakdown
+  const tbody=$('sym-breakdown');
+  tbody.innerHTML='';
+  const stats=c.sym_stats||{};
+  // Sort by pnl descending
+  Object.entries(stats).sort((a,b)=>b[1].pnl-a[1].pnl).forEach(([sym,st])=>{
+    const tr=document.createElement('tr');
+    const pnlClr=st.pnl>0?'green':'red';
+    tr.innerHTML=`<td>${sym}</td><td>${st.trades}</td><td>${pct(st.win_rate)}</td><td class="${pnlClr}">€${st.pnl.toFixed(2)}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  $('compete-empty').style.display='none';
+  $('compete-results').style.display='block';
+}
+
+async function runCompete(){
+  const p=competePayload();
+  status(`Running compete ${p.symbols} → target €${p.target}…`);
+  log(`POST /api/fs_lab/compete  symbols=${p.symbols}  initial=€${p.initial_balance}  target=€${p.target}`);
+  try{
+    const d=await post('/api/fs_lab/compete', p);
+    const c=d.compete;
+    log(`Done. Trades:${c.total_trades} Final:€${c.final_capital} Return:${pct(c.total_return)} DD:${pct(c.max_drawdown)} Target:${c.target_hit?'HIT ✓':'not yet'}`);
+    renderCompete(c, p.initial_balance, p.target);
+    clearStatus();
+  }catch(e){ status('Error: '+e.message,'error'); log('Error: '+e.message); }
+}
+
+async function runCompeteOptuna(){
+  const p=competePayload();
+  const t=iv('trials');
+  status(`Optimising compete for €${p.target} target (${t} trials)…`);
+  log(`POST /api/fs_lab/compete_optimize  trials=${t}  initial=€${p.initial_balance}  target=€${p.target}`);
+  try{
+    const d=await post('/api/fs_lab/compete_optimize', {...p, trials:t});
+    log(`Done. Best score:${d.best_value}  Final:€${d.best_metrics.final_capital}  Target:${d.best_metrics.target_hit?'HIT ✓':'not yet'}`);
+    _bestParams=d.best_params;
+    renderCompete(d.best_metrics, p.initial_balance, p.target);
+    // Show Optuna compete results in right panel
+    $('copt-best-val').textContent=num(d.best_value,4);
+    sparkline('copt-trial-curve', d.trial_values, '#10b981');
+    const tbody=$('copt-params');
+    tbody.innerHTML='';
+    const labels={edge_threshold:'Edge Threshold',take_profit:'Take Profit',stop_loss:'Stop Loss',max_hold_bars:'Max Hold Bars',z_window:'Z Window',phase_window:'Phase Window',use_torsion_amp:'Torsion Amp'};
+    for(const[k,val] of Object.entries(d.best_params)){
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${labels[k]||k}</td><td>${typeof val==='number'?(Number.isInteger(val)?val:val.toFixed(5)):String(val)}</td>`;
+      tbody.appendChild(tr);
+    }
+    $('compete-opt-section').style.display='block';
+    $('btn-apply').style.display='block';
+    clearStatus();
+  }catch(e){ status('Error: '+e.message,'error'); log('Error: '+e.message); }
+}
+
 function clearAll(){
   $('fs-log').textContent='Cleared.\n';
   $('fs-empty').style.display='block'; $('fs-results').style.display='none';
   $('paper-empty').textContent='Run Compare to see live-engine results.';
   $('paper-empty').style.display='block'; $('paper-results').style.display='none';
   $('opt-empty').style.display='block'; $('opt-results').style.display='none';
+  $('compete-empty').style.display='block'; $('compete-results').style.display='none';
+  $('compete-opt-section').style.display='none';
+  $('compete-hit-badge').style.display='none';
   $('btn-apply').style.display='none';
   clearStatus();
   _bestParams=null;
