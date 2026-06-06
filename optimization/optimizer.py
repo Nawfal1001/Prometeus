@@ -36,12 +36,14 @@ _OPT_KEYS = [
 ]
 
 SEED_PARAMS = [
-    # 3x-growth seed: matches the manually-tuned config we run live (wide stop,
-    # asymmetric TP, equal split) so TPE explores around the live strategy.
-    dict(FUSION_THRESHOLD=0.28, MIN_RR_RATIO=2.5, ATR_SL_MULT=1.5, ATR_TP1_MULT=2.0, ATR_TP2_MULT=4.0,
-         TP1_EXIT_PCT=0.50, TP2_EXIT_PCT=0.50, MAX_TRADE_DURATION_BARS=36,
+    # Live seed: the actual applied let-winners-run config (config/optimized_params.json:
+    # wide stop 2.5, far TP2 6.5, small early scale-out, loose ratchet runner) so TPE
+    # warm-starts at the known-good point and explores around it. Must stay inside the
+    # exit search ranges below, or Optuna can never reproduce the live strategy.
+    dict(FUSION_THRESHOLD=0.28, MIN_RR_RATIO=2.5, ATR_SL_MULT=2.5, ATR_TP1_MULT=2.4, ATR_TP2_MULT=6.5,
+         TP1_EXIT_PCT=0.15, TP2_EXIT_PCT=0.55, MAX_TRADE_DURATION_BARS=84,
          EXIT_SIGNAL_FLIP_MIN_SCORE=0.20, EXIT_REGIME_FLIP_MIN_SCORE=0.30,
-         PROFIT_RATCHET_ATR_MULT=0.75, EARLY_KILL_BARS=2, EARLY_KILL_SL_PCT=0.70,
+         PROFIT_RATCHET_ATR_MULT=2.0, EARLY_KILL_BARS=2, EARLY_KILL_SL_PCT=0.70,
          BREAKEVEN_BUFFER_PCT=0.0002, MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=40,
          EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
          ROTATOR_MIN_SCORE=0.28, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.20,
@@ -330,14 +332,16 @@ class PrometheusOptimizer:
         if "exits" in groups:
             # Fixed ranges (not dynamic) — dynamic ranges based on sl/tp1 values
             # make the parameter space non-stationary for TPE and hurt convergence.
-            # These ranges already cover the live 3× config (SL 1.5, TP1 2.0,
-            # TP2 4.0, RR 2.5). The backtest engine's min-RR gate rejects invalid
-            # combinations naturally.
-            sl_mult   = trial.suggest_float("ATR_SL_MULT",  0.75, 1.90, step=0.05)
-            tp1_mult  = trial.suggest_float("ATR_TP1_MULT", 0.90, 2.20, step=0.05)
-            tp2_mult  = trial.suggest_float("ATR_TP2_MULT", 1.80, 4.50, step=0.10)
-            min_rr    = trial.suggest_float("MIN_RR_RATIO",  1.00, 3.00, step=0.10)
-            tp1_exit  = trial.suggest_float("TP1_EXIT_PCT",  0.50, 0.85, step=0.05)
+            # Ranges MUST cover the applied live let-winners-run config (SL 2.5,
+            # TP1 2.4, TP2 6.5, RR 2.5, small early scale-out) — otherwise Optuna
+            # cannot reproduce the live strategy and silently recommends a weaker,
+            # tighter-exit config (which costs eat alive). The backtest engine's
+            # min-RR gate rejects invalid SL/TP combinations naturally.
+            sl_mult   = trial.suggest_float("ATR_SL_MULT",  0.90, 2.70, step=0.05)
+            tp1_mult  = trial.suggest_float("ATR_TP1_MULT", 1.00, 3.00, step=0.05)
+            tp2_mult  = trial.suggest_float("ATR_TP2_MULT", 2.00, 7.50, step=0.10)
+            min_rr    = trial.suggest_float("MIN_RR_RATIO",  1.50, 3.20, step=0.10)
+            tp1_exit  = trial.suggest_float("TP1_EXIT_PCT",  0.15, 0.80, step=0.05)
             tp2_exit  = round(1.0 - tp1_exit, 2)
             sig_flip  = trial.suggest_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.10, 0.40, step=0.05)
             early_bars    = trial.suggest_int("EARLY_KILL_BARS", 1, 4)
