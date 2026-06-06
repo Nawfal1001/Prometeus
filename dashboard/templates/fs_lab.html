@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Frenet–Serret Lab</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+/* ── Layout ──────────────────────────────────────────────────────────── */
+.fs-grid{display:grid;grid-template-columns:320px 1fr 1fr;gap:16px;align-items:start}
+.fs-full{grid-column:1/-1}
+.fs-compare{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1100px){.fs-grid{grid-template-columns:1fr 1fr}.fs-config{grid-column:1/-1}}
+@media(max-width:700px){.fs-grid,.fs-compare{grid-template-columns:1fr}}
+
+/* ── Metric cards ────────────────────────────────────────────────────── */
+.m4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.m2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
+.mcard{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:10px 12px}
+.mcard .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.mcard .val{font-size:17px;font-weight:700;margin-top:3px}
+.green{color:#10b981}.red{color:#ef4444}.yellow{color:#f59e0b}.blue{color:#3b82f6}.purple{color:#a78bfa}
+
+/* ── Equity sparkline ────────────────────────────────────────────────── */
+.spark-wrap{background:#060914;border:1px solid #1f2a44;border-radius:8px;padding:8px;margin-bottom:12px;overflow:hidden}
+.spark-wrap svg{display:block;width:100%;height:80px}
+
+/* ── Params table ────────────────────────────────────────────────────── */
+.ptable{width:100%;border-collapse:collapse;font-size:13px}
+.ptable td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.07)}
+.ptable td:first-child{color:var(--muted);width:55%}
+.ptable td:last-child{font-weight:600;text-align:right}
+
+/* ── Trial sparkline ─────────────────────────────────────────────────── */
+.trial-wrap{background:#060914;border:1px solid #1f2a44;border-radius:8px;padding:8px;margin:8px 0}
+.trial-wrap svg{display:block;width:100%;height:60px}
+
+/* ── Fields ──────────────────────────────────────────────────────────── */
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.field-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px}
+.logbox{background:#060914;color:#d7e6ff;border:1px solid #1f2a44;border-radius:8px;padding:10px;height:180px;overflow:auto;font-family:ui-monospace,monospace;font-size:11px;white-space:pre-wrap;margin-top:8px}
+
+/* ── Section labels ──────────────────────────────────────────────────── */
+.section-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.5px;margin-bottom:10px}
+.tag-fs{background:rgba(167,139,250,.15);color:#a78bfa}
+.tag-paper{background:rgba(59,130,246,.15);color:#3b82f6}
+.tag-optuna{background:rgba(16,185,129,.15);color:#10b981}
+
+/* ── Status banner ───────────────────────────────────────────────────── */
+.status-bar{padding:8px 14px;border-radius:6px;font-size:13px;margin-bottom:14px;display:none}
+.status-bar.running{display:block;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);color:#f59e0b}
+.status-bar.error{display:block;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#ef4444}
+
+/* ── Go-live badge ───────────────────────────────────────────────────── */
+.go-live-yes{color:#10b981;font-weight:700}.go-live-no{color:#6b7280}
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a><a href="/scan">Scanner</a><a href="/fx">FX / Non-crypto</a>
+    <a href="/fusion-watchlist">Fusion Watchlist</a><a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a><a href="/robust-optimize">Robust</a>
+    <a href="/lab">Lab</a><a href="/fs-lab" class="active">FS Lab</a>
+    <a href="/train">Train ML</a><a href="/log-trade">Trade Logs</a>
+    <a href="/health-dashboard">Health</a><a href="/settings">Settings</a>
+  </div>
+  <div class="nav-status"><span class="badge badge-stopped">FS LAB</span></div>
+</nav>
+
+<div class="container">
+  <div class="settings-header">
+    <h1>📐 Frenet–Serret Lab</h1>
+    <div class="hint-mini">Backtest the geometric market curvature strategy. Compare against the live engine. Optimise with Optuna.</div>
+  </div>
+
+  <div id="status-bar" class="status-bar"></div>
+
+  <div class="fs-grid">
+
+    <!-- ── Config panel ─────────────────────────────────────────── -->
+    <div class="fs-config">
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-header">⚙️ Data &amp; Symbol</div>
+        <div style="padding:14px">
+          <div class="field-group" style="margin-bottom:10px">
+            <label>Symbol</label>
+            <input id="symbol" value="BTC/USDT">
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label>Timeframe</label>
+              <select id="timeframe">
+                <option value="1m" selected>1m</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="30m">30m</option>
+                <option value="1h">1h</option>
+              </select>
+            </div>
+            <div class="field-group"><label>Candles</label>
+              <input id="limit" type="number" min="300" max="5000" step="100" value="1000">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label>Fee (one-way)</label>
+              <input id="fee" type="number" step="0.0001" value="0.0004">
+            </div>
+            <div class="field-group"><label>Allow Short</label>
+              <select id="allow_short">
+                <option value="true" selected>Yes</option>
+                <option value="false">No</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-header">📐 FS Parameters</div>
+        <div style="padding:14px">
+          <div class="field-row">
+            <div class="field-group"><label>Edge Threshold</label>
+              <input id="edge_threshold" type="number" step="0.1" value="1.0">
+            </div>
+            <div class="field-group"><label>Z Window</label>
+              <input id="z_window" type="number" step="10" value="100">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label>Phase Window</label>
+              <input id="phase_window" type="number" step="5" value="20">
+            </div>
+            <div class="field-group"><label>Max Hold Bars</label>
+              <input id="max_hold_bars" type="number" step="5" value="40">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-group"><label>Take Profit %</label>
+              <input id="take_profit" type="number" step="0.001" value="0.005">
+            </div>
+            <div class="field-group"><label>Stop Loss %</label>
+              <input id="stop_loss" type="number" step="0.001" value="0.0025">
+            </div>
+          </div>
+          <div class="field-group" style="margin-bottom:0">
+            <label>Torsion Amplifier</label>
+            <select id="use_torsion_amp">
+              <option value="true" selected>On (amplify on regime twist)</option>
+              <option value="false">Off (pure κ_pv signal)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-header">🧬 Optuna Settings</div>
+        <div style="padding:14px">
+          <div class="field-row">
+            <div class="field-group"><label>Trials</label>
+              <input id="trials" type="number" min="10" max="500" step="10" value="50">
+            </div>
+            <div class="field-group"><label>Metric</label>
+              <select id="opt_metric">
+                <option value="profit_factor" selected>Profit Factor</option>
+                <option value="calmar">Calmar Ratio</option>
+                <option value="win_rate">Win Rate</option>
+                <option value="return">Total Return</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-group" style="margin-bottom:0">
+            <label>Backtest Mode (compare)</label>
+            <select id="mode">
+              <option value="walkforward" selected>Walk-forward</option>
+              <option value="simple">Simple split</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-primary" onclick="runCompare()" style="width:100%">⚔ Compare FS vs Paper</button>
+        <button class="btn btn-primary" onclick="runFSOnly()" style="width:100%">▶ FS Backtest Only</button>
+        <button class="btn btn-primary" onclick="runOptuna()" style="width:100%">🧬 Run Optuna</button>
+        <button class="btn btn-secondary" onclick="applyBestParams()" id="btn-apply" style="width:100%;display:none">✅ Apply Best Params</button>
+        <button class="btn btn-secondary" onclick="clearAll()" style="width:100%">🧹 Clear</button>
+      </div>
+    </div>
+
+    <!-- ── FS Results ────────────────────────────────────────────── -->
+    <div id="panel-fs">
+      <div class="card">
+        <div class="card-header">📊 Frenet–Serret Results <span class="section-tag tag-fs">κ_pv × τ</span></div>
+        <div style="padding:14px">
+          <div id="fs-empty" style="color:var(--muted);padding:40px 0;text-align:center">Run a backtest to see results.</div>
+          <div id="fs-results" style="display:none">
+            <div class="m4" id="fs-metrics"></div>
+            <div class="spark-wrap"><svg id="fs-curve" viewBox="0 0 400 80" preserveAspectRatio="none"></svg></div>
+            <div class="m2" id="fs-metrics2"></div>
+            <table class="ptable" id="fs-params-table" style="display:none">
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="card-header">📝 Log</div>
+        <div style="padding:10px"><div class="logbox" id="fs-log">Ready.\n</div></div>
+      </div>
+    </div>
+
+    <!-- ── Paper Results ─────────────────────────────────────────── -->
+    <div id="panel-paper">
+      <div class="card">
+        <div class="card-header">📈 Paper (Live Engine) Results <span class="section-tag tag-paper">Prometheus v4</span></div>
+        <div style="padding:14px">
+          <div id="paper-empty" style="color:var(--muted);padding:40px 0;text-align:center">Run Compare to see live-engine results.</div>
+          <div id="paper-results" style="display:none">
+            <div class="m4" id="paper-metrics"></div>
+            <div class="spark-wrap"><svg id="paper-curve" viewBox="0 0 400 80" preserveAspectRatio="none"></svg></div>
+            <div class="m2" id="paper-metrics2"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Optuna Results ───────────────────────────────────────── -->
+      <div class="card" style="margin-top:14px">
+        <div class="card-header">🧬 Optuna Results <span class="section-tag tag-optuna">Best FS Params</span></div>
+        <div style="padding:14px">
+          <div id="opt-empty" style="color:var(--muted);padding:20px 0;text-align:center">Run Optuna to see best parameters.</div>
+          <div id="opt-results" style="display:none">
+            <div class="mcard" style="margin-bottom:10px">
+              <div class="label">Best Score (<span id="opt-metric-label">—</span>)</div>
+              <div class="val green" id="opt-best-val">—</div>
+            </div>
+            <div class="trial-wrap"><svg id="trial-curve" viewBox="0 0 400 60" preserveAspectRatio="none"></svg></div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Optimised Parameters</div>
+            <table class="ptable"><tbody id="opt-params"></tbody></table>
+            <div style="margin-top:10px;font-size:11px;color:var(--muted)">Best-params backtest</div>
+            <div class="m4" id="opt-best-metrics" style="margin-top:6px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end fs-grid -->
+</div>
+
+<script>
+// ─── helpers ──────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+function log(msg){ const b=$('fs-log'); b.textContent+=`[${new Date().toLocaleTimeString()}] ${msg}\n`; b.scrollTop=b.scrollHeight; }
+function status(msg, type='running'){ const b=$('status-bar'); b.className='status-bar '+type; b.textContent=msg; }
+function clearStatus(){ $('status-bar').style.display='none'; }
+
+function v(id){ return $(id).value; }
+function fv(id){ return parseFloat($(id).value)||0; }
+function iv(id){ return parseInt($(id).value)||0; }
+function bv(id){ return $(id).value==='true'; }
+
+function pct(x, dec=2){ const n=Number(x); return isNaN(n)?'—':((n*100).toFixed(dec)+'%'); }
+function num(x, dec=2){ const n=Number(x); return isNaN(n)?'—':n.toFixed(dec); }
+function clr(x, rev=false){
+  const n=Number(x);
+  if(isNaN(n)) return '';
+  const pos = rev ? n<0 : n>0;
+  return pos ? 'green' : (n===0?'':'red');
+}
+
+function payload(){
+  return {
+    symbol: v('symbol'), timeframe: v('timeframe'),
+    limit: iv('limit'), fee: fv('fee'),
+    allow_short: bv('allow_short'),
+    edge_threshold: fv('edge_threshold'),
+    z_window: iv('z_window'), phase_window: iv('phase_window'),
+    max_hold_bars: iv('max_hold_bars'),
+    take_profit: fv('take_profit'), stop_loss: fv('stop_loss'),
+    use_torsion_amp: bv('use_torsion_amp'),
+    mode: v('mode'),
+  };
+}
+
+async function post(url, data){
+  const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const raw = await r.text();
+  let d={};
+  try{ d=JSON.parse(raw); }catch(e){ d={error:raw||r.statusText}; }
+  if(!r.ok || d.error) throw new Error(d.error||r.statusText||`HTTP ${r.status}`);
+  return d;
+}
+
+// ─── Equity sparkline ─────────────────────────────────────────────────────
+function sparkline(svgId, data, color){
+  const svg=$(svgId);
+  if(!data||data.length<2){ svg.innerHTML=''; return; }
+  const W=400, H=80, pad=4;
+  const min=Math.min(...data), max=Math.max(...data);
+  const rng=max-min||1;
+  const pts=data.map((v,i)=>{
+    const x=pad+(i/(data.length-1))*(W-2*pad);
+    const y=H-pad-((v-min)/rng)*(H-2*pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  // Fill area under curve
+  const first=pts.split(' ')[0].split(',');
+  const last=pts.split(' ').slice(-1)[0].split(',');
+  svg.innerHTML=`
+    <defs><linearGradient id="g${svgId}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity=".3"/>
+      <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <polygon points="${pts} ${last[0]},${H} ${first[0]},${H}" fill="url(#g${svgId})"/>
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+}
+
+// ─── Metric card helpers ───────────────────────────────────────────────────
+function metricCard(label, val, cssClass=''){
+  return `<div class="mcard"><div class="label">${label}</div><div class="val ${cssClass}">${val}</div></div>`;
+}
+
+function renderFSMetrics(r){
+  const ret = r.total_return||0;
+  const dd  = r.max_drawdown||0;
+  $('fs-metrics').innerHTML =
+    metricCard('Final Balance', num(r.final_capital), 'blue') +
+    metricCard('Return', pct(ret), clr(ret)) +
+    metricCard('Win Rate', pct(r.win_rate), clr(r.win_rate-0.5)) +
+    metricCard('Max DD', pct(dd), clr(-dd));
+  $('fs-metrics2').innerHTML =
+    metricCard('Profit Factor', num(r.profit_factor), clr(r.profit_factor-1)) +
+    metricCard('Trades', r.total_trades||'—');
+  sparkline('fs-curve', r.equity_curve, '#a78bfa');
+  $('fs-empty').style.display='none';
+  $('fs-results').style.display='block';
+}
+
+function renderPaperMetrics(r){
+  if(r.error){ $('paper-empty').textContent='Error: '+r.error; return; }
+  const ret=r.total_return||0, dd=r.max_drawdown||0;
+  $('paper-metrics').innerHTML =
+    metricCard('Final Capital', num(r.final_capital), 'blue') +
+    metricCard('Return', pct(ret), clr(ret)) +
+    metricCard('Win Rate', pct(r.win_rate), clr(r.win_rate-0.5)) +
+    metricCard('Max DD', pct(dd), clr(-dd));
+  $('paper-metrics2').innerHTML =
+    metricCard('Profit Factor', num(r.profit_factor), clr(r.profit_factor-1)) +
+    metricCard('Sharpe', num(r.sharpe_ratio,2), clr(r.sharpe_ratio)) +
+    (r.go_live_ready ? '<div class="mcard"><div class="label">Go-Live</div><div class="val go-live-yes">✓ Ready</div></div>' :
+                       '<div class="mcard"><div class="label">Go-Live</div><div class="val go-live-no">Not yet</div></div>');
+  sparkline('paper-curve', r.equity_curve, '#3b82f6');
+  $('paper-empty').style.display='none';
+  $('paper-results').style.display='block';
+}
+
+// ─── Actions ──────────────────────────────────────────────────────────────
+async function runFSOnly(){
+  status('Running Frenet–Serret backtest…');
+  log('POST /api/fs_lab/backtest');
+  try{
+    const d = await post('/api/fs_lab/backtest', payload());
+    log(`Done. Trades: ${d.fs.total_trades}  Return: ${pct(d.fs.total_return)}  PF: ${num(d.fs.profit_factor)}`);
+    renderFSMetrics(d.fs);
+    clearStatus();
+  }catch(e){ status('Error: '+e.message,'error'); log('Error: '+e.message); }
+}
+
+async function runCompare(){
+  status('Running FS + Paper comparison…');
+  log('POST /api/fs_lab/compare');
+  try{
+    const d = await post('/api/fs_lab/compare', payload());
+    log(`FS → trades:${d.fs.total_trades} ret:${pct(d.fs.total_return)} pf:${num(d.fs.profit_factor)}`);
+    log(`Paper → trades:${d.paper.total_trades} ret:${pct(d.paper.total_return)} pf:${num(d.paper.profit_factor)}`);
+    renderFSMetrics(d.fs);
+    renderPaperMetrics(d.paper);
+    clearStatus();
+  }catch(e){ status('Error: '+e.message,'error'); log('Error: '+e.message); }
+}
+
+// Stores best params from last Optuna run for Apply button
+let _bestParams = null;
+
+async function runOptuna(){
+  const t = iv('trials');
+  status(`Running Optuna (${t} trials)… this may take a few minutes.`);
+  log(`POST /api/fs_lab/optimize  trials=${t} metric=${v('opt_metric')}`);
+  try{
+    const d = await post('/api/fs_lab/optimize', {
+      ...payload(),
+      trials: t,
+      metric: v('opt_metric'),
+      min_trades: 5,
+    });
+    log(`Done. Best ${d.metric}: ${d.best_value}  (${d.trials_run} trials)`);
+    _bestParams = d.best_params;
+    renderOptuna(d);
+    clearStatus();
+  }catch(e){ status('Error: '+e.message,'error'); log('Error: '+e.message); }
+}
+
+function renderOptuna(d){
+  $('opt-metric-label').textContent = d.metric;
+  $('opt-best-val').textContent = num(d.best_value, 4);
+
+  // Trial convergence sparkline
+  sparkline('trial-curve', d.trial_values, '#10b981');
+
+  // Best params table
+  const tbody = $('opt-params');
+  tbody.innerHTML='';
+  const labels = {
+    edge_threshold:'Edge Threshold', take_profit:'Take Profit',
+    stop_loss:'Stop Loss', max_hold_bars:'Max Hold Bars',
+    z_window:'Z Window', phase_window:'Phase Window',
+    use_torsion_amp:'Torsion Amp',
+  };
+  for(const [k,val] of Object.entries(d.best_params)){
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${labels[k]||k}</td><td>${typeof val==='number'? (Number.isInteger(val)?val:val.toFixed(5)) : String(val)}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  // Best-params metrics summary
+  const m = d.best_metrics||{};
+  const ret = m.total_return||0, dd=m.max_drawdown||0;
+  $('opt-best-metrics').innerHTML =
+    metricCard('Return', pct(ret), clr(ret)) +
+    metricCard('PF', num(m.profit_factor), clr(m.profit_factor-1)) +
+    metricCard('WR', pct(m.win_rate), clr(m.win_rate-0.5)) +
+    metricCard('Trades', m.total_trades||'—');
+
+  $('opt-empty').style.display='none';
+  $('opt-results').style.display='block';
+  $('btn-apply').style.display='block';
+
+  // Also render FS panel with best-params result
+  if(m && m.equity_curve){
+    renderFSMetrics(m);
+    log('FS panel updated with best-params result.');
+  }
+}
+
+function applyBestParams(){
+  if(!_bestParams) return;
+  const p = _bestParams;
+  if(p.edge_threshold!==undefined) $('edge_threshold').value = Number(p.edge_threshold).toFixed(4);
+  if(p.take_profit!==undefined)    $('take_profit').value    = Number(p.take_profit).toFixed(5);
+  if(p.stop_loss!==undefined)      $('stop_loss').value      = Number(p.stop_loss).toFixed(5);
+  if(p.max_hold_bars!==undefined)  $('max_hold_bars').value  = p.max_hold_bars;
+  if(p.z_window!==undefined)       $('z_window').value       = p.z_window;
+  if(p.phase_window!==undefined)   $('phase_window').value   = p.phase_window;
+  if(p.use_torsion_amp!==undefined) $('use_torsion_amp').value = String(p.use_torsion_amp);
+  log('Best Optuna params applied to form fields.');
+}
+
+function clearAll(){
+  $('fs-log').textContent='Cleared.\n';
+  $('fs-empty').style.display='block'; $('fs-results').style.display='none';
+  $('paper-empty').textContent='Run Compare to see live-engine results.';
+  $('paper-empty').style.display='block'; $('paper-results').style.display='none';
+  $('opt-empty').style.display='block'; $('opt-results').style.display='none';
+  $('btn-apply').style.display='none';
+  clearStatus();
+  _bestParams=null;
+}
+</script>
+</body>
+</html>
