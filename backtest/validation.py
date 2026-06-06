@@ -32,6 +32,18 @@ from itertools import combinations
 import numpy as np
 
 
+def _jsafe(x, ndigits: int = 4):
+    """JSON-safe number: None for non-finite (NaN/Inf), else rounded float.
+    Prevents NaN/Infinity tokens that break browser JSON.parse."""
+    try:
+        xf = float(x)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(xf):
+        return None
+    return round(xf, ndigits)
+
+
 # ------------------------------------------------------------------
 #  Normal distribution helpers (no scipy)
 # ------------------------------------------------------------------
@@ -158,10 +170,10 @@ def deflated_sharpe_ratio(sharpe: float, n_obs: int, n_trials: int,
     sr0 = expected_max_sharpe(n_trials, sharpe_variance)
     dsr = probabilistic_sharpe_ratio(sharpe, n_obs, skew, kurtosis, sr_benchmark=sr0)
     return {
-        "deflated_sharpe": round(float(dsr), 4),
-        "psr_vs_zero": round(float(probabilistic_sharpe_ratio(sharpe, n_obs, skew, kurtosis, 0.0)), 4),
-        "benchmark_sharpe": round(float(sr0), 4),
-        "observed_sharpe": round(float(sharpe), 4),
+        "deflated_sharpe": _jsafe(dsr),
+        "psr_vs_zero": _jsafe(probabilistic_sharpe_ratio(sharpe, n_obs, skew, kurtosis, 0.0)),
+        "benchmark_sharpe": _jsafe(sr0),
+        "observed_sharpe": _jsafe(sharpe),
         "n_obs": int(n_obs),
         "n_trials": int(n_trials),
     }
@@ -195,7 +207,7 @@ def cscv_pbo(perf_matrix, n_splits: int = 16) -> dict:
     """
     M = np.asarray(perf_matrix, dtype=float)
     if M.ndim != 2 or M.shape[1] < 2:
-        return {"pbo": float("nan"), "n_configs": int(M.shape[1] if M.ndim == 2 else 0),
+        return {"pbo": None, "n_configs": int(M.shape[1] if M.ndim == 2 else 0),
                 "n_combinations": 0, "note": "need >=2 configs"}
     T, N = M.shape
     S = int(n_splits)
@@ -203,7 +215,7 @@ def cscv_pbo(perf_matrix, n_splits: int = 16) -> dict:
         S += 1
     S = max(2, min(S, T))                 # can't have more groups than rows
     if S < 2 or T < 2:
-        return {"pbo": float("nan"), "n_configs": N, "n_combinations": 0,
+        return {"pbo": None, "n_configs": N, "n_combinations": 0,
                 "note": "not enough observations"}
 
     # Disjoint, contiguous, equal-ish row groups
@@ -211,7 +223,7 @@ def cscv_pbo(perf_matrix, n_splits: int = 16) -> dict:
     groups = [g for g in groups if g.size > 0]
     S = len(groups)
     if S < 2:
-        return {"pbo": float("nan"), "n_configs": N, "n_combinations": 0,
+        return {"pbo": None, "n_configs": N, "n_combinations": 0,
                 "note": "not enough groups"}
 
     def _sharpe_cols(rows):
@@ -241,16 +253,16 @@ def cscv_pbo(perf_matrix, n_splits: int = 16) -> dict:
         logits.append(math.log(omega / (1.0 - omega)))
 
     if not logits:
-        return {"pbo": float("nan"), "n_configs": N, "n_combinations": 0,
+        return {"pbo": None, "n_configs": N, "n_combinations": 0,
                 "note": "no valid combinations"}
     logits = np.array(logits)
     pbo = float((logits <= 0).mean())
     return {
-        "pbo": round(pbo, 4),
+        "pbo": _jsafe(pbo),
         "n_configs": int(N),
         "n_splits": int(S),
         "n_combinations": int(logits.size),
-        "median_logit": round(float(np.median(logits)), 4),
+        "median_logit": _jsafe(float(np.median(logits))),
         "note": "PBO>0.5 ⇒ selection picks overfit configs more often than not",
     }
 
@@ -299,7 +311,7 @@ def regime_conditional_metrics(trades, regime_key: str = "regime") -> dict:
             "win_rate": round(float((arr > 0).mean()), 4) if arr.size else 0.0,
             "expectancy": round(float(arr.mean()), 6) if arr.size else 0.0,
             "total_pnl": round(float(arr.sum()), 4),
-            "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else float("inf"),
+            "profit_factor": _jsafe(gross_win / gross_loss, 3) if gross_loss > 0 else None,
         }
     profitable = [r for r, m in out.items() if m["total_pnl"] > 0]
     out["_summary"] = {
