@@ -1,0 +1,12 @@
+{
+  "_README": "Crypto exit/risk config from synthetic-data Optuna optimization (see config/optimized_profiles.json for full analysis + caveats). Auto-loaded by config/settings.py via load_optimized_params(). Precedence: env var > data/user_settings.json (dashboard) > THIS FILE > code default. NOTE: if you previously set any of these in the dashboard Settings page, that overrides this file. Re-validate on real candles; revert via git if needed.",
+  "ATR_SL_MULT": 2.5,
+  "ATR_TP1_MULT": 2.4,
+  "ATR_TP2_MULT": 6.5,
+  "TP1_EXIT_PCT": 0.15,
+  "TP2_EXIT_PCT": 0.55,
+  "PROFIT_RATCHET_ATR_MULT": 2.0,
+  "TRAIL_BEFORE_TP1": false,
+  "EARLY_KILL_ENABLED": false,
+  "MAX_TRADE_DURATION_BARS": 84
+}
