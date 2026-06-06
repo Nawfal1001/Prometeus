@@ -42,6 +42,49 @@
   The crypto Fear &amp; Greed index is excluded.
 </p>
 
+<!-- Live engine control + monitor -->
+<div class="card">
+  <div class="card-header">
+    🛰️ Non-crypto Live Engine
+    <span id="fxe-badge" class="badge badge-stopped" style="margin-left:10px">STOPPED</span>
+  </div>
+  <div style="padding:16px 20px">
+    <div style="margin-bottom:14px">
+      <button class="btn btn-warning" onclick="fxEngineStart()">▶ Start engine</button>
+      <button class="btn btn-secondary" onclick="fxEngineStop()" style="margin-left:8px">■ Stop</button>
+      <button class="btn" onclick="fxLoadState()" style="margin-left:8px">⟳ Refresh</button>
+      <span id="fxe-status" style="margin-left:12px;color:var(--muted)"></span>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin:0 0 12px">
+      Starts/stops in the bot's current mode (paper or live, set on the main Dashboard).
+      Runs fully isolated from the crypto engine (own capital, model, trades file).
+    </p>
+    <div id="fxe-stats" style="display:flex;flex-wrap:wrap;gap:12px"></div>
+  </div>
+</div>
+
+<!-- Open positions -->
+<div class="card mt">
+  <div class="card-header">📌 Open Positions</div>
+  <div style="overflow-x:auto">
+  <table class="trade-table">
+    <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Qty</th><th>SL</th><th>TP1</th><th>TP2</th><th>uPnL</th><th>Opened</th></tr></thead>
+    <tbody id="fxe-open-body"><tr><td colspan="9" style="color:var(--muted)">—</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
+<!-- Recent closed trades -->
+<div class="card mt">
+  <div class="card-header">🧾 Recent Closed Trades</div>
+  <div style="overflow-x:auto">
+  <table class="trade-table">
+    <thead><tr><th>#</th><th>Symbol</th><th>Side</th><th>PnL</th><th>Capital</th><th>Reason</th><th>Time</th></tr></thead>
+    <tbody id="fxe-log-body"><tr><td colspan="7" style="color:var(--muted)">—</td></tr></tbody>
+  </table>
+  </div>
+</div>
+
 <!-- Scanner config -->
 <div class="card">
   <div class="card-header">Scanner Config</div>
@@ -310,6 +353,86 @@ async function runTrain(){
   } catch(e){st.textContent='Error: '+e.message;}
 }
 
+// ── Live engine control + monitor ─────────────────────────────────────────
+function statCard(label,val,color){
+  return `<div class="stat-card" style="min-width:120px"><div class="stat-label">${label}</div>`+
+         `<div class="stat-value" style="${color?'color:'+color:''}">${val}</div></div>`;
+}
+
+async function fxLoadState(){
+  const st=document.getElementById('fxe-status');
+  try{
+    const res=await fetch('/api/fx/state');
+    const d=await res.json();
+    const badge=document.getElementById('fxe-badge');
+    badge.textContent = d.running ? ('RUNNING · '+String(d.mode||'').toUpperCase()) : 'STOPPED';
+    badge.className = 'badge '+(d.running?'badge-running':'badge-stopped');
+    const s=d.stats||{};
+    const cap = s.capital!=null ? s.capital : (d.capital!=null ? d.capital : '—');
+    const ret = s.total_return!=null ? (s.total_return*100).toFixed(2)+'%' : '—';
+    const wr  = s.win_rate!=null ? (s.win_rate*100).toFixed(1)+'%' : '—';
+    const dd  = s.max_drawdown!=null ? (s.max_drawdown*100).toFixed(1)+'%' : '—';
+    document.getElementById('fxe-stats').innerHTML =
+      statCard('Mode',String(d.mode||'—').toUpperCase())+
+      statCard('Capital','$'+cap)+
+      statCard('Total Return',ret, String(ret).startsWith('-')?'var(--red)':'var(--green)')+
+      statCard('Win Rate',wr)+
+      statCard('Trades',s.total_trades!=null?s.total_trades:0)+
+      statCard('Max DD',dd)+
+      statCard('Open',(d.open_trades||[]).length)+
+      statCard('Timeframe',d.timeframe||'—');
+
+    const ot=d.open_trades||[];
+    document.getElementById('fxe-open-body').innerHTML = ot.length ? ot.map(t=>{
+      const long=(t.direction>0||t.side==='long'||t.side==='buy');
+      const up=Number(t.unrealized_pnl||0);
+      return `<tr>
+        <td><b>${esc(t.symbol)}</b></td>
+        <td style="color:${long?'var(--green)':'var(--red)'}">${esc(t.side||(t.direction>0?'long':'short'))}</td>
+        <td>${fmt(t.entry_price,5)}</td>
+        <td>${fmt(t.qty||t.size,4)}</td>
+        <td>${fmt(t.stop_loss,5)}</td>
+        <td>${fmt(t.tp1,5)}</td>
+        <td>${fmt(t.tp2,5)}</td>
+        <td style="color:${up>=0?'var(--green)':'var(--red)'}">${fmt(t.unrealized_pnl,2)}</td>
+        <td style="font-size:11px;color:var(--muted)">${esc(t.entry_time||t.opened_at||'')}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="9" style="color:var(--muted)">No open positions</td></tr>';
+
+    const log=(d.trade_log||[]).slice().reverse();
+    document.getElementById('fxe-log-body').innerHTML = log.length ? log.map((t,i)=>`<tr>
+      <td>${log.length-i}</td>
+      <td><b>${esc(t.symbol||'')}</b></td>
+      <td>${esc(t.side||t.direction||'')}</td>
+      <td style="color:${Number(t.pnl||0)>=0?'var(--green)':'var(--red)'}">${fmt(t.pnl,2)}</td>
+      <td>${fmt(t.capital,2)}</td>
+      <td style="font-size:11px">${esc(t.reason||t.exit_reason||'')}</td>
+      <td style="font-size:11px;color:var(--muted)">${esc(t.time||t.exit_time||'')}</td>
+    </tr>`).join('') : '<tr><td colspan="7" style="color:var(--muted)">No closed trades yet</td></tr>';
+
+    st.textContent = d.source==='persisted_file' ? 'engine stopped — showing last saved state' : '';
+  }catch(e){ st.textContent='Error: '+e.message; }
+}
+
+async function fxEngineStart(){
+  const st=document.getElementById('fxe-status'); st.textContent='Starting…';
+  try{
+    const res=await fetch('/api/fx/control/start',{method:'POST'});
+    const d=await res.json();
+    st.textContent = d.status==='error' ? ('Error: '+(d.reason||'')) : ('Engine '+d.status);
+    setTimeout(fxLoadState,1200);
+  }catch(e){ st.textContent='Error: '+e.message; }
+}
+
+async function fxEngineStop(){
+  const st=document.getElementById('fxe-status'); st.textContent='Stopping…';
+  try{
+    const res=await fetch('/api/fx/control/stop',{method:'POST'});
+    const d=await res.json();
+    st.textContent='Engine '+d.status; setTimeout(fxLoadState,800);
+  }catch(e){ st.textContent='Error: '+e.message; }
+}
+
 async function loadUniverse(){
   const st = document.getElementById('fx-status');
   st.textContent = 'Loading universe…';
@@ -331,6 +454,10 @@ async function loadUniverse(){
     st.textContent = `${rows.length} instruments loaded`;
   } catch(e){st.textContent='Error: '+e.message;}
 }
+
+// Live engine state polling
+fxLoadState();
+setInterval(fxLoadState, 5000);
 </script>
 </body>
 </html>

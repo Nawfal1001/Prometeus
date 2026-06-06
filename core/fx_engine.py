@@ -60,6 +60,21 @@ class FXPrometheusEngine(PrometheusEngine):
         self.orders.fusion = self.fusion
         self.orders.memory = self.selector.memory
 
+        # 4. Retag live-state broadcasts so the FX engine never overwrites the
+        #    crypto dashboard on the shared WebSocket. The crypto UI ignores
+        #    "fx_state"; the FX dashboard polls /api/fx/state.
+        import inspect
+        _orig_broadcast = self.broadcast
+
+        async def _fx_broadcast(msg):
+            if isinstance(msg, dict) and msg.get("type") == "state":
+                msg = {**msg, "type": "fx_state"}
+            res = _orig_broadcast(msg)
+            if inspect.isawaitable(res):
+                await res
+
+        self.broadcast = _fx_broadcast
+
         logger.info(
             "[FXEngine] Initialized | "
             f"symbols={self._symbols()} tf={self._tf} "

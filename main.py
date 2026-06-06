@@ -20,6 +20,7 @@ logger.add("logs/prometheus.log", rotation="1 day", retention="7 days", level=cf
 engine: PrometheusEngine | None = None
 engine_task: asyncio.Task | None = None
 _fx_engine_task: asyncio.Task | None = None
+fx_engine = None  # FXPrometheusEngine instance, kept global so /api/fx/state can read live state
 
 
 def remove_fake_control_route():
@@ -175,14 +176,15 @@ def validate_live_start() -> tuple[bool, str]:
     return True, "ok"
 
 
-async def _start_fx_engine_task():
+async def _start_fx_engine_task(force: bool = False):
     """Background task for the FX / non-crypto autonomous engine.
 
-    Started alongside the crypto engine when NON_CRYPTO_ENABLED=true.
+    Started alongside the crypto engine when NON_CRYPTO_ENABLED=true, or
+    on demand from the dashboard (force=True) regardless of the env flag.
     Runs independently — a crash here never affects the crypto engine.
     """
-    global _fx_engine_task
-    if not getattr(cfg, "NON_CRYPTO_ENABLED", False):
+    global _fx_engine_task, fx_engine
+    if not force and not getattr(cfg, "NON_CRYPTO_ENABLED", False):
         logger.info("[FXEngine] NON_CRYPTO_ENABLED=false — FX engine not started")
         return
     from core.fx_engine import FXPrometheusEngine
@@ -191,6 +193,7 @@ async def _start_fx_engine_task():
         attempt += 1
         try:
             fx = FXPrometheusEngine(broadcast_fn=broadcast)
+            fx_engine = fx
             await fx.start()
             break  # clean stop
         except asyncio.CancelledError:
@@ -200,6 +203,76 @@ async def _start_fx_engine_task():
             wait = min(30 * (2 ** min(attempt - 1, 3)), 300)
             logger.exception(f"[FXEngine] crashed (attempt {attempt}), restarting in {wait}s: {e}")
             await asyncio.sleep(wait)
+    fx_engine = None
+
+
+# ---------------------------------------------------------------------------
+# FX / non-crypto engine control + live state (independent of the crypto engine)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/fx/control/start", include_in_schema=False)
+async def fx_control_start():
+    """Start the non-crypto engine on demand (paper or live per TRADING_MODE)."""
+    global _fx_engine_task
+    if _fx_engine_task and not _fx_engine_task.done():
+        return {"status": "already_running"}
+    if cfg.TRADING_MODE == "live":
+        ok, reason = validate_live_start()
+        if not ok:
+            return JSONResponse({"status": "error", "reason": reason}, status_code=400)
+    _fx_engine_task = asyncio.create_task(_start_fx_engine_task(force=True))
+    logger.info("[Control] FX engine started on demand from dashboard")
+    return {"status": "starting", "mode": cfg.TRADING_MODE}
+
+
+@app.post("/api/fx/control/stop", include_in_schema=False)
+async def fx_control_stop():
+    global _fx_engine_task, fx_engine
+    if _fx_engine_task and not _fx_engine_task.done():
+        _fx_engine_task.cancel()
+    _fx_engine_task = None
+    fx_engine = None
+    logger.info("[Control] FX engine stopped from dashboard")
+    return {"status": "stopped"}
+
+
+@app.get("/api/fx/state", include_in_schema=False)
+async def fx_state():
+    """Live snapshot of the non-crypto engine for the FX dashboard.
+
+    Falls back to the persisted trades file when the engine isn't running so
+    the dashboard can still show the last known open/closed positions.
+    """
+    running = bool(_fx_engine_task and not _fx_engine_task.done())
+    out = {
+        "running": running,
+        "enabled_by_env": bool(getattr(cfg, "NON_CRYPTO_ENABLED", False)),
+        "mode": cfg.TRADING_MODE,
+        "timeframe": getattr(cfg, "NON_CRYPTO_TIMEFRAME", "1h"),
+        "symbols": getattr(cfg, "NON_CRYPTO_SYMBOLS", ""),
+    }
+    if fx_engine is not None:
+        try:
+            out["stats"] = fx_engine.orders.get_stats()
+            out["open_trades"] = fx_engine.orders.get_open_trades()
+            out["trade_log"] = fx_engine.orders.risk.trade_history[-50:]
+        except Exception as e:
+            out["warn"] = f"engine state read failed: {e}"
+    else:
+        # engine not in memory — read the persisted paper trades file
+        try:
+            import json
+            from pathlib import Path
+            f = Path(__file__).resolve().parent / "data" / "fx_paper_trades.json"
+            if f.exists():
+                data = json.loads(f.read_text())
+                ot = data.get("open_trades", {})
+                out["open_trades"] = list(ot.values()) if isinstance(ot, dict) else (ot or [])
+                out["capital"] = data.get("capital")
+                out["source"] = "persisted_file"
+        except Exception as e:
+            out["warn"] = f"trades file read failed: {e}"
+    return out
 
 
 async def start_engine_task(mode: str):
