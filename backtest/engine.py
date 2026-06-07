@@ -62,6 +62,7 @@ class BacktestEngine:
             is purged between each train block and its test block, so rolling
             features and still-open trades can't leak across the boundary.
         """
+        self._load_xgb()   # match live: the ML entry layer must be in the backtest too
         df = self._prepare(df)
         usable = len(df)
         if usable < test_bars:
@@ -594,6 +595,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
     def run_competing_symbols(self, data_by_symbol: dict, prepared: bool = False) -> dict:
         if not data_by_symbol:
             return {"error": "No symbol data provided"}
+        self._load_xgb()   # match live: include the ML entry layer in compete backtests too
         prepared_by_symbol = {}
         for symbol, df in data_by_symbol.items():
             if df is None or df.empty:
