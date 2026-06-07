@@ -303,6 +303,7 @@ class PrometheusOptimizer:
             # Fixed-length per-time-bucket returns — aligned across all trials in
             # BOTH single and compete modes (compete has no walk-forward windows).
             metrics["bucket_returns"] = results.get("bucket_returns", [])
+            metrics["consistency"] = self._bucket_robustness(results.get("bucket_returns", []))
             metrics["regime_breakdown"] = results.get("regime_breakdown", {})
             self.trial_results.append({"trial": trial.number, "score": round(score, 4), "params": params, "metrics": metrics})
             if score > self.best_value:
@@ -409,6 +410,22 @@ class PrometheusOptimizer:
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
 
+    @staticmethod
+    def _bucket_robustness(bucket_returns) -> float:
+        """Per-config consistency in [0,1] from its per-time-bucket returns:
+        blends fraction-of-profitable-buckets with a squashed bucket-level Sharpe.
+        High = profits spread across many periods (less likely overfit)."""
+        br = bucket_returns or []
+        if len(br) < 4:
+            return 0.0
+        import numpy as np
+        arr = np.asarray(br, dtype=float)
+        frac_positive = float((arr > 0).mean())
+        mean, std = float(arr.mean()), float(arr.std())
+        cons = mean / std if std > 1e-12 else (1.0 if mean > 0 else 0.0)
+        cons = max(0.0, min(1.0, 0.5 + cons))
+        return round(0.5 * frac_positive + 0.5 * cons, 4)
+
     def _robustness_adjust(self, score: float, results: dict) -> float:
         """Penalize configs whose profit is concentrated in a few lucky periods.
 
@@ -426,13 +443,7 @@ class PrometheusOptimizer:
         br = results.get("bucket_returns") or []
         if len(br) < 4:
             return score
-        import numpy as np
-        arr = np.asarray(br, dtype=float)
-        frac_positive = float((arr > 0).mean())              # how many periods were profitable
-        mean, std = float(arr.mean()), float(arr.std())
-        consistency = mean / std if std > 1e-12 else 1.0      # bucket-level Sharpe
-        consistency = max(0.0, min(1.0, 0.5 + consistency))   # squashed to [0,1]
-        robustness = 0.5 * frac_positive + 0.5 * consistency  # [0,1]
+        robustness = self._bucket_robustness(br)              # [0,1]
         factor = (1.0 - w) + w * robustness                   # in [1-w, 1]
         return score * factor
 
