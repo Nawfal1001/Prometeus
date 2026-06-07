@@ -21,6 +21,7 @@ from loguru import logger
 
 import config.settings as cfg
 from core.models.feature_engine import get_feature_columns, compute_features, label_data
+from core.models.cross_sectional import build_cross_sectional_training, CROSS_SECTIONAL_COLS, time_decay_weights
 from backtest.validation import embargo_size, purged_walkforward_windows
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -39,11 +40,13 @@ class XGBoostSignalModel:
     def __init__(self):
         self.model = None
         self.feature_cols = get_feature_columns()
+        self._feature_cols_used = list(self.feature_cols)   # actual cols the model was trained on
         self.le = LabelEncoder().fit(_CLASSES)
         self._version = None
         self._metrics = {}
         self._trained_tf = None
         self._tf_warned = False
+        self._cross_sectional = False
 
     def _neutral_prediction(self) -> dict:
         return {"direction": 0, "confidence": 0.0, "probabilities": {}}
@@ -54,22 +57,60 @@ class XGBoostSignalModel:
     def _prepare_training_data(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
             return pd.DataFrame()
+        self._cross_sectional = False
+        self._feature_cols_used = list(self.feature_cols)
+
+        # ---- single-symbol path (absolute direction) ----
         if "symbol" not in df.columns:
             feat = compute_features(df.copy())
             return label_data(feat) if feat is not None and not feat.empty else pd.DataFrame()
-        parts = []
+
+        # ---- compute features per symbol ----
+        frames = {}
         for symbol, group in df.groupby("symbol", sort=False):
             group = group.drop(columns=["symbol"], errors="ignore").copy().sort_index()
             feat = compute_features(group)
             if feat is None or feat.empty:
                 logger.warning(f"[XGBoost] Skipping {symbol}: no usable features")
                 continue
+            frames[symbol] = feat
+        if not frames:
+            return pd.DataFrame()
+
+        # ---- cross-sectional relative-strength path (opt-in, needs >=2 symbols) ----
+        if bool(getattr(cfg, "XGB_CROSS_SECTIONAL", False)) and len(frames) >= 2:
+            horizons = self._horizons()
+            taker = float(getattr(cfg, "PAPER_TAKER_FEE", 0.0005))
+            slip = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003))
+            cost = 2.0 * (taker + slip)
+            labeled, xs_cols = build_cross_sectional_training(
+                frames, horizons=horizons, cost=cost,
+                band_mult=float(getattr(cfg, "XGB_XS_BAND_COST_MULT", 0.5)),
+                time_decay=bool(getattr(cfg, "XGB_TIME_DECAY", True)))
+            if labeled is not None and not labeled.empty:
+                self._cross_sectional = True
+                self._feature_cols_used = list(self.feature_cols) + [c for c in xs_cols if c not in self.feature_cols]
+                logger.info(f"[XGBoost] Cross-sectional mode: predicting RELATIVE strength | "
+                            f"+{len(xs_cols)} xs features | {len(frames)} symbols")
+                return labeled.sort_index()
+            logger.warning("[XGBoost] Cross-sectional build returned no rows — falling back to per-symbol absolute labels")
+
+        # ---- default per-symbol absolute path ----
+        parts = []
+        for symbol, feat in frames.items():
             labeled = label_data(feat)
             labeled["symbol"] = symbol
             parts.append(labeled)
         if not parts:
             return pd.DataFrame()
         return pd.concat(parts, axis=0).sort_index()
+
+    @staticmethod
+    def _horizons():
+        h = getattr(cfg, "XGB_LABEL_HORIZONS", "6,12,24")
+        if isinstance(h, str):
+            h = [int(x) for x in h.replace(";", ",").split(",") if x.strip()]
+        return [int(x) for x in h if int(x) > 0] or [6, 12, 24]
 
     def train_if_stale(self, df: pd.DataFrame, max_age_hours: int = 24):
         needs_train = False
@@ -216,18 +257,23 @@ class XGBoostSignalModel:
         if directional < 40 or counts.get(1, 0) < 10 or counts.get(-1, 0) < 10:
             raise ValueError(f"Not enough directional samples: {counts}. Use more candles or lower XGB_LABEL_BAND_COST_MULT.")
 
-        available_cols = [c for c in self.feature_cols if c in df.columns]
-        missing = set(self.feature_cols) - set(available_cols)
+        available_cols = [c for c in self._feature_cols_used if c in df.columns]
+        missing = set(self._feature_cols_used) - set(available_cols)
         if missing:
             logger.warning(f"[XGBoost] Missing features: {missing}")
         if not available_cols:
             raise ValueError("No model feature columns available after feature computation.")
+        self._feature_cols_used = available_cols   # lock to what actually exists
 
         X = df[available_cols].replace([np.inf, -np.inf], np.nan).fillna(0.0).values
         y = self.le.transform(df["label"].values.astype(int))
         w = df["sample_weight"].values.astype(float) if "sample_weight" in df.columns else np.ones(len(df))
         fwd = df["fwd_ret"].values.astype(float) if "fwd_ret" in df.columns else np.zeros(len(df))
         n = len(X)
+        # Time-decay: recent samples weigh more (credibility — adapt to current
+        # regime). Cross-sectional path already applied it, so don't double-apply.
+        if bool(getattr(cfg, "XGB_TIME_DECAY", True)) and not self._cross_sectional:
+            w = w * time_decay_weights(n)
 
         # ---- purged train / holdout split (step 5) ----
         horizons = getattr(cfg, "XGB_LABEL_HORIZONS", "6,12,24")
@@ -285,7 +331,9 @@ class XGBoostSignalModel:
         self._trained_tf = tf
         self._metrics = {"holdout_edge": edge, "label_counts": counts, "tuned": tuned,
                          "n_samples": n, "best_params": params, "embargo": embargo,
-                         "timeframe": tf, "mode": "3class_feeadj_purged"}
+                         "timeframe": tf, "cross_sectional": self._cross_sectional,
+                         "n_features": len(available_cols),
+                         "mode": "xs_relative_strength" if self._cross_sectional else "3class_feeadj_purged"}
         self.save()
         logger.info(f"[XGBoost] Trained v6 | holdout IC={edge['ic']} net={edge.get('net_edge_pct')}% "
                     f"| n={n} tuned={tuned}")
@@ -312,10 +360,16 @@ class XGBoostSignalModel:
         df_feat = compute_features(df) if "ema_stack" not in df.columns else df
         if df_feat is None or df_feat.empty:
             return self._neutral_prediction()
-        available_cols = [c for c in self.feature_cols if c in df_feat.columns]
-        if not available_cols:
-            return self._neutral_prediction()
-        X = df_feat[available_cols].iloc[-1:].replace([np.inf, -np.inf], np.nan).fillna(0.0).values
+        cols = self._feature_cols_used or list(self.feature_cols)
+        # Build the row in the EXACT trained column order; columns absent at
+        # inference (e.g. cross-sectional xs features when served one symbol at a
+        # time) are filled with 0 so the feature vector still matches the model.
+        if self._cross_sectional and not all(c in df_feat.columns for c in CROSS_SECTIONAL_COLS) and not self._tf_warned:
+            logger.warning("[XGBoost] Cross-sectional model served WITHOUT xs features "
+                           "(needs the rotator universe) — relative-strength signal degraded to 0 for those inputs.")
+        row = df_feat.iloc[-1]
+        X = np.array([[float(row[c]) if c in df_feat.columns and np.isfinite(pd.to_numeric(row.get(c), errors="coerce"))
+                       else 0.0 for c in cols]])
         try:
             probs = self.model.predict_proba(X)[0]
             if len(probs) < 3:
@@ -350,7 +404,9 @@ class XGBoostSignalModel:
     def save(self):
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION,
-                     "metrics": self._metrics, "timeframe": self._trained_tf}, MODEL_PATH)
+                     "metrics": self._metrics, "timeframe": self._trained_tf,
+                     "feature_cols_used": self._feature_cols_used,
+                     "cross_sectional": self._cross_sectional}, MODEL_PATH)
         logger.info(f"[XGBoost] Model saved ({MODEL_VERSION}) at {MODEL_PATH}")
 
     def load(self):
@@ -368,6 +424,8 @@ class XGBoostSignalModel:
             self.le = data.get("le", self.le)
             self._metrics = data.get("metrics", {})
             self._trained_tf = data.get("timeframe") or self._metrics.get("timeframe")
+            self._feature_cols_used = data.get("feature_cols_used") or list(self.feature_cols)
+            self._cross_sectional = bool(data.get("cross_sectional", False))
             self._tf_warned = False
             logger.info(f"[XGBoost] Model loaded (version={self._version}, tf={self._trained_tf}) "
                         f"edge={self._metrics.get('holdout_edge')}")

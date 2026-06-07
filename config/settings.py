@@ -262,6 +262,11 @@ def reload_from_sources():
     XGB_TUNE_REQUIRES_EDGE = get_bool("XGB_TUNE_REQUIRES_EDGE", "true")  # skip Optuna if no edge
     XGB_ENTRY_MIN_SCORE = get_float("XGB_ENTRY_MIN_SCORE", 0.15)   # |P(long)-P(short)| gate for entry
     XGB_ENFORCE_TIMEFRAME = get_bool("XGB_ENFORCE_TIMEFRAME", "true")  # neutralise model if live TF != trained TF
+    # --- Cross-sectional relative-strength alpha (v7, opt-in) ---
+    global XGB_CROSS_SECTIONAL, XGB_XS_BAND_COST_MULT, XGB_TIME_DECAY
+    XGB_CROSS_SECTIONAL = get_bool("XGB_CROSS_SECTIONAL", "false")     # predict relative strength vs basket
+    XGB_XS_BAND_COST_MULT = get_float("XGB_XS_BAND_COST_MULT", 0.5)    # residual neutral band (smaller than abs)
+    XGB_TIME_DECAY = get_bool("XGB_TIME_DECAY", "true")               # recent samples weigh more
 
     MARKET_OPEN_UTC = get("MARKET_OPEN_UTC", "13:30")
     MARKET_CLOSE_UTC = get("MARKET_CLOSE_UTC", "20:00")

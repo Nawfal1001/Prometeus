@@ -70,6 +70,14 @@
         <input type="number" id="t-candles" value="3000" min="1000" max="10000" step="500">
         <span class="hint">Need 20+ long & 20+ short labels. 3000+ recommended.</span>
       </div>
+      <div class="field-group">
+        <label>Target type</label>
+        <select id="t-cross-sectional">
+          <option value="false" selected>Absolute direction (single coin)</option>
+          <option value="true">Cross-sectional relative strength (market-neutral)</option>
+        </select>
+        <span class="hint">Relative strength predicts which coins OUT-perform the basket — more learnable, market-neutral. Needs 2+ symbols. Read the Holdout IC to see if it beats absolute.</span>
+      </div>
     </div>
     <div style="padding:0 20px 20px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-primary" id="t-run-btn" onclick="trainModel()">🧠 Train Model</button>
@@ -150,6 +158,7 @@ async function trainModel(){
     symbols: useDefault ? null : document.getElementById('t-symbols').value,
     timeframe: document.getElementById('t-timeframe').value,
     candles: parseInt(document.getElementById('t-candles').value),
+    cross_sectional: document.getElementById('t-cross-sectional').value === 'true',
   };
   document.getElementById('t-run-btn').disabled = true;
   set('t-status-text', 'Training started… this can take a minute.');

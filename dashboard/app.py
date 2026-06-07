@@ -306,7 +306,12 @@ async def _run_training_job(params: dict):
         symbols = _normalize_symbol_list(params.get("symbols"), cfg.SYMBOL, params.get("all_default", False))
         timeframe = params.get("timeframe") or cfg.TIMEFRAME
         candles = int(params.get("candles", 1500))
-        ui_log(f"Training ML model | symbols={symbols} tf={timeframe} candles={candles}")
+        # Optional per-run cross-sectional (relative-strength) mode — persisted so
+        # training and live serving stay consistent.
+        if "cross_sectional" in params:
+            cfg.save_user_settings({"XGB_CROSS_SECTIONAL": bool(params.get("cross_sectional"))})
+        xs = bool(getattr(cfg, "XGB_CROSS_SECTIONAL", False))
+        ui_log(f"Training ML model | symbols={symbols} tf={timeframe} candles={candles} cross_sectional={xs}")
         df = await _fetch_training_frame(symbols, timeframe, candles)
         if df.empty:
             raise RuntimeError("No training data fetched")
