@@ -200,6 +200,17 @@ class FusionEngine:
             result.update(blocked_signal_payload)
             return result
 
+        # Regime gate — stand aside in RANGE/chop (no directional regime). A trend
+        # strategy has no edge in a directionless market; only very high-conviction
+        # signals (abs_score >= bypass) are allowed through.
+        if bool(getattr(cfg, "REGIME_GATE_ENABLED", True)) and regime_bias == 0:
+            gate_bypass = float(getattr(cfg, "REGIME_GATE_BYPASS_SCORE", 0.45))
+            if abs_score < gate_bypass:
+                logger.info(f"[Fusion] Regime gate: RANGE/chop, standing aside (abs_score={abs_score:.3f} < {gate_bypass})")
+                result = self._no_trade("regime_gate_chop")
+                result.update(blocked_signal_payload)
+                return result
+
         liq_soft_threshold = float(getattr(cfg, "LIQUIDATION_SOFT_PENALTY_THRESHOLD", 0.30))
         liq_hard_veto_threshold = float(getattr(cfg, "LIQUIDATION_HARD_VETO_THRESHOLD", 0.70))
         liq_penalty_factor = float(getattr(cfg, "LIQUIDATION_PENALTY_FACTOR", 0.50))

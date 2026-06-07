@@ -220,6 +220,11 @@ class BacktestEngine:
             return _blocked("regime_blocks_short")
         if regime_bias == -1 and direction == 1 and abs(entry_score) < regime_thr:
             return _blocked("regime_blocks_long")
+        # Regime gate — stand aside in RANGE/chop (regime_bias==0) unless very
+        # high conviction. Mirrors the live fuse() gate so backtest == live.
+        if bool(getattr(cfg, "REGIME_GATE_ENABLED", True)) and regime_bias == 0:
+            if abs_score < float(getattr(cfg, "REGIME_GATE_BYPASS_SCORE", 0.45)):
+                return _blocked("regime_gate_chop")
 
         vol_regime = float(row.get("vol_regime", 1.0) or 1.0)
         threshold_mult = 1.0

@@ -402,6 +402,13 @@ def reload_from_sources():
     REGIME_CHAOS_COOLDOWN_BARS = get_int("REGIME_CHAOS_COOLDOWN_BARS", 4)
     REGIME_BULL_SCORE_THRESHOLD = get_float("REGIME_BULL_SCORE_THRESHOLD", 0.18)
     REGIME_BEAR_SCORE_THRESHOLD = get_float("REGIME_BEAR_SCORE_THRESHOLD", 0.18)
+    # --- Regime gate: stand aside in RANGE/chop (no clear trend) ---
+    # This is a trend strategy; in a directionless regime (regime_bias==0) it
+    # mostly donates to fees. The gate blocks BOTH-direction trades in chop
+    # unless conviction is very high (abs fusion score >= bypass).
+    global REGIME_GATE_ENABLED, REGIME_GATE_BYPASS_SCORE
+    REGIME_GATE_ENABLED = get_bool("REGIME_GATE_ENABLED", "true")
+    REGIME_GATE_BYPASS_SCORE = get_float("REGIME_GATE_BYPASS_SCORE", 0.45)
     XGB_LABEL_LOOKAHEAD = get_int("XGB_LABEL_LOOKAHEAD", 10)
     KUCOIN_API_KEY = get_secret("KUCOIN_API_KEY")
     KUCOIN_API_SECRET = get_secret("KUCOIN_API_SECRET")
