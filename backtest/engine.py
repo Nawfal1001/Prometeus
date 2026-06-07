@@ -415,6 +415,53 @@ class BacktestEngine:
         return {"error": msg, "no_trades": True, "max_abs": max_abs, "avg_abs": avg_abs, "threshold": thr,
                 "block_reasons": reasons, "total_trades": 0}
 
+    # Feature columns the entry signal is built from — for per-component IC.
+    COMPONENT_COLS = (
+        "ema_stack", "rsi_signal", "rsi_norm", "stoch_cross", "rsi_divergence",
+        "market_structure", "macd_signal", "macd_accel", "squeeze_fire",
+        "bb_position", "adx_direction", "cci_norm", "candle_pattern", "gap_signal",
+        "cvd_divergence", "cvd_signal", "pressure_signal", "ob_signal", "funding_signal",
+    )
+
+    def component_edge_report(self, df, horizon: int = 12) -> dict:
+        """Per-indicator information coefficient (IC) vs the forward return.
+
+        Answers 'WHICH components actually predict?' so a lean signal can be built
+        from only the ones with real IC and the noise dropped. |IC| < ~0.03 means
+        that indicator carries no directional signal here.
+        """
+        try:
+            d = df.reset_index(drop=True)
+            n = len(d)
+            if n < horizon + 30 or "close" not in d.columns:
+                return {"note": "not enough bars"}
+            close = d["close"].values.astype(float)
+            fwd = np.full(n, np.nan)
+            fwd[:n - horizon] = close[horizon:] / close[:n - horizon] - 1.0
+            comps = []
+            for col in self.COMPONENT_COLS:
+                if col not in d.columns:
+                    continue
+                x = pd.to_numeric(d[col], errors="coerce").values.astype(float)
+                m = np.isfinite(x) & np.isfinite(fwd) & (np.abs(x) > 1e-9)
+                if m.sum() < 30:
+                    continue
+                xs, fs = x[m], fwd[m]
+                if xs.std() == 0 or fs.std() == 0:
+                    continue
+                ic = float(np.corrcoef(xs, fs)[0, 1])
+                hit = float((np.sign(xs) == np.sign(fs)).mean())
+                comps.append({"feature": col, "ic": round(ic, 4),
+                              "hit_rate": round(hit, 4), "n": int(m.sum())})
+            comps.sort(key=lambda c: abs(c["ic"]), reverse=True)
+            useful = [c["feature"] for c in comps if abs(c["ic"]) >= 0.03]
+            return {"horizon": horizon, "components": comps,
+                    "predictive_features": useful,
+                    "verdict": "has_predictive_components" if useful else "no_component_predicts"}
+        except Exception as e:
+            logger.debug(f"[Backtest] component_edge_report failed: {e}")
+            return {"note": f"component report failed: {e}"}
+
     def signal_edge_report(self, df, horizons=(6, 12, 24)) -> dict:
         """Raw predictive edge of the entry signal, BEFORE costs/exits/filters.
 

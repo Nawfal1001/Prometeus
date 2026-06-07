@@ -115,6 +115,11 @@ async function runSignalEdge(){
     log('Measuring raw signal edge (pre-cost)...');
     const d=await post('/api/lab/signal_edge',payload);
     log(`=== RAW SIGNAL EDGE === verdict: ${d.portfolio_verdict} | portfolio avg IC: ${d.portfolio_avg_ic}`);
+    if(Array.isArray(d.component_ranking)&&d.component_ranking.length){
+      log('  --- which indicators actually predict (avg IC across symbols, |IC|<0.03 = noise) ---');
+      d.component_ranking.forEach(c=>log(`    ${(Math.abs(c.avg_ic)>=0.03?'✅':'·')} ${c.feature}: IC ${c.avg_ic}`));
+      log(`  Predictive features: ${(d.predictive_features&&d.predictive_features.length)?d.predictive_features.join(', '):'NONE — TA components carry no edge here'}`);
+    }
     Object.entries(d.per_symbol||{}).forEach(([sym,r])=>{
       const hs=Object.keys(r).filter(k=>k.startsWith('H'));
       const parts=hs.map(h=>`${h}: IC ${r[h].ic}, hit ${(r[h].hit_rate*100).toFixed(1)}%, net ${r[h].net_edge_pct}% (${r[h].pays_for_costs?'PAYS':'loses'})`);

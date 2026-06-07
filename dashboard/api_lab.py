@@ -139,15 +139,19 @@ async def lab_signal_edge(request: Request):
         from core.models.feature_engine import compute_features
         eng = BacktestEngine()
         per_symbol, ics = {}, []
+        comp_acc = {}   # feature -> list of ICs across symbols
         for sym, raw in data.items():
             try:
                 feat = compute_features(raw.copy())
                 if feat is None or feat.empty or len(feat) < 60:
                     continue
                 rep = eng.signal_edge_report(feat)
+                rep["components"] = eng.component_edge_report(feat)
                 per_symbol[sym] = rep
                 if isinstance(rep.get("avg_ic"), (int, float)):
                     ics.append(float(rep["avg_ic"]))
+                for c in (rep.get("components", {}) or {}).get("components", []):
+                    comp_acc.setdefault(c["feature"], []).append(c["ic"])
             except Exception as e:
                 logger.warning(f"[Lab] signal_edge failed for {sym}: {e}")
         if not per_symbol:
@@ -155,8 +159,15 @@ async def lab_signal_edge(request: Request):
         avg_ic = sum(ics) / len(ics) if ics else 0.0
         verdict = ("no_predictive_edge" if abs(avg_ic) < 0.03
                    else "weak_edge" if abs(avg_ic) < 0.06 else "has_edge")
+        # Cross-symbol average IC per component, strongest first.
+        comp_avg = sorted(
+            ({"feature": f, "avg_ic": round(sum(v) / len(v), 4), "symbols": len(v)}
+             for f, v in comp_acc.items()),
+            key=lambda c: abs(c["avg_ic"]), reverse=True)
+        predictive = [c["feature"] for c in comp_avg if abs(c["avg_ic"]) >= 0.03]
         return {"timeframe": timeframe, "limit": limit, "symbols": list(per_symbol.keys()),
                 "portfolio_avg_ic": round(avg_ic, 4), "portfolio_verdict": verdict,
+                "component_ranking": comp_avg, "predictive_features": predictive,
                 "per_symbol": per_symbol}
     except Exception as e:
         logger.exception("Lab signal_edge failed")
