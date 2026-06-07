@@ -273,6 +273,7 @@ class PrometheusOptimizer:
                 return score
 
             score = self._compute_score(results)
+            score = self._robustness_adjust(score, results)
             trial.report(score, step=1)
             if trial.should_prune():
                 raise optuna.TrialPruned()
@@ -407,6 +408,33 @@ class PrometheusOptimizer:
         for k, v in params.items():
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
+
+    def _robustness_adjust(self, score: float, results: dict) -> float:
+        """Penalize configs whose profit is concentrated in a few lucky periods.
+
+        PBO can't be computed per-trial (it ranks the whole set of configs), so
+        instead we reward CONSISTENCY across the per-time-bucket returns: a config
+        profitable in many buckets is far less likely to be overfit than one that
+        made everything in a single slice. This pushes the final PBO down and the
+        Deflated Sharpe up — i.e. better OUT-OF-SAMPLE results, not just a higher
+        in-sample number. It does NOT manufacture edge: if every bucket loses, the
+        score stays negative.
+        """
+        w = float(getattr(cfg, "OPTUNA_ROBUSTNESS_WEIGHT", 0.0))
+        if w <= 0 or score <= 0:
+            return score
+        br = results.get("bucket_returns") or []
+        if len(br) < 4:
+            return score
+        import numpy as np
+        arr = np.asarray(br, dtype=float)
+        frac_positive = float((arr > 0).mean())              # how many periods were profitable
+        mean, std = float(arr.mean()), float(arr.std())
+        consistency = mean / std if std > 1e-12 else 1.0      # bucket-level Sharpe
+        consistency = max(0.0, min(1.0, 0.5 + consistency))   # squashed to [0,1]
+        robustness = 0.5 * frac_positive + 0.5 * consistency  # [0,1]
+        factor = (1.0 - w) + w * robustness                   # in [1-w, 1]
+        return score * factor
 
     def _compute_score(self, results: dict) -> float:
         wr = float(results.get("win_rate", 0) or 0)

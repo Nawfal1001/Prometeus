@@ -342,6 +342,11 @@ def reload_from_sources():
     MAX_CONCURRENT_PAPER_TRADES = get_int("MAX_CONCURRENT_PAPER_TRADES", 6)
     OPTUNA_DIRECTION = "maximize"
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
+    # Robustness penalty folded into the objective: reward configs that profit
+    # CONSISTENTLY across time-buckets, not those that got lucky in one slice.
+    # Drives final PBO down / Deflated Sharpe up (better out-of-sample). 0 = off.
+    global OPTUNA_ROBUSTNESS_WEIGHT
+    OPTUNA_ROBUSTNESS_WEIGHT = get_float("OPTUNA_ROBUSTNESS_WEIGHT", 0.35)
     RAW_PROFIT_MODE = get_bool("RAW_PROFIT_MODE", "true")
     ADAPTIVE_RISK_MODE = get_bool("ADAPTIVE_RISK_MODE", "true")
     global LIVE_CAPITAL_AUTOSYNC, LIVE_CAPITAL_AUTOSYNC_SEC
