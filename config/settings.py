@@ -59,6 +59,27 @@ def save_user_settings(data: dict):
     reload_from_sources()
 
 
+def remove_user_settings(keys) -> dict:
+    """Delete specific keys from the saved dashboard overrides so they fall back
+    to code defaults / optimized_params.json. Used to undo an applied optimizer
+    config without touching API keys, exchange, mode, etc. Returns the keys
+    actually removed."""
+    existing = load_user_settings()
+    removed = [k for k in keys if k in existing]
+    if not removed:
+        return {"removed": [], "remaining": existing}
+    for k in removed:
+        existing.pop(k, None)
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2)
+    tmp.replace(SETTINGS_FILE)
+    reload_from_sources()
+    return {"removed": removed, "remaining": existing}
+
+
+
 def get(key, default=None):
     env_value = _env(key, None)
     if env_value not in (None, ""):

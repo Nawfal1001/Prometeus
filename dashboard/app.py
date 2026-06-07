@@ -19,7 +19,7 @@ from loguru import logger
 
 import config.settings as cfg
 from config.settings import save_user_settings, load_user_settings
-from optimization.optimizer import PrometheusOptimizer
+from optimization.optimizer import PrometheusOptimizer, _OPT_KEYS as _OPTIMIZER_KEYS
 from optimization.walkforward_optimizer import WalkForwardOptimizer
 from optimization.quality_signal_optimizer import QualitySignalOptimizer
 from optimization.live_robustness_optimizer import LiveRobustnessOptimizer
@@ -694,6 +694,28 @@ def api_save_settings(payload: dict = Body(default={})):
     cfg.save_user_settings(payload or {})
     reload_runtime_settings()
     return {"ok": True, "settings": load_user_settings(), "keys": list((payload or {}).keys())}
+
+
+@app.get("/api/settings/saved")
+def api_get_saved_settings():
+    """The RAW dashboard overrides actually written to user_settings.json (what
+    'Apply Best Params' saved), separate from effective values. Lets you see if a
+    losing optimizer config is currently driving live/paper."""
+    saved = load_user_settings()
+    opt_keys_present = {k: saved[k] for k in _OPTIMIZER_KEYS if k in saved}
+    return {"saved": saved, "optimizer_keys_applied": opt_keys_present,
+            "has_applied_optimizer_config": bool(opt_keys_present)}
+
+
+@app.post("/api/settings/reset_optimized")
+def api_reset_optimized_settings():
+    """Remove ONLY the optimizer-tuned keys from user_settings.json so they fall
+    back to code defaults / optimized_params.json. Does NOT touch API keys,
+    exchange, mode, symbols, etc. Use this to undo a bad applied Optuna config."""
+    result = cfg.remove_user_settings(_OPTIMIZER_KEYS)
+    reload_runtime_settings()
+    ui_log(f"Reset optimizer-tuned settings to defaults | removed={result.get('removed')}")
+    return {"ok": True, **result, "fusion_threshold_now": getattr(cfg, "FUSION_THRESHOLD", None)}
 
 
 @app.post("/api/settings/normalize_weights")
