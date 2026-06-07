@@ -415,6 +415,62 @@ class BacktestEngine:
         return {"error": msg, "no_trades": True, "max_abs": max_abs, "avg_abs": avg_abs, "threshold": thr,
                 "block_reasons": reasons, "total_trades": 0}
 
+    def signal_edge_report(self, df, horizons=(6, 12, 24)) -> dict:
+        """Raw predictive edge of the entry signal, BEFORE costs/exits/filters.
+
+        This is the question optimization CANNOT answer: does the signal predict
+        direction better than a coin flip, and is that edge big enough to beat
+        fees? If IC ≈ 0 / hit ≈ 50% / gross edge < round-trip cost, then NO
+        parameter combination can make the system profitable — the problem is the
+        signal (alpha), not the knobs.
+
+        - ic            : correlation of entry_score with the forward return
+        - hit_rate      : how often sign(entry_score) matches the forward move
+        - gross_edge_pct: avg per-trade return taking the signal's direction (pre-cost)
+        - net_edge_pct  : gross minus round-trip cost (this is what you actually keep)
+        """
+        try:
+            d = df.reset_index(drop=True)
+            n = len(d)
+            if n < 60 or "close" not in d.columns:
+                return {"note": "not enough bars for edge report"}
+            close = d["close"].values.astype(float)
+            scores = np.array([self._entry_score(d.iloc[i]) for i in range(n)], dtype=float)
+            cost = 2.0 * (TAKER_FEE + SLIPPAGE)   # round-trip fees + slippage
+            out = {"round_trip_cost_pct": round(cost * 100, 4), "bars": int(n)}
+            ics = []
+            for H in horizons:
+                if n <= H + 5:
+                    continue
+                fwd = np.full(n, np.nan)
+                fwd[:n - H] = close[H:] / close[:n - H] - 1.0
+                mask = np.isfinite(fwd) & np.isfinite(scores) & (np.abs(scores) > 1e-6)
+                s, f = scores[mask], fwd[mask]
+                if len(s) < 30 or s.std() == 0 or f.std() == 0:
+                    continue
+                ic = float(np.corrcoef(s, f)[0, 1])
+                hit = float((np.sign(s) == np.sign(f)).mean())
+                gross = float(np.mean(np.sign(s) * f))
+                ics.append(ic)
+                out[f"H{H}"] = {
+                    "ic": round(ic, 4),
+                    "hit_rate": round(hit, 4),
+                    "gross_edge_pct": round(gross * 100, 4),
+                    "net_edge_pct": round((gross - cost) * 100, 4),
+                    "pays_for_costs": bool(gross > cost),
+                }
+            avg_ic = float(np.mean(ics)) if ics else 0.0
+            out["avg_ic"] = round(avg_ic, 4)
+            out["verdict"] = (
+                "no_predictive_edge" if abs(avg_ic) < 0.03 else
+                "weak_edge" if abs(avg_ic) < 0.06 else
+                "has_edge"
+            )
+            return out
+        except Exception as e:
+            logger.debug(f"[Backtest] signal_edge_report failed: {e}")
+            return {"note": f"edge report failed: {e}"}
+
     def _metrics(self, trades, symbol=None):
         if not trades:
             return {"error": "No trades"}

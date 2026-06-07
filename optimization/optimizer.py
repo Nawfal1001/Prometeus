@@ -184,8 +184,10 @@ class PrometheusOptimizer:
         ov = result.get("overfitting", {})
         pbo = (ov.get("pbo") or {}).get("pbo")
         dsr = (ov.get("deflated_sharpe") or {}).get("deflated_sharpe")
+        edge = (ov.get("signal_edge") or {})
         logger.info(f"[Optimizer] Done | mode={self._mode} best={self.best_value:.4f} in {len(self.study.trials)} trials "
-                    f"| PBO={pbo} DeflatedSharpe={dsr} verdict={ov.get('verdict')}")
+                    f"| PBO={pbo} DeflatedSharpe={dsr} verdict={ov.get('verdict')} "
+                    f"| signal_edge: avg_ic={edge.get('avg_ic')} edge_verdict={edge.get('verdict')}")
         return result
 
     def apply_best(self):
@@ -591,10 +593,20 @@ class PrometheusOptimizer:
                 skew=float(bm.get("ret_skew", 0.0) or 0.0),
                 kurtosis=float(bm.get("ret_kurtosis", 3.0) or 3.0),
             )
+            # Raw predictive edge of the signal itself (pre-cost, config-independent).
+            # If this says no_predictive_edge, NO amount of optimization helps.
+            signal_edge = {}
+            try:
+                if self._prepared_df is not None and len(self._prepared_df) >= 60:
+                    signal_edge = self._create_backtest_engine().signal_edge_report(self._prepared_df)
+            except Exception as e:
+                logger.debug(f"[Optimizer] signal edge report skipped: {e}")
+
             return {
                 "pbo": pbo,
                 "deflated_sharpe": dsr,
                 "best_regime_breakdown": bm.get("regime_breakdown", {}),
+                "signal_edge": signal_edge,
                 "verdict": self._overfitting_verdict(pbo.get("pbo"), dsr.get("deflated_sharpe")),
             }
         except Exception as e:

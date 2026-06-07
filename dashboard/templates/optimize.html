@@ -48,11 +48,19 @@ function renderOverfitting(ov){const card=document.getElementById('overfitting-c
   `<div class="stat-card"><div class="stat-label">Benchmark SR (max of N)</div><div class="stat-value">${safeNum(d.benchmark_sharpe,3)}</div></div>`+
   `<div class="stat-card"><div class="stat-label">Observed SR</div><div class="stat-value">${safeNum(d.observed_sharpe,3)}</div></div>`+
   `<div class="stat-card"><div class="stat-label">Configs tried</div><div class="stat-value">${d.n_trials??(ov.pbo&&ov.pbo.n_configs)??'—'}</div></div>`);
+ // Raw signal edge (pre-cost) — the most important number: can the signal beat costs AT ALL?
+ let seHtml='';const se=ov.signal_edge||{};const seH=Object.keys(se).filter(k=>k.startsWith('H'));
+ if(seH.length){const ev=se.verdict;const evcolor=ev==='has_edge'?GREEN:ev==='no_predictive_edge'?RED:AMBER;
+  const evlabel={has_edge:'✅ Signal has predictive edge',weak_edge:'⚠️ Weak edge',no_predictive_edge:'⛔ NO predictive edge — optimization cannot help'}[ev]||ev;
+  const seRows=seH.map(h=>{const m=se[h]||{};const pc=m.pays_for_costs?GREEN:RED;return `<tr><td>${h.replace('H','')} bars</td><td>${safeNum(m.ic,4)}</td><td>${safePct(m.hit_rate)}</td><td>${safeNum(m.gross_edge_pct,4)}%</td><td style="color:${pc}">${safeNum(m.net_edge_pct,4)}%</td><td style="color:${pc}">${m.pays_for_costs?'yes':'no'}</td></tr>`}).join('');
+  seHtml=`<div style="margin-top:18px;font-size:13px;margin-bottom:6px"><b style="color:${evcolor}">Raw signal edge (before costs/exits): ${evlabel}</b> &nbsp; avg IC ${safeNum(se.avg_ic,4)} · round-trip cost ${safeNum(se.round_trip_cost_pct,3)}%</div><table class="trade-table"><thead><tr><th>Horizon</th><th>IC</th><th>Hit rate</th><th>Gross edge</th><th>Net (after cost)</th><th>Pays for costs?</th></tr></thead><tbody>${seRows}</tbody></table>`;
+ }
  const rb=ov.best_regime_breakdown||{};const summary=rb._summary||{};const regs=Object.keys(rb).filter(k=>k!=='_summary');
+ let rbHtml='';
  if(regs.length){const rows=regs.map(reg=>{const m=rb[reg]||{};return `<tr><td>${reg}</td><td>${m.trades??'—'}</td><td>${safePct(m.win_rate)}</td><td>${safeNum(m.expectancy,4)}</td><td>${safeNum(m.profit_factor,2)}</td><td>${safeNum(m.total_pnl,2)}</td></tr>`}).join('');
   const robust=summary.edge_is_regime_robust?`<span style="color:${GREEN}">robust across regimes</span>`:`<span style="color:${RED}">NOT regime-robust — a bet on one regime continuing</span>`;
-  set('overfit-regime',`<div style="font-size:13px;margin-bottom:6px">Best config per-regime — ${robust}</div><table class="trade-table"><thead><tr><th>Regime</th><th>Trades</th><th>WR</th><th>Expectancy</th><th>PF</th><th>Total PnL</th></tr></thead><tbody>${rows}</tbody></table>`);
- }else{set('overfit-regime','')}
+  rbHtml=`<div style="font-size:13px;margin-bottom:6px">Best config per-regime — ${robust}</div><table class="trade-table"><thead><tr><th>Regime</th><th>Trades</th><th>WR</th><th>Expectancy</th><th>PF</th><th>Total PnL</th></tr></thead><tbody>${rows}</tbody></table>`;}
+ set('overfit-regime',seHtml+rbHtml)
  const note=[];note.push('PBO = probability the chosen config is no better than the median config out-of-sample (lower is better; >50% ⇒ overfit). Deflated Sharpe corrects the Sharpe for the number of configs tried (>90% ⇒ likely real edge).');
  if(ov.pbo&&ov.pbo.n_combinations)note.push(`CSCV combinations: ${ov.pbo.n_combinations}, splits: ${ov.pbo.n_splits}.`);
  if(ov.pbo&&ov.pbo.note&&Number.isNaN(Number(ov.pbo.pbo)))note.push(ov.pbo.note);
