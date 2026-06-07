@@ -310,7 +310,7 @@ async def _run_training_job(params: dict):
         df = await _fetch_training_frame(symbols, timeframe, candles)
         if df.empty:
             raise RuntimeError("No training data fetched")
-        result = await asyncio.to_thread(train_xgb_model, df)
+        result = await asyncio.to_thread(train_xgb_model, df, timeframe)
         del df
         gc.collect()
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "result": result})

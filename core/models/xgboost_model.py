@@ -42,6 +42,8 @@ class XGBoostSignalModel:
         self.le = LabelEncoder().fit(_CLASSES)
         self._version = None
         self._metrics = {}
+        self._trained_tf = None
+        self._tf_warned = False
 
     def _neutral_prediction(self) -> dict:
         return {"direction": 0, "confidence": 0.0, "probabilities": {}}
@@ -200,8 +202,9 @@ class XGBoostSignalModel:
     # ------------------------------------------------------------------
     #  Train
     # ------------------------------------------------------------------
-    def train(self, df: pd.DataFrame) -> dict:
-        logger.info("[XGBoost] Training 3-class fee-adjusted model (long/neutral/short)...")
+    def train(self, df: pd.DataFrame, timeframe: str = None) -> dict:
+        tf = str(timeframe or getattr(cfg, "TIMEFRAME", "30m"))
+        logger.info(f"[XGBoost] Training 3-class fee-adjusted model (long/neutral/short) on {tf} candles...")
         df = self._prepare_training_data(df)
         if df.empty or "label" not in df.columns:
             raise ValueError("No labeled training data available after feature computation.")
@@ -279,9 +282,10 @@ class XGBoostSignalModel:
 
         self.model = final_model
         self._version = MODEL_VERSION
+        self._trained_tf = tf
         self._metrics = {"holdout_edge": edge, "label_counts": counts, "tuned": tuned,
                          "n_samples": n, "best_params": params, "embargo": embargo,
-                         "mode": "3class_feeadj_purged"}
+                         "timeframe": tf, "mode": "3class_feeadj_purged"}
         self.save()
         logger.info(f"[XGBoost] Trained v6 | holdout IC={edge['ic']} net={edge.get('net_edge_pct')}% "
                     f"| n={n} tuned={tuned}")
@@ -295,6 +299,16 @@ class XGBoostSignalModel:
             self.load()
         if self.model is None or df is None or df.empty:
             return self._neutral_prediction()
+        # Timeframe consistency: a model trained on 15m candles must NOT be served
+        # on 30m data (features have a different bar spacing -> distribution shift).
+        live_tf = str(getattr(cfg, "TIMEFRAME", "30m"))
+        if self._trained_tf and self._trained_tf != live_tf:
+            if not self._tf_warned:
+                logger.warning(f"[XGBoost] Model trained on {self._trained_tf} candles but live "
+                               f"timeframe is {live_tf} — retrain on {live_tf}. ML score neutralised.")
+                self._tf_warned = True
+            if bool(getattr(cfg, "XGB_ENFORCE_TIMEFRAME", True)):
+                return self._neutral_prediction()
         df_feat = compute_features(df) if "ema_stack" not in df.columns else df
         if df_feat is None or df_feat.empty:
             return self._neutral_prediction()
@@ -335,7 +349,8 @@ class XGBoostSignalModel:
     # ------------------------------------------------------------------
     def save(self):
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION, "metrics": self._metrics}, MODEL_PATH)
+        joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION,
+                     "metrics": self._metrics, "timeframe": self._trained_tf}, MODEL_PATH)
         logger.info(f"[XGBoost] Model saved ({MODEL_VERSION}) at {MODEL_PATH}")
 
     def load(self):
@@ -352,12 +367,15 @@ class XGBoostSignalModel:
             self.model = data["model"]
             self.le = data.get("le", self.le)
             self._metrics = data.get("metrics", {})
-            logger.info(f"[XGBoost] Model loaded (version={self._version}) edge={self._metrics.get('holdout_edge')}")
+            self._trained_tf = data.get("timeframe") or self._metrics.get("timeframe")
+            self._tf_warned = False
+            logger.info(f"[XGBoost] Model loaded (version={self._version}, tf={self._trained_tf}) "
+                        f"edge={self._metrics.get('holdout_edge')}")
         except Exception as e:
             logger.warning(f"[XGBoost] Load failed: {e}")
             self.model = None
 
 
-def train_xgb_model(df):
+def train_xgb_model(df, timeframe: str = None):
     model = XGBoostSignalModel()
-    return model.train(df)
+    return model.train(df, timeframe=timeframe)
