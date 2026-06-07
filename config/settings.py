@@ -245,6 +245,7 @@ def reload_from_sources():
     global HTF_REQUIRES_LTF_CONFIRMATION, PROXY_LAYER_WEIGHT_FACTOR, SYMBOL_COOLDOWN_BARS
     global XGB_USE_OPTUNA_TUNING, XGB_TUNING_TRIALS, XGB_TUNING_TIMEOUT_SEC
     global XGB_USE_SCALE_POS_WEIGHT, XGB_EARLY_STOPPING_ROUNDS
+    global XGB_LABEL_HORIZONS, XGB_LABEL_BAND_COST_MULT, XGB_MIN_IC, XGB_TEST_FRACTION, XGB_TUNE_REQUIRES_EDGE, XGB_ENTRY_MIN_SCORE
     HTF_REQUIRES_LTF_CONFIRMATION = get_bool("HTF_REQUIRES_LTF_CONFIRMATION", "true")
     PROXY_LAYER_WEIGHT_FACTOR = get_float("PROXY_LAYER_WEIGHT_FACTOR", 0.75)
     SYMBOL_COOLDOWN_BARS = get_float("SYMBOL_COOLDOWN_BARS", 1.0)
@@ -253,6 +254,13 @@ def reload_from_sources():
     XGB_TUNING_TIMEOUT_SEC = get_int("XGB_TUNING_TIMEOUT_SEC", 180)
     XGB_USE_SCALE_POS_WEIGHT = get_bool("XGB_USE_SCALE_POS_WEIGHT", "true")
     XGB_EARLY_STOPPING_ROUNDS = get_int("XGB_EARLY_STOPPING_ROUNDS", 30)
+    # --- 3-class, fee-adjusted, purged-validated model (v6) ---
+    XGB_LABEL_HORIZONS = get("XGB_LABEL_HORIZONS", "6,12,24")      # multi-horizon fwd return
+    XGB_LABEL_BAND_COST_MULT = get_float("XGB_LABEL_BAND_COST_MULT", 1.0)  # neutral band = cost*mult
+    XGB_TEST_FRACTION = get_float("XGB_TEST_FRACTION", 0.2)        # purged holdout size
+    XGB_MIN_IC = get_float("XGB_MIN_IC", 0.02)                     # min IC to bother tuning/trusting
+    XGB_TUNE_REQUIRES_EDGE = get_bool("XGB_TUNE_REQUIRES_EDGE", "true")  # skip Optuna if no edge
+    XGB_ENTRY_MIN_SCORE = get_float("XGB_ENTRY_MIN_SCORE", 0.15)   # |P(long)-P(short)| gate for entry
 
     MARKET_OPEN_UTC = get("MARKET_OPEN_UTC", "13:30")
     MARKET_CLOSE_UTC = get("MARKET_CLOSE_UTC", "20:00")

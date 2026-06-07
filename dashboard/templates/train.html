@@ -36,7 +36,7 @@
     <div class="card-header">📦 Current Model Status</div>
     <div class="stats-grid" style="padding:16px">
       <div class="stat-card"><div class="stat-label">Model Present</div><div class="stat-value" id="m-present">—</div><div class="stat-sub" id="m-version">version —</div></div>
-      <div class="stat-card"><div class="stat-label">Last F1</div><div class="stat-value" id="m-f1">—</div><div class="stat-sub" id="m-samples">— samples</div></div>
+      <div class="stat-card"><div class="stat-label">Holdout IC (predictive edge)</div><div class="stat-value" id="m-f1">—</div><div class="stat-sub" id="m-samples">— samples</div></div>
       <div class="stat-card"><div class="stat-label">Training</div><div class="stat-value" id="m-running">Idle</div><div class="stat-sub" id="m-finished">—</div></div>
       <div class="stat-card"><div class="stat-label">Rows Loaded</div><div class="stat-value" id="m-rows">—</div><div class="stat-sub" id="m-symbols-n">— symbols</div></div>
     </div>
@@ -115,14 +115,26 @@ async function refreshStatus(){
     set('m-finished', status.finished_at ? ('finished ' + String(status.finished_at).slice(11,19)) : '—');
     document.getElementById('t-run-btn').disabled = running;
 
-    const res = (last && last.f1 !== undefined) ? last : (status.result || {});
-    const present = res && res.f1 !== undefined;
+    const res = (last && (last.holdout_edge || last.f1 !== undefined)) ? last : (status.result || {});
+    const edge = res.holdout_edge || {};
+    const hasIC = edge && edge.ic !== undefined;
+    const present = !!(res && (hasIC || res.f1 !== undefined || res.n_samples));
     const pEl = document.getElementById('m-present');
     pEl.textContent = present ? '✅ Yes' : '❌ Not trained';
     pEl.className = 'stat-value ' + (present ? 'green' : 'red');
     set('m-version', res.mode ? res.mode : 'version —');
-    set('m-f1', present ? Number(res.f1).toFixed(3) : '—');
-    set('m-samples', (res.n_samples ?? '—') + ' samples');
+    // v6 model: show holdout IC (predictive edge) + net edge; fall back to old F1.
+    if (hasIC){
+      const net = edge.net_edge_pct;
+      const col = (Number(edge.ic) >= 0.03 && net > 0) ? 'green' : (Number(edge.ic) < 0.02 ? 'red' : 'yellow');
+      const el = document.getElementById('m-f1');
+      el.textContent = Number(edge.ic).toFixed(3);
+      el.className = 'stat-value ' + col;
+      set('m-samples', `IC · net ${net ?? '—'}% · hit ${edge.hit_rate!==undefined?(edge.hit_rate*100).toFixed(0)+'%':'—'} · ${res.n_samples ?? '—'} samples`);
+    } else {
+      set('m-f1', (present && res.f1 !== undefined) ? Number(res.f1).toFixed(3) : '—');
+      set('m-samples', (res.n_samples ?? '—') + ' samples');
+    }
     set('m-rows', res.rows_loaded ?? '—');
     set('m-symbols-n', (res.symbols ? res.symbols.length : '—') + ' symbols');
 

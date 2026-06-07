@@ -210,31 +210,68 @@ def get_feature_columns() -> list[str]:
 
 
 def label_data(df, min_rr: float = 1.5):
+    """Fee-adjusted, multi-horizon, 3-class labels with ATR-scaled sample weights.
+
+    Replaces the old binary triple-barrier (which dropped all neutral bars and so
+    forced the model to pick a side every candle). Now:
+
+      • Target = mean forward return over several horizons (default 6/12/24),
+        fee-adjusted: a bar is only LONG if that return clears round-trip cost,
+        SHORT if it clears cost to the downside, else NEUTRAL (kept, not dropped).
+      • Neutral class teaches the model when NOT to trade.
+      • sample_weight scales with the ATR-adjusted size of the future move, so big
+        decisive moves matter more than noise around zero.
+
+    Returns the df with columns: label ∈ {-1,0,1}, fwd_ret, move_atr, sample_weight
+    (only rows that have a full forward window are kept).
+    """
     df = df.copy()
-    if "atr" not in df.columns:
-        df["atr"] = df["close"] * float(getattr(cfg, "MIN_ATR_NORM", 0.003))
-    atr = df["atr"].fillna(df["close"] * 0.003)
-    sl_mult = float(getattr(cfg, "ATR_SL_MULT", 1.2))
-    tp_mult = float(getattr(cfg, "ATR_TP2_MULT", 2.4))
-    lookahead = int(getattr(cfg, "XGB_LABEL_LOOKAHEAD", 10))
-    labels = []
-    for i in range(len(df)):
-        if i >= len(df) - lookahead:
-            labels.append(0)
-            continue
-        entry = float(df["close"].iloc[i])
-        atr_v = float(atr.iloc[i])
-        hi = df["high"].iloc[i + 1:i + 1 + lookahead]
-        lo = df["low"].iloc[i + 1:i + 1 + lookahead]
-        long_tp = entry + atr_v * tp_mult
-        long_sl = entry - atr_v * sl_mult
-        short_tp = entry - atr_v * tp_mult
-        short_sl = entry + atr_v * sl_mult
-        if bool((hi >= long_tp).any()) and not bool((lo <= long_sl).any()):
-            labels.append(1)
-        elif bool((lo <= short_tp).any()) and not bool((hi >= short_sl).any()):
-            labels.append(-1)
-        else:
-            labels.append(0)
-    df["label"] = labels[:len(df)]
-    return df[df["label"] != 0].copy()
+    n = len(df)
+    if n == 0:
+        df["label"] = []
+        return df
+
+    # ATR as a fraction of price (for scaling the move + sample weight)
+    if "atr_norm" in df.columns:
+        atr_norm = pd.to_numeric(df["atr_norm"], errors="coerce")
+    elif "atr" in df.columns:
+        atr_norm = pd.to_numeric(df["atr"], errors="coerce") / df["close"].replace(0, np.nan)
+    else:
+        atr_norm = pd.Series(float(getattr(cfg, "MIN_ATR_NORM", 0.003)), index=df.index)
+    atr_norm = atr_norm.fillna(float(getattr(cfg, "MIN_ATR_NORM", 0.003))).clip(lower=1e-6).values
+
+    horizons = getattr(cfg, "XGB_LABEL_HORIZONS", [6, 12, 24])
+    if isinstance(horizons, str):
+        horizons = [int(h) for h in horizons.replace(";", ",").split(",") if h.strip()]
+    horizons = [int(h) for h in horizons if int(h) > 0] or [12]
+
+    taker = float(getattr(cfg, "PAPER_TAKER_FEE", getattr(cfg, "FUSION_TAKER_FEE", 0.0005)) or 0.0005)
+    slip = float(getattr(cfg, "PAPER_SLIPPAGE", 0.0003) or 0.0003)
+    cost = 2.0 * (taker + slip)                      # round-trip cost as return fraction
+    band_mult = float(getattr(cfg, "XGB_LABEL_BAND_COST_MULT", 1.0))
+    band = cost * band_mult                           # min move to be worth trading
+
+    close = df["close"].values.astype(float)
+    stack = []
+    for H in horizons:
+        r = np.full(n, np.nan)
+        if n > H:
+            r[:n - H] = close[H:] / close[:n - H] - 1.0
+        stack.append(r)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # last rows are all-NaN (dropped below)
+        fwd = np.nanmean(np.vstack(stack), axis=0)     # mean forward return across horizons
+    valid = np.isfinite(fwd)
+
+    label = np.where(fwd > band, 1, np.where(fwd < -band, -1, 0)).astype(int)
+    move_atr = np.abs(fwd) / atr_norm                  # size of the future move in ATRs
+    # decisive moves weigh more; capped so a few outliers don't dominate
+    sample_weight = np.clip(0.25 + move_atr, 0.25, 5.0)
+
+    df["label"] = label
+    df["fwd_ret"] = fwd
+    df["move_atr"] = move_atr
+    df["sample_weight"] = sample_weight
+    return df[valid].copy()
+
