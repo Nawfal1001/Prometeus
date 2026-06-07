@@ -31,6 +31,7 @@ _OPT_KEYS = [
     "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
     "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
     "REGIME_BLOCK_THRESHOLD", "HTF_BLOCK_THRESHOLD", "ROTATOR_MIN_SCORE",
+    "REGIME_GATE_BYPASS_SCORE",
     "BREAKEVEN_BUFFER_PCT", "EXIT_SIGNAL_FLIP_MIN_SCORE", "EXIT_REGIME_FLIP_MIN_SCORE",
     "PROFIT_RATCHET_ATR_MULT", "EARLY_KILL_BARS", "EARLY_KILL_SL_PCT",
     "MAX_CONCURRENT_PAPER_TRADES",
@@ -48,6 +49,7 @@ SEED_PARAMS = [
          BREAKEVEN_BUFFER_PCT=0.0002, MAX_RISK_PER_TRADE=0.05, MAX_TRADES_PER_DAY=40,
          EMA_FAST=20, EMA_MID=50, EMA_SLOW=150, RSI_PERIOD=9,
          ROTATOR_MIN_SCORE=0.28, REGIME_BLOCK_THRESHOLD=0.25, HTF_BLOCK_THRESHOLD=0.20,
+         REGIME_GATE_BYPASS_SCORE=0.45,
          WEIGHT_REGIME=0.18, WEIGHT_SENTIMENT=0.12, WEIGHT_WHALE=0.10,
          WEIGHT_LIQUIDATION=0.25, WEIGHT_ENTRY=0.35),
     # Seed A — current production defaults (updated to match improved settings)
@@ -375,6 +377,10 @@ class PrometheusOptimizer:
             params["REGIME_BLOCK_THRESHOLD"] = trial.suggest_float("REGIME_BLOCK_THRESHOLD", 0.08, 0.42, step=0.02)
             params["HTF_BLOCK_THRESHOLD"] = trial.suggest_float("HTF_BLOCK_THRESHOLD", 0.10, 0.40, step=0.02)
             params["ROTATOR_MIN_SCORE"] = trial.suggest_float("ROTATOR_MIN_SCORE", 0.00, 0.45, step=0.02)
+            # Chop gate cut-off: only trade in RANGE/chop when abs fusion score
+            # clears this. Low end (~0.20) ≈ gate effectively off; high end (~0.70)
+            # ≈ strict (only the strongest signals trade outside a trend regime).
+            params["REGIME_GATE_BYPASS_SCORE"] = trial.suggest_float("REGIME_GATE_BYPASS_SCORE", 0.20, 0.70, step=0.05)
 
         if "risk" in groups:
             params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.02, 0.06, step=0.005)
