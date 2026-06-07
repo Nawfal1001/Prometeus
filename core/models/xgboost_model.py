@@ -276,18 +276,33 @@ class XGBoostSignalModel:
             w = w * time_decay_weights(n)
 
         # ---- purged train / holdout split (step 5) ----
+        # MUST split by TIMESTAMP, not row: with multi-symbol data rows are
+        # interleaved per timestamp, so a row-based embargo is far smaller in TIME
+        # than the label's forward horizon -> labels leak across the boundary and
+        # the holdout IC is massively inflated. Splitting on unique timestamps with
+        # the embargo measured in bars makes it symbol-count-independent and honest.
         horizons = getattr(cfg, "XGB_LABEL_HORIZONS", "6,12,24")
         max_h = max([int(h) for h in str(horizons).replace(";", ",").split(",") if h.strip()] or [24])
-        embargo = embargo_size(int(getattr(cfg, "EMA_SLOW", 150)), max_h)
+        embargo = embargo_size(int(getattr(cfg, "EMA_SLOW", 150)), max_h)  # in BARS/timestamps
         test_frac = float(getattr(cfg, "XGB_TEST_FRACTION", 0.2))
-        test_n = max(30, int(n * test_frac))
-        test_lo = n - test_n
-        train_hi = max(10, test_lo - embargo)          # purge `embargo` bars between train and test
-        X_tr, y_tr, w_tr = X[:train_hi], y[:train_hi], w[:train_hi]
-        X_te, y_te = X[test_lo:], y[test_lo:]
-        fwd_te = fwd[test_lo:]
-        if len(np.unique(y_tr)) < 2:
-            raise ValueError("Training split has <2 classes after purge — need more data.")
+
+        idx_vals = df.index.values
+        unique_times = np.unique(idx_vals)                 # sorted unique timestamps
+        n_times = len(unique_times)
+        test_time_n = max(10, int(n_times * test_frac))
+        emb = embargo if (n_times - test_time_n - embargo) >= 20 else max(max_h, (n_times - test_time_n - 20))
+        emb = max(0, emb)
+        test_start = unique_times[n_times - test_time_n]
+        train_end = unique_times[max(0, n_times - test_time_n - emb)]
+        test_mask = idx_vals >= test_start
+        train_mask = idx_vals < train_end
+        X_tr, y_tr, w_tr = X[train_mask], y[train_mask], w[train_mask]
+        X_te, y_te = X[test_mask], y[test_mask]
+        fwd_te = fwd[test_mask]
+        logger.info(f"[XGBoost] Purged split | {n_times} timestamps | train rows={int(train_mask.sum())} "
+                    f"test rows={int(test_mask.sum())} | embargo={emb} bars (multi-symbol safe)")
+        if len(np.unique(y_tr)) < 2 or len(y_te) < 30:
+            raise ValueError("Train/test split too small after timestamp purge — need more candles.")
 
         params = dict(self.DEFAULT_XGB_PARAMS)
         base = self._build_model(params)
