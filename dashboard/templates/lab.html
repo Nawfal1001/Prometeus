@@ -49,6 +49,7 @@
             <button class="btn btn-primary" onclick="runSingle()">▶ Single Backtest</button>
             <button class="btn btn-primary" onclick="runCompete()">⚔ Compete Symbols</button>
             <button class="btn btn-primary" onclick="runOptuna()">🧬 Run Optuna</button>
+            <button class="btn btn-warning" onclick="runSignalEdge()" title="Measure the entry signal's raw predictive edge (pre-cost). Tells you if there's any alpha to optimize.">📡 Check Signal Edge</button>
             <button class="btn btn-secondary" onclick="saveExperimentSettings()">💾 Save Toggles</button>
             <button class="btn btn-secondary" onclick="clearLab()">🧹 Clear</button>
           </div>
@@ -107,6 +108,20 @@ async function runCompete(){
 }
 async function runOptuna(){
   try{ await saveExperimentSettings(); const payload={symbol:symbols()[0]||'BTC/USDT',timeframe:$('timeframe').value,limit:Number($('limit').value),trials:Number($('trials').value),metric:$('metric').value,raw_profit_mode:bool('rawProfit'),adaptive_risk_mode:bool('adaptiveRisk')}; const data=await post('/api/lab/optuna',payload); log('Optuna complete. Best score: '+(data.best_value??'—')); addResult('optuna','optuna',data.best_result||data); }catch(e){ log('Optuna failed: '+(e.message || JSON.stringify(e))); }
+}
+async function runSignalEdge(){
+  try{
+    const payload={symbols:symbols(),timeframe:$('timeframe').value,limit:Number($('limit').value)};
+    log('Measuring raw signal edge (pre-cost)...');
+    const d=await post('/api/lab/signal_edge',payload);
+    log(`=== RAW SIGNAL EDGE === verdict: ${d.portfolio_verdict} | portfolio avg IC: ${d.portfolio_avg_ic}`);
+    Object.entries(d.per_symbol||{}).forEach(([sym,r])=>{
+      const hs=Object.keys(r).filter(k=>k.startsWith('H'));
+      const parts=hs.map(h=>`${h}: IC ${r[h].ic}, hit ${(r[h].hit_rate*100).toFixed(1)}%, net ${r[h].net_edge_pct}% (${r[h].pays_for_costs?'PAYS':'loses'})`);
+      log(`  ${sym} [${r.verdict}] cost ${r.round_trip_cost_pct}% | ${parts.join(' · ')}`);
+    });
+    log(d.portfolio_verdict==='no_predictive_edge'?'⛔ No predictive edge — parameter optimization cannot make this profitable; the signal itself needs work.':d.portfolio_verdict==='has_edge'?'✅ Signal has edge — optimization is worthwhile.':'⚠️ Weak edge — borderline; costs likely eat most of it.');
+  }catch(e){ log('Signal edge check failed: '+(e.message || JSON.stringify(e))); }
 }
 function clearLab(){ $('logs').textContent='Cleared.\n'; document.querySelector('#results tbody').innerHTML=''; }
 </script>

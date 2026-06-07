@@ -123,6 +123,46 @@ async def lab_compete(request: Request):
         logger.exception("Lab compete failed")
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@router.post("/api/lab/signal_edge")
+async def lab_signal_edge(request: Request):
+    """Raw predictive edge of the entry signal (pre-cost) — answers 'is there any
+    alpha to optimize?' without running a full study. Per symbol + average."""
+    try:
+        body = await request.json()
+        symbols = _clean_symbols(body.get("symbols") or body.get("symbol") or ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"])
+        timeframe = body.get("timeframe", getattr(cfg, "TIMEFRAME", "30m"))
+        limit = int(body.get("limit", 5000))
+        data = await fetch_many_ohlcv(symbols, timeframe, limit)
+        if not data:
+            return JSONResponse({"error": "No data returned"}, status_code=400)
+        from backtest.engine import BacktestEngine
+        from core.models.feature_engine import compute_features
+        eng = BacktestEngine()
+        per_symbol, ics = {}, []
+        for sym, raw in data.items():
+            try:
+                feat = compute_features(raw.copy())
+                if feat is None or feat.empty or len(feat) < 60:
+                    continue
+                rep = eng.signal_edge_report(feat)
+                per_symbol[sym] = rep
+                if isinstance(rep.get("avg_ic"), (int, float)):
+                    ics.append(float(rep["avg_ic"]))
+            except Exception as e:
+                logger.warning(f"[Lab] signal_edge failed for {sym}: {e}")
+        if not per_symbol:
+            return JSONResponse({"error": "Could not compute edge (insufficient data)"}, status_code=400)
+        avg_ic = sum(ics) / len(ics) if ics else 0.0
+        verdict = ("no_predictive_edge" if abs(avg_ic) < 0.03
+                   else "weak_edge" if abs(avg_ic) < 0.06 else "has_edge")
+        return {"timeframe": timeframe, "limit": limit, "symbols": list(per_symbol.keys()),
+                "portfolio_avg_ic": round(avg_ic, 4), "portfolio_verdict": verdict,
+                "per_symbol": per_symbol}
+    except Exception as e:
+        logger.exception("Lab signal_edge failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/api/lab/optuna")
 async def lab_optuna(request: Request):
     try:
