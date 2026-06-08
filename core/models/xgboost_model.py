@@ -165,13 +165,24 @@ class XGBoostSignalModel:
             return np.zeros(proba.shape[0])
         return proba[:, _LONG_COL] - proba[:, _SHORT_COL]
 
-    def _edge(self, model, X_te: np.ndarray, fwd_te: np.ndarray) -> dict:
+    def _edge(self, model, X_te: np.ndarray, fwd_te: np.ndarray,
+              times_te: np.ndarray = None, stride: int = 1) -> dict:
         """IC / hit-rate / net-edge of the model's score vs the realised forward
-        return on the PURGED holdout. This is the honest 'does it predict?' check."""
+        return on the PURGED holdout.
+
+        When ``times_te`` + ``stride`` are given, the IC is computed on
+        NON-OVERLAPPING samples (one row per ``stride`` unique timestamps). This
+        removes the autocorrelation inflation from 95%-overlapping labels — the
+        honest 'does each independent decision predict?' number."""
         try:
             proba = model.predict_proba(X_te)
             score = self._score_from_proba(proba)
-            m = np.isfinite(score) & np.isfinite(fwd_te) & (np.abs(score) > 1e-9)
+            sel = np.ones(len(score), dtype=bool)
+            if times_te is not None and stride > 1:
+                ut = np.unique(times_te)
+                keep = set(ut[::stride].tolist())          # every stride-th timestamp
+                sel = np.array([t in keep for t in times_te])
+            m = sel & np.isfinite(score) & np.isfinite(fwd_te) & (np.abs(score) > 1e-9)
             if m.sum() < 30 or score[m].std() == 0 or fwd_te[m].std() == 0:
                 return {"ic": 0.0, "hit_rate": 0.0, "net_edge_pct": 0.0, "n": int(m.sum())}
             s, f = score[m], fwd_te[m]
@@ -207,11 +218,12 @@ class XGBoostSignalModel:
                   eval_set=[(X_tr[cut:], y_tr[cut:])], verbose=False)
         return m
 
-    def _purged_cv_edge(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> dict:
+    def _purged_cv_edge(self, params: dict, X, y, w, fwd, times, embargo: int,
+                        n_folds: int = 4, stride: int = 1) -> dict:
         """Averaged edge across TIMESTAMP-based purged walk-forward folds (different
-        regimes). This is the HONEST headline number — a single contiguous holdout
-        in one trending regime + overlapping labels can inflate IC; averaging over
-        several disjoint test windows can't be faked that way. Each fold fits with
+        regimes), with the per-fold IC computed on NON-OVERLAPPING samples
+        (stride = label horizon). This is the HONEST headline: multi-regime AND
+        free of overlapping-label autocorrelation inflation. Each fold fits with
         its own early-stopping slice carved from the fold's train (holdout never
         seen)."""
         unique = np.unique(times)
@@ -231,7 +243,7 @@ class XGBoostSignalModel:
             if tr.sum() < 50 or te.sum() < 20 or len(np.unique(y[tr])) < 2:
                 continue
             model = self._fit_for_holdout(params, X[tr], y[tr], w[tr], embargo)  # clean fit
-            e = self._edge(model, X[te], fwd[te])
+            e = self._edge(model, X[te], fwd[te], times_te=times[te], stride=stride)
             ics.append(e["ic"]); hits.append(e.get("hit_rate", 0.0))
             nets.append(e.get("net_edge_pct", 0.0)); ns += e.get("n", 0)
         if not ics:
@@ -241,12 +253,12 @@ class XGBoostSignalModel:
                 "fold_ics": [round(x, 4) for x in ics], "n": int(ns),
                 "pays_for_costs": bool(np.mean(nets) > 0)}
 
-    def _purged_cv_ic(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> float:
+    def _purged_cv_ic(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4, stride: int = 1) -> float:
         """Mean fold IC (scalar) — the objective used for hyperparameter tuning."""
-        return self._purged_cv_edge(params, X, y, w, fwd, times, embargo, n_folds)["ic"]
+        return self._purged_cv_edge(params, X, y, w, fwd, times, embargo, n_folds, stride)["ic"]
 
 
-    def _tune_hyperparams(self, X, y, w, fwd, times, embargo, n_trials, timeout) -> dict:
+    def _tune_hyperparams(self, X, y, w, fwd, times, embargo, n_trials, timeout, stride: int = 1) -> dict:
         try:
             import optuna
         except ImportError:
@@ -266,7 +278,7 @@ class XGBoostSignalModel:
                 "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
                 "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 3.0),
             }
-            return self._purged_cv_ic(params, X, y, w, fwd, times, embargo)
+            return self._purged_cv_ic(params, X, y, w, fwd, times, embargo, stride=stride)
 
         study = optuna.create_study(direction="maximize",
                                     sampler=optuna.samplers.TPESampler(seed=42, n_startup_trials=8, multivariate=True))
@@ -380,18 +392,27 @@ class XGBoostSignalModel:
         feat_ic.sort(key=lambda t: abs(t[1]), reverse=True)
         top_feat = [(c, round(v, 3)) for c, v in feat_ic[:8]]
 
-        # ---- HEADLINE = mean edge across MULTIPLE purged folds (regime-robust) ----
-        # A single contiguous holdout in one trending regime + overlapping labels can
-        # inflate IC; the multi-fold mean is the honest number we report and gate on.
-        edge = self._purged_cv_edge(params, X, y, w, fwd, idx_vals, emb)
+        # ---- HEADLINE = mean edge across MULTIPLE purged folds, NON-OVERLAPPING ----
+        # multi-regime AND decimated (stride = label horizon) to kill the
+        # overlapping-label autocorrelation that inflates IC even on clean splits.
+        edge = self._purged_cv_edge(params, X, y, w, fwd, idx_vals, emb, stride=max_h)
         edge["single_window_ic"] = single.get("ic", 0.0)
         edge["max_feature_ic"] = top_feat[0][1] if top_feat else 0.0
         edge["top_features"] = top_feat
-        logger.info(f"[XGBoost] HONEST edge (mean of {edge.get('n_folds')} purged folds) | "
+
+        # ---- SHUFFLE CONTROL: permute (label, weight, fwd) vs features. A clean
+        # pipeline can't predict shuffled targets -> IC ~ 0. If it's > ~0.05, there
+        # is a mechanical leak. This is the definitive leak detector. ----
+        rng = np.random.default_rng(123)
+        perm = rng.permutation(len(y))
+        shuf = self._purged_cv_edge(params, X, y[perm], w[perm], fwd[perm], idx_vals, emb, stride=max_h)
+        edge["shuffled_ic"] = shuf.get("ic", 0.0)
+
+        logger.info(f"[XGBoost] HONEST edge (mean of {edge.get('n_folds')} purged, non-overlapping folds) | "
                     f"IC={edge['ic']} hit={edge.get('hit_rate')} net={edge.get('net_edge_pct')}% "
                     f"pays_costs={edge.get('pays_for_costs')} | fold_ics={edge.get('fold_ics')}")
-        logger.warning(f"[XGBoost] LEAK CHECK — single-window IC={single.get('ic')} vs multi-fold IC={edge['ic']} "
-                       f"(single >> multi ⇒ one-regime artifact) | top per-feature IC={top_feat}")
+        logger.warning(f"[XGBoost] LEAK CHECK — honest IC={edge['ic']} | single-window IC={single.get('ic')} "
+                       f"| SHUFFLED-label IC={edge['shuffled_ic']} (must be ~0) | top per-feature IC={top_feat}")
 
         min_ic = float(getattr(cfg, "XGB_MIN_IC", 0.02))
         requires_edge = bool(getattr(cfg, "XGB_TUNE_REQUIRES_EDGE", True))
@@ -406,11 +427,12 @@ class XGBoostSignalModel:
             n_trials = int(getattr(cfg, "XGB_TUNING_TRIALS", 30))
             timeout = int(getattr(cfg, "XGB_TUNING_TIMEOUT_SEC", 180))
             logger.info(f"[XGBoost] Tuning for timestamp-purged CV IC: {n_trials} trials / {timeout}s")
-            params = self._tune_hyperparams(X, y, w, fwd, idx_vals, emb, n_trials, timeout)
+            params = self._tune_hyperparams(X, y, w, fwd, idx_vals, emb, n_trials, timeout, stride=max_h)
             tuned = True
             base = self._fit_for_holdout(params, X_tr, y_tr, w_tr, emb)   # holdout never seen
-            edge = self._purged_cv_edge(params, X, y, w, fwd, idx_vals, emb)
+            edge = self._purged_cv_edge(params, X, y, w, fwd, idx_vals, emb, stride=max_h)
             edge["single_window_ic"] = self._edge(base, X_te, fwd_te).get("ic", 0.0)
+            edge["shuffled_ic"] = edge.get("shuffled_ic", 0.0)
             edge["top_features"] = top_feat
             logger.info(f"[XGBoost] Post-tune HONEST edge (multi-fold) | IC={edge['ic']} net={edge.get('net_edge_pct')}%")
 

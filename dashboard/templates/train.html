@@ -139,7 +139,10 @@ async function refreshStatus(){
       const el = document.getElementById('m-f1');
       el.textContent = Number(edge.ic).toFixed(3);
       el.className = 'stat-value ' + col;
-      set('m-samples', `IC · net ${net ?? '—'}% · hit ${edge.hit_rate!==undefined?(edge.hit_rate*100).toFixed(0)+'%':'—'} · ${res.n_samples ?? '—'} samples`);
+      const shuf = edge.shuffled_ic, single = edge.single_window_ic;
+      const leak = (shuf!==undefined&&Math.abs(Number(shuf))>0.05) ? ` · ⚠️SHUFFLED IC ${Number(shuf).toFixed(3)} (LEAK!)` : (shuf!==undefined?` · shuffled ${Number(shuf).toFixed(3)} ✓`:'');
+      const sng = single!==undefined? ` · single-window ${Number(single).toFixed(3)}`:'';
+      set('m-samples', `honest IC (multi-fold, non-overlap) · net ${net ?? '—'}% · hit ${edge.hit_rate!==undefined?(edge.hit_rate*100).toFixed(0)+'%':'—'}${sng}${leak} · ${res.n_samples ?? '—'} samples`);
     } else {
       set('m-f1', (present && res.f1 !== undefined) ? Number(res.f1).toFixed(3) : '—');
       set('m-samples', (res.n_samples ?? '—') + ' samples');
