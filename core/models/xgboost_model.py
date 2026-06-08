@@ -189,27 +189,43 @@ class XGBoostSignalModel:
             logger.warning(f"[XGBoost] edge check failed: {e}")
             return {"ic": 0.0, "hit_rate": 0.0, "net_edge_pct": 0.0, "n": 0}
 
-    def _purged_cv_ic(self, params: dict, X, y, w, fwd, train_bars: int, test_bars: int, embargo: int) -> float:
-        """Mean holdout IC across PURGED walk-forward folds (objective for tuning).
-        We tune for predictive edge (IC), not classification F1."""
+    def _purged_cv_ic(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> float:
+        """Mean holdout IC across TIMESTAMP-based purged walk-forward folds.
+
+        Same leak fix as the holdout: folds are cut on unique timestamps with an
+        embargo (in bars) between train and test, so multi-symbol interleaving
+        can't shrink the real time-gap below the label horizon. Tunes for
+        predictive edge (IC), not F1.
+        """
+        unique = np.unique(times)
+        nt = len(unique)
+        if nt < (n_folds + 2) * 20:
+            n_folds = max(2, nt // 60)
+        fold = max(1, nt // (n_folds + 1))
         ics = []
-        for (tr_lo, tr_hi), (te_lo, te_hi) in purged_walkforward_windows(len(X), train_bars, test_bars, embargo):
-            if tr_hi - tr_lo < 50 or te_hi - te_lo < 20:
+        for k in range(1, n_folds + 1):
+            tr_end_i = fold * k
+            te_start_i = tr_end_i + embargo
+            te_end_i = min(te_start_i + fold, nt)
+            if te_start_i >= nt or (te_end_i - te_start_i) < 10:
                 continue
-            ytr = y[tr_lo:tr_hi]
-            if len(np.unique(ytr)) < 2:
+            train_end_t = unique[tr_end_i]
+            test_start_t = unique[te_start_i]
+            test_end_t = unique[te_end_i - 1]
+            tr = times < train_end_t
+            te = (times >= test_start_t) & (times <= test_end_t)
+            if tr.sum() < 50 or te.sum() < 20 or len(np.unique(y[tr])) < 2:
                 continue
             model = self._build_model(params)
             try:
-                model.fit(X[tr_lo:tr_hi], ytr, sample_weight=w[tr_lo:tr_hi],
-                          eval_set=[(X[te_lo:te_hi], y[te_lo:te_hi])], verbose=False)
+                model.fit(X[tr], y[tr], sample_weight=w[tr],
+                          eval_set=[(X[te], y[te])], verbose=False)
             except Exception:
                 continue
-            e = self._edge(model, X[te_lo:te_hi], fwd[te_lo:te_hi])
-            ics.append(e["ic"])
+            ics.append(self._edge(model, X[te], fwd[te])["ic"])
         return float(np.mean(ics)) if ics else 0.0
 
-    def _tune_hyperparams(self, X, y, w, fwd, train_bars, test_bars, embargo, n_trials, timeout) -> dict:
+    def _tune_hyperparams(self, X, y, w, fwd, times, embargo, n_trials, timeout) -> dict:
         try:
             import optuna
         except ImportError:
@@ -229,7 +245,7 @@ class XGBoostSignalModel:
                 "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
                 "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 3.0),
             }
-            return self._purged_cv_ic(params, X, y, w, fwd, train_bars, test_bars, embargo)
+            return self._purged_cv_ic(params, X, y, w, fwd, times, embargo)
 
         study = optuna.create_study(direction="maximize",
                                     sampler=optuna.samplers.TPESampler(seed=42, n_startup_trials=8, multivariate=True))
@@ -323,12 +339,10 @@ class XGBoostSignalModel:
             logger.warning(f"[XGBoost] Skipping Optuna: holdout IC {edge['ic']} < XGB_MIN_IC {min_ic} "
                            f"— no edge to tune. Fix the signal/features, not the hyperparams.")
         elif use_tuning:
-            train_bars = max(200, int(train_hi * 0.6))
-            test_bars = max(80, int(train_hi * 0.2))
             n_trials = int(getattr(cfg, "XGB_TUNING_TRIALS", 30))
             timeout = int(getattr(cfg, "XGB_TUNING_TIMEOUT_SEC", 180))
-            logger.info(f"[XGBoost] Tuning for purged-CV IC: {n_trials} trials / {timeout}s")
-            params = self._tune_hyperparams(X, y, w, fwd, train_bars, test_bars, embargo, n_trials, timeout)
+            logger.info(f"[XGBoost] Tuning for timestamp-purged CV IC: {n_trials} trials / {timeout}s")
+            params = self._tune_hyperparams(X, y, w, fwd, idx_vals, emb, n_trials, timeout)
             tuned = True
             base = self._build_model(params)
             base.fit(X_tr, y_tr, sample_weight=w_tr, eval_set=[(X_te, y_te)], verbose=False)
