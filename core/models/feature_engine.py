@@ -131,7 +131,9 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
         df["macd_x_rsi"] = (macd_s * rsi_n).fillna(0)
 
     df = df.replace([np.inf, -np.inf], np.nan)
-    return df.ffill().bfill().fillna(0)
+    # ffill is causal (uses past); bfill would pull FUTURE values into earlier NaN
+    # rows (leakage), so leading NaNs are zero-filled instead.
+    return df.ffill().fillna(0)
 
 
 def _safe_vwap(df: pd.DataFrame, typical: pd.Series) -> pd.Series:

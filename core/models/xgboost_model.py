@@ -189,6 +189,24 @@ class XGBoostSignalModel:
             logger.warning(f"[XGBoost] edge check failed: {e}")
             return {"ic": 0.0, "hit_rate": 0.0, "net_edge_pct": 0.0, "n": 0}
 
+    def _fit_for_holdout(self, params, X_tr, y_tr, w_tr, emb: int):
+        """Fit with an early-stopping validation slice carved from the END of the
+        TRAIN region — so the reported holdout (X_te) is NEVER seen during fitting.
+        Using the holdout as the eval_set lets the model pick its tree count to fit
+        the exact data we report on (a leak that inflates IC)."""
+        m = self._build_model(params)
+        n_tr = len(X_tr)
+        v = max(20, int(n_tr * 0.15))
+        fit_hi = max(10, n_tr - v - max(int(emb), 1))   # purge ~emb rows between fit and val
+        if fit_hi > 50 and v >= 20 and len(np.unique(y_tr[:fit_hi])) >= 2:
+            m.fit(X_tr[:fit_hi], y_tr[:fit_hi], sample_weight=w_tr[:fit_hi],
+                  eval_set=[(X_tr[n_tr - v:], y_tr[n_tr - v:])], verbose=False)
+        else:
+            cut = max(10, int(n_tr * 0.85))
+            m.fit(X_tr[:cut], y_tr[:cut], sample_weight=w_tr[:cut],
+                  eval_set=[(X_tr[cut:], y_tr[cut:])], verbose=False)
+        return m
+
     def _purged_cv_ic(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> float:
         """Mean holdout IC across TIMESTAMP-based purged walk-forward folds.
 
@@ -321,8 +339,7 @@ class XGBoostSignalModel:
             raise ValueError("Train/test split too small after timestamp purge — need more candles.")
 
         params = dict(self.DEFAULT_XGB_PARAMS)
-        base = self._build_model(params)
-        base.fit(X_tr, y_tr, sample_weight=w_tr, eval_set=[(X_te, y_te)], verbose=False)
+        base = self._fit_for_holdout(params, X_tr, y_tr, w_tr, emb)   # holdout never seen
 
         # ---- IC / hit / net edge BEFORE tuning (step 6) ----
         edge = self._edge(base, X_te, fwd_te)
@@ -344,8 +361,7 @@ class XGBoostSignalModel:
             logger.info(f"[XGBoost] Tuning for timestamp-purged CV IC: {n_trials} trials / {timeout}s")
             params = self._tune_hyperparams(X, y, w, fwd, idx_vals, emb, n_trials, timeout)
             tuned = True
-            base = self._build_model(params)
-            base.fit(X_tr, y_tr, sample_weight=w_tr, eval_set=[(X_te, y_te)], verbose=False)
+            base = self._fit_for_holdout(params, X_tr, y_tr, w_tr, emb)   # holdout never seen
             edge = self._edge(base, X_te, fwd_te)
             logger.info(f"[XGBoost] Post-tune holdout edge | IC={edge['ic']} net={edge.get('net_edge_pct')}%")
 
