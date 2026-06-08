@@ -346,6 +346,29 @@ class XGBoostSignalModel:
         logger.info(f"[XGBoost] Purged holdout edge | IC={edge['ic']} hit={edge.get('hit_rate')} "
                     f"net={edge.get('net_edge_pct')}% pays_costs={edge.get('pays_for_costs')} (n={edge['n']})")
 
+        # ---- LEAK HUNT 1: per-feature IC vs the future on the holdout ----
+        # If any single feature correlates with the forward return as strongly as
+        # the model does, THAT feature leaks the future (named, so we can drop it).
+        feat_ic = []
+        for j, col in enumerate(available_cols):
+            xj = X_te[:, j]
+            mk = np.isfinite(xj) & np.isfinite(fwd_te) & (np.abs(xj) > 1e-12)
+            if mk.sum() > 30 and xj[mk].std() > 0 and fwd_te[mk].std() > 0:
+                feat_ic.append((col, float(np.corrcoef(xj[mk], fwd_te[mk])[0, 1])))
+        feat_ic.sort(key=lambda t: abs(t[1]), reverse=True)
+        top_feat = [(c, round(v, 3)) for c, v in feat_ic[:8]]
+        logger.warning(f"[XGBoost] LEAK CHECK — top per-feature holdout IC: {top_feat}")
+
+        # ---- LEAK HUNT 2: mean IC across MULTIPLE purged folds (different regimes) ----
+        # A real leak shows high IC in every fold; a one-regime artifact does not.
+        cv_ic = self._purged_cv_ic(params, X, y, w, fwd, idx_vals, emb)
+        logger.warning(f"[XGBoost] LEAK CHECK — mean multi-fold purged IC={cv_ic:.4f} "
+                       f"vs single-holdout IC={edge['ic']} "
+                       f"(if single >> mean, the holdout is one unrepresentative regime)")
+        edge["cv_mean_ic"] = round(float(cv_ic), 4)
+        edge["max_feature_ic"] = top_feat[0][1] if top_feat else 0.0
+        edge["top_features"] = top_feat
+
         min_ic = float(getattr(cfg, "XGB_MIN_IC", 0.02))
         requires_edge = bool(getattr(cfg, "XGB_TUNE_REQUIRES_EDGE", True))
         use_tuning = bool(getattr(cfg, "XGB_USE_OPTUNA_TUNING", False))
