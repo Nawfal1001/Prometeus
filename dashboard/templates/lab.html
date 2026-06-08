@@ -124,6 +124,15 @@ async function runSignalEdge(){
       const hs=Object.keys(r).filter(k=>k.startsWith('H'));
       const parts=hs.map(h=>`${h}: IC ${r[h].ic}, hit ${(r[h].hit_rate*100).toFixed(1)}%, net ${r[h].net_edge_pct}% (${r[h].pays_for_costs?'PAYS':'loses'})`);
       log(`  ${sym} [${r.verdict}] cost ${r.round_trip_cost_pct}% | ${parts.join(' · ')}`);
+      // per-symbol top predictive features (signs differ by coin — this is the per-symbol view)
+      const comps=(r.components&&r.components.components)||[];
+      if(comps.length){
+        const top=comps.slice(0,5).map(c=>`${c.feature} ${c.ic>=0?'+':''}${c.ic}`).join(', ');
+        log(`      top features: ${top}`);
+        // best horizon for this symbol (highest net edge)
+        let best=null; hs.forEach(h=>{ if(best===null||r[h].net_edge_pct>r[best].net_edge_pct) best=h; });
+        if(best) log(`      best horizon: ${best} (net ${r[best].net_edge_pct}%${r[best].pays_for_costs?', PAYS':''})`);
+      }
     });
     log(d.portfolio_verdict==='no_predictive_edge'?'⛔ No predictive edge — parameter optimization cannot make this profitable; the signal itself needs work.':d.portfolio_verdict==='has_edge'?'✅ Signal has edge — optimization is worthwhile.':'⚠️ Weak edge — borderline; costs likely eat most of it.');
   }catch(e){ log('Signal edge check failed: '+(e.message || JSON.stringify(e))); }
