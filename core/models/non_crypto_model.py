@@ -24,9 +24,11 @@ class NonCryptoXGBoostModel(XGBoostSignalModel):
 
     def __init__(self):
         super().__init__()
-        # Override the path so load/save use a different file
-        from core.models.xgboost_model import MODEL_PATH as _CRYPTO_PATH
-        self._model_path = NON_CRYPTO_MODEL_PATH
+        # Override the path so load/save use a different file. A bot subprocess
+        # sets XGB_MODEL_FILE to give each bot its own model; otherwise fall back
+        # to the shared non-crypto model file.
+        import os
+        self._model_path = Path(os.getenv("XGB_MODEL_FILE") or NON_CRYPTO_MODEL_PATH)
 
     # Patch load / save to use the non-crypto path
     def load(self):

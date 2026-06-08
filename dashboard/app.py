@@ -31,6 +31,7 @@ from dashboard.api_lab import router as lab_router
 from dashboard.api_fusion_watchlist import router as fusion_watchlist_router
 from dashboard.api_fx import router as fx_router
 from dashboard.api_fs_lab import router as fs_lab_router
+from dashboard.api_bots import router as bots_router
 from core.cache.market_cache import get_cached_ohlcv
 
 BASE_DIR = Path(__file__).parent
@@ -66,6 +67,7 @@ app.include_router(lab_router)
 app.include_router(fusion_watchlist_router)
 app.include_router(fx_router)
 app.include_router(fs_lab_router)
+app.include_router(bots_router)
 
 executor = ThreadPoolExecutor(max_workers=2)
 _start_time = _time.time()
@@ -608,6 +610,11 @@ async def scan_page(request: Request):
 @app.get("/fx", response_class=HTMLResponse)
 async def fx_page(request: Request):
     return templates.TemplateResponse("fx.html", {"request": request})
+
+
+@app.get("/bots", response_class=HTMLResponse)
+async def bots_page(request: Request):
+    return templates.TemplateResponse("bots.html", {"request": request})
 
 
 @app.get("/fusion-watchlist", response_class=HTMLResponse)

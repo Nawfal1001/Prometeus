@@ -51,11 +51,14 @@ class FXPrometheusEngine(PrometheusEngine):
         self.fusion = FusionEngine(weights_override=NON_CRYPTO_WEIGHTS)
 
         # 3. Swap order manager → separate trades file, own capital pool.
+        #    A bot subprocess sets PROMETHEUS_TRADES_FILE to isolate its trades;
+        #    standalone FX engine falls back to the shared FX trades file.
+        import os
         from core.execution.order_manager import OrderManager
         self.orders = OrderManager(
             exchange=self.exchange,
             paper=cfg.TRADING_MODE == "paper",
-            trades_file=_FX_TRADES_FILE,
+            trades_file=os.getenv("PROMETHEUS_TRADES_FILE") or _FX_TRADES_FILE,
         )
         self.orders.fusion = self.fusion
         self.orders.memory = self.selector.memory
