@@ -4,6 +4,7 @@
 
 import numpy as np
 from loguru import logger
+import config.settings as cfg
 
 
 class EntrySignal:
@@ -88,7 +89,7 @@ class EntrySignal:
             self._load_xgb()
             if self._xgb is not None and self._xgb.model is not None:
                 ml = self._xgb.get_entry_score(row.to_frame().T.reset_index(drop=True))
-                add(ml, 1.0)
+                add(ml, float(getattr(cfg, "XGB_ENTRY_WEIGHT", 1.0)))
         except Exception as e:
             logger.warning(f"[Entry] XGBoost scoring skipped: {e}")
 

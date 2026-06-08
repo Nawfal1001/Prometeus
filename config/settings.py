@@ -261,6 +261,8 @@ def reload_from_sources():
     XGB_MIN_IC = get_float("XGB_MIN_IC", 0.02)                     # min IC to bother tuning/trusting
     XGB_TUNE_REQUIRES_EDGE = get_bool("XGB_TUNE_REQUIRES_EDGE", "true")  # skip Optuna if no edge
     XGB_ENTRY_MIN_SCORE = get_float("XGB_ENTRY_MIN_SCORE", 0.15)   # |P(long)-P(short)| gate for entry
+    global XGB_ENTRY_WEIGHT
+    XGB_ENTRY_WEIGHT = get_float("XGB_ENTRY_WEIGHT", 1.0)          # ML weight WITHIN the entry blend (Optuna-tunable)
     XGB_ENFORCE_TIMEFRAME = get_bool("XGB_ENFORCE_TIMEFRAME", "true")  # neutralise model if live TF != trained TF
     # --- Cross-sectional relative-strength alpha (v7, opt-in) ---
     global XGB_CROSS_SECTIONAL, XGB_XS_BAND_COST_MULT, XGB_TIME_DECAY

@@ -167,7 +167,7 @@ class BacktestEngine:
         add(row.get("funding_signal", 0), 0.45)
         try:
             if self._xgb is not None and self._xgb.model is not None:
-                add(self._xgb.get_entry_score(row.to_frame().T.reset_index(drop=True)), 1.0)
+                add(self._xgb.get_entry_score(row.to_frame().T.reset_index(drop=True)), float(getattr(cfg, "XGB_ENTRY_WEIGHT", 1.0)))
         except Exception:
             pass
         if W <= 0:

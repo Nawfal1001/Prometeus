@@ -31,7 +31,7 @@ _OPT_KEYS = [
     "WEIGHT_REGIME", "WEIGHT_SENTIMENT", "WEIGHT_WHALE",
     "WEIGHT_LIQUIDATION", "WEIGHT_ENTRY",
     "REGIME_BLOCK_THRESHOLD", "HTF_BLOCK_THRESHOLD", "ROTATOR_MIN_SCORE",
-    "REGIME_GATE_BYPASS_SCORE",
+    "REGIME_GATE_BYPASS_SCORE", "XGB_ENTRY_WEIGHT",
     "BREAKEVEN_BUFFER_PCT", "EXIT_SIGNAL_FLIP_MIN_SCORE", "EXIT_REGIME_FLIP_MIN_SCORE",
     "PROFIT_RATCHET_ATR_MULT", "EARLY_KILL_BARS", "EARLY_KILL_SL_PCT",
     "MAX_CONCURRENT_PAPER_TRADES",
@@ -351,6 +351,10 @@ class PrometheusOptimizer:
             total2 = w1 + w2 + w3 + w4 + w5
             w1, w2, w3, w4, w5 = [round(w / total2, 4) for w in [w1, w2, w3, w4, w5]]
             params.update({"WEIGHT_REGIME": w1, "WEIGHT_SENTIMENT": w2, "WEIGHT_WHALE": w3, "WEIGHT_LIQUIDATION": w4, "WEIGHT_ENTRY": w5})
+            # ML's weight WITHIN the entry blend: lets Optuna dial the (good) model
+            # up relative to the ~12 near-zero-IC TA components. 0 = ML off, 8 = ML
+            # dominates entry. Only meaningful when a trained model is loaded.
+            params["XGB_ENTRY_WEIGHT"] = trial.suggest_float("XGB_ENTRY_WEIGHT", 0.0, 8.0, step=0.5)
 
         if "exits" in groups:
             # Fixed ranges (not dynamic) — dynamic ranges based on sl/tp1 values
