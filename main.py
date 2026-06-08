@@ -260,6 +260,7 @@ async def fx_state():
             out["ranked"] = [{
                 "symbol": r.get("symbol"),
                 "score": r.get("final_score"),
+                "score_components": r.get("score_components"),
                 "side": (r.get("signal") or {}).get("side"),
                 "trade": (r.get("signal") or {}).get("trade"),
                 "tradable": (r.get("signal") or {}).get("trade"),

@@ -157,6 +157,7 @@ def reload_from_sources():
     global OPTUNA_TIMEFRAME, OPTUNA_PRUNING, OPTUNA_DIRECTION, OPTUNA_TARGET_CAPITAL
     global RAW_PROFIT_MODE, ADAPTIVE_RISK_MODE, AUTO_SYMBOL_SELECTION
     global AUTOSCAN_INTERVAL_SEC, AUTOSCAN_TOP_N, ROTATOR_MIN_SCORE, ROTATOR_TRADE_ONLY_TOP_N, TRADE_ON_CANDLE_CLOSE
+    global ROTATOR_SCORE_WEIGHT, ROTATOR_CONFIDENCE_WEIGHT, ROTATOR_MEMORY_WEIGHT, ROTATOR_REGIME_AWARE_MEMORY
     global EARLY_EXIT_ENABLED, EARLY_EXIT_MIN_BARS, EARLY_EXIT_MAX_NEGATIVE_PNL_PCT, EARLY_EXIT_STALE_BARS, EARLY_EXIT_REPLACEMENT_ADVANTAGE, EARLY_EXIT_PROTECT_IF_NEAR_TP_PCT
     global MEMORY_ENABLED, MEMORY_WEIGHT, MEMORY_MIN_TRADES, MEMORY_FILE, MEMORY_PERSIST
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -376,6 +377,15 @@ def reload_from_sources():
     ROTATOR_MIN_SCORE = get_float("ROTATOR_MIN_SCORE", 0.28)
     ROTATOR_TRADE_ONLY_TOP_N = get_int("ROTATOR_TRADE_ONLY_TOP_N", 3)
     TRADE_ON_CANDLE_CLOSE = get_bool("TRADE_ON_CANDLE_CLOSE", "true")
+    # Rotator ranking blend: signal score + signal confidence + historical
+    # success (symbol memory of past trades). Weights are normalized, so only
+    # their ratios matter.
+    ROTATOR_SCORE_WEIGHT = get_float("ROTATOR_SCORE_WEIGHT", 0.55)
+    ROTATOR_CONFIDENCE_WEIGHT = get_float("ROTATOR_CONFIDENCE_WEIGHT", 0.15)
+    # Defaults to the (optimizer-tuned) MEMORY_WEIGHT so existing configs keep
+    # their historical-success influence; override explicitly to weight it more.
+    ROTATOR_MEMORY_WEIGHT = get_float("ROTATOR_MEMORY_WEIGHT", get_float("MEMORY_WEIGHT", 0.15))
+    ROTATOR_REGIME_AWARE_MEMORY = get_bool("ROTATOR_REGIME_AWARE_MEMORY", "true")
 
     EARLY_EXIT_ENABLED = get_bool("EARLY_EXIT_ENABLED", "true")
     EARLY_EXIT_MIN_BARS = get_int("EARLY_EXIT_MIN_BARS", 3)

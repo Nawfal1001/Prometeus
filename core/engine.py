@@ -292,7 +292,7 @@ class PrometheusEngine:
         ranked = ranked[: int(getattr(cfg, "AUTOSCAN_TOP_N", 5))]
         for r in ranked:
             sig = r.get("signal", {})
-            journal.autoscan(r.get("symbol"), score=float(r.get("final_score", r.get("score", 0.0)) or 0.0), trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=r.get("final_score"), rank=ranked.index(r) + 1)
+            journal.autoscan(r.get("symbol"), score=float(r.get("final_score", r.get("score", 0.0)) or 0.0), trade=bool(sig.get("trade")), side=sig.get("side"), reason=sig.get("reason"), final_score=r.get("final_score"), components=r.get("score_components"), rank=ranked.index(r) + 1)
         self._rotator_ranked = ranked
         self._last_autoscan = now
         if ranked:
@@ -530,6 +530,7 @@ class PrometheusEngine:
                 "symbol": r.get("symbol"),
                 "score": r.get("final_score"),
                 "raw_score": r.get("score"),
+                "score_components": r.get("score_components"),
                 "trade": sig.get("trade"),
                 "side": sig.get("side"),
                 "reason": sig.get("reason"),
