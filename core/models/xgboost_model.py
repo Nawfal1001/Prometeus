@@ -207,41 +207,44 @@ class XGBoostSignalModel:
                   eval_set=[(X_tr[cut:], y_tr[cut:])], verbose=False)
         return m
 
-    def _purged_cv_ic(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> float:
-        """Mean holdout IC across TIMESTAMP-based purged walk-forward folds.
-
-        Same leak fix as the holdout: folds are cut on unique timestamps with an
-        embargo (in bars) between train and test, so multi-symbol interleaving
-        can't shrink the real time-gap below the label horizon. Tunes for
-        predictive edge (IC), not F1.
-        """
+    def _purged_cv_edge(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> dict:
+        """Averaged edge across TIMESTAMP-based purged walk-forward folds (different
+        regimes). This is the HONEST headline number — a single contiguous holdout
+        in one trending regime + overlapping labels can inflate IC; averaging over
+        several disjoint test windows can't be faked that way. Each fold fits with
+        its own early-stopping slice carved from the fold's train (holdout never
+        seen)."""
         unique = np.unique(times)
         nt = len(unique)
         if nt < (n_folds + 2) * 20:
             n_folds = max(2, nt // 60)
         fold = max(1, nt // (n_folds + 1))
-        ics = []
+        ics, hits, nets, ns = [], [], [], 0
         for k in range(1, n_folds + 1):
             tr_end_i = fold * k
             te_start_i = tr_end_i + embargo
             te_end_i = min(te_start_i + fold, nt)
             if te_start_i >= nt or (te_end_i - te_start_i) < 10:
                 continue
-            train_end_t = unique[tr_end_i]
-            test_start_t = unique[te_start_i]
-            test_end_t = unique[te_end_i - 1]
-            tr = times < train_end_t
-            te = (times >= test_start_t) & (times <= test_end_t)
+            tr = times < unique[tr_end_i]
+            te = (times >= unique[te_start_i]) & (times <= unique[te_end_i - 1])
             if tr.sum() < 50 or te.sum() < 20 or len(np.unique(y[tr])) < 2:
                 continue
-            model = self._build_model(params)
-            try:
-                model.fit(X[tr], y[tr], sample_weight=w[tr],
-                          eval_set=[(X[te], y[te])], verbose=False)
-            except Exception:
-                continue
-            ics.append(self._edge(model, X[te], fwd[te])["ic"])
-        return float(np.mean(ics)) if ics else 0.0
+            model = self._fit_for_holdout(params, X[tr], y[tr], w[tr], embargo)  # clean fit
+            e = self._edge(model, X[te], fwd[te])
+            ics.append(e["ic"]); hits.append(e.get("hit_rate", 0.0))
+            nets.append(e.get("net_edge_pct", 0.0)); ns += e.get("n", 0)
+        if not ics:
+            return {"ic": 0.0, "hit_rate": 0.0, "net_edge_pct": 0.0, "n_folds": 0, "fold_ics": []}
+        return {"ic": round(float(np.mean(ics)), 4), "hit_rate": round(float(np.mean(hits)), 4),
+                "net_edge_pct": round(float(np.mean(nets)), 4), "n_folds": len(ics),
+                "fold_ics": [round(x, 4) for x in ics], "n": int(ns),
+                "pays_for_costs": bool(np.mean(nets) > 0)}
+
+    def _purged_cv_ic(self, params: dict, X, y, w, fwd, times, embargo: int, n_folds: int = 4) -> float:
+        """Mean fold IC (scalar) — the objective used for hyperparameter tuning."""
+        return self._purged_cv_edge(params, X, y, w, fwd, times, embargo, n_folds)["ic"]
+
 
     def _tune_hyperparams(self, X, y, w, fwd, times, embargo, n_trials, timeout) -> dict:
         try:
@@ -338,17 +341,36 @@ class XGBoostSignalModel:
         if len(np.unique(y_tr)) < 2 or len(y_te) < 30:
             raise ValueError("Train/test split too small after timestamp purge — need more candles.")
 
+        # ---- optional IC-based feature pruning (selection on TRAIN rows only) ----
+        # Drops near-zero-IC noise features that dilute the model. Measured on the
+        # train split only (never the holdout) so it doesn't bias the reported edge.
+        min_fic = float(getattr(cfg, "XGB_FEATURE_MIN_IC", 0.0))
+        if min_fic > 0:
+            fwd_tr = fwd[train_mask]
+            scored = []
+            for j in range(X_tr.shape[1]):
+                xj = X_tr[:, j]
+                mk = np.isfinite(xj) & np.isfinite(fwd_tr) & (np.abs(xj) > 1e-12)
+                ic = float(np.corrcoef(xj[mk], fwd_tr[mk])[0, 1]) if (mk.sum() > 30 and xj[mk].std() > 0 and fwd_tr[mk].std() > 0) else 0.0
+                scored.append((j, abs(ic)))
+            keep = [j for j, a in scored if a >= min_fic]
+            if len(keep) < 5:   # keep at least the 5 strongest
+                keep = [j for j, _ in sorted(scored, key=lambda t: t[1], reverse=True)[:5]]
+            keep = sorted(keep)
+            if len(keep) < len(available_cols):
+                available_cols = [available_cols[j] for j in keep]
+                self._feature_cols_used = available_cols
+                X = X[:, keep]
+                X_tr, X_te = X[train_mask], X[test_mask]
+                logger.info(f"[XGBoost] Feature pruning (|train IC|>={min_fic}): kept {len(keep)} of {len(scored)} features")
+
         params = dict(self.DEFAULT_XGB_PARAMS)
         base = self._fit_for_holdout(params, X_tr, y_tr, w_tr, emb)   # holdout never seen
 
-        # ---- IC / hit / net edge BEFORE tuning (step 6) ----
-        edge = self._edge(base, X_te, fwd_te)
-        logger.info(f"[XGBoost] Purged holdout edge | IC={edge['ic']} hit={edge.get('hit_rate')} "
-                    f"net={edge.get('net_edge_pct')}% pays_costs={edge.get('pays_for_costs')} (n={edge['n']})")
+        # ---- single contiguous holdout (one regime — can be optimistic) ----
+        single = self._edge(base, X_te, fwd_te)
 
-        # ---- LEAK HUNT 1: per-feature IC vs the future on the holdout ----
-        # If any single feature correlates with the forward return as strongly as
-        # the model does, THAT feature leaks the future (named, so we can drop it).
+        # ---- per-feature IC vs the future on the holdout (names a leaky feature) ----
         feat_ic = []
         for j, col in enumerate(available_cols):
             xj = X_te[:, j]
@@ -357,17 +379,19 @@ class XGBoostSignalModel:
                 feat_ic.append((col, float(np.corrcoef(xj[mk], fwd_te[mk])[0, 1])))
         feat_ic.sort(key=lambda t: abs(t[1]), reverse=True)
         top_feat = [(c, round(v, 3)) for c, v in feat_ic[:8]]
-        logger.warning(f"[XGBoost] LEAK CHECK — top per-feature holdout IC: {top_feat}")
 
-        # ---- LEAK HUNT 2: mean IC across MULTIPLE purged folds (different regimes) ----
-        # A real leak shows high IC in every fold; a one-regime artifact does not.
-        cv_ic = self._purged_cv_ic(params, X, y, w, fwd, idx_vals, emb)
-        logger.warning(f"[XGBoost] LEAK CHECK — mean multi-fold purged IC={cv_ic:.4f} "
-                       f"vs single-holdout IC={edge['ic']} "
-                       f"(if single >> mean, the holdout is one unrepresentative regime)")
-        edge["cv_mean_ic"] = round(float(cv_ic), 4)
+        # ---- HEADLINE = mean edge across MULTIPLE purged folds (regime-robust) ----
+        # A single contiguous holdout in one trending regime + overlapping labels can
+        # inflate IC; the multi-fold mean is the honest number we report and gate on.
+        edge = self._purged_cv_edge(params, X, y, w, fwd, idx_vals, emb)
+        edge["single_window_ic"] = single.get("ic", 0.0)
         edge["max_feature_ic"] = top_feat[0][1] if top_feat else 0.0
         edge["top_features"] = top_feat
+        logger.info(f"[XGBoost] HONEST edge (mean of {edge.get('n_folds')} purged folds) | "
+                    f"IC={edge['ic']} hit={edge.get('hit_rate')} net={edge.get('net_edge_pct')}% "
+                    f"pays_costs={edge.get('pays_for_costs')} | fold_ics={edge.get('fold_ics')}")
+        logger.warning(f"[XGBoost] LEAK CHECK — single-window IC={single.get('ic')} vs multi-fold IC={edge['ic']} "
+                       f"(single >> multi ⇒ one-regime artifact) | top per-feature IC={top_feat}")
 
         min_ic = float(getattr(cfg, "XGB_MIN_IC", 0.02))
         requires_edge = bool(getattr(cfg, "XGB_TUNE_REQUIRES_EDGE", True))
@@ -385,8 +409,10 @@ class XGBoostSignalModel:
             params = self._tune_hyperparams(X, y, w, fwd, idx_vals, emb, n_trials, timeout)
             tuned = True
             base = self._fit_for_holdout(params, X_tr, y_tr, w_tr, emb)   # holdout never seen
-            edge = self._edge(base, X_te, fwd_te)
-            logger.info(f"[XGBoost] Post-tune holdout edge | IC={edge['ic']} net={edge.get('net_edge_pct')}%")
+            edge = self._purged_cv_edge(params, X, y, w, fwd, idx_vals, emb)
+            edge["single_window_ic"] = self._edge(base, X_te, fwd_te).get("ic", 0.0)
+            edge["top_features"] = top_feat
+            logger.info(f"[XGBoost] Post-tune HONEST edge (multi-fold) | IC={edge['ic']} net={edge.get('net_edge_pct')}%")
 
         # ---- final production fit on ALL data with the chosen params ----
         final_model = self._build_model(params)

@@ -267,6 +267,8 @@ def reload_from_sources():
     XGB_CROSS_SECTIONAL = get_bool("XGB_CROSS_SECTIONAL", "false")     # predict relative strength vs basket
     XGB_XS_BAND_COST_MULT = get_float("XGB_XS_BAND_COST_MULT", 0.5)    # residual neutral band (smaller than abs)
     XGB_TIME_DECAY = get_bool("XGB_TIME_DECAY", "true")               # recent samples weigh more
+    global XGB_FEATURE_MIN_IC
+    XGB_FEATURE_MIN_IC = get_float("XGB_FEATURE_MIN_IC", 0.0)          # drop features with |train IC| below this (0=off)
 
     MARKET_OPEN_UTC = get("MARKET_OPEN_UTC", "13:30")
     MARKET_CLOSE_UTC = get("MARKET_CLOSE_UTC", "20:00")
