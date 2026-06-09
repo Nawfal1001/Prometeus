@@ -10,6 +10,7 @@
 #  purged holdout BEFORE deciding whether hyperparameter tuning is worthwhile.
 # ============================================================
 
+import os
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -42,6 +43,10 @@ class XGBoostSignalModel:
         self.feature_cols = get_feature_columns()
         self._feature_cols_used = list(self.feature_cols)   # actual cols the model was trained on
         self.le = LabelEncoder().fit(_CLASSES)
+        # Per-instance model path. Defaults to the global crypto model, but a
+        # bot subprocess sets XGB_MODEL_FILE so each bot owns its own .pkl.
+        # Subclasses (e.g. NonCryptoXGBoostModel) may override after super().
+        self._model_path = Path(os.getenv("XGB_MODEL_FILE") or MODEL_PATH)
         self._version = None
         self._metrics = {}
         self._trained_tf = None
@@ -114,13 +119,13 @@ class XGBoostSignalModel:
 
     def train_if_stale(self, df: pd.DataFrame, max_age_hours: int = 24):
         needs_train = False
-        if not MODEL_PATH.exists():
+        if not self._model_path.exists():
             logger.info("[XGBoost] No model found — training now")
             needs_train = True
         else:
             if self.model is None or self._version is None:
                 self.load()
-            age_hours = (datetime.now().timestamp() - MODEL_PATH.stat().st_mtime) / 3600
+            age_hours = (datetime.now().timestamp() - self._model_path.stat().st_mtime) / 3600
             if self.model is None or self._version != MODEL_VERSION:
                 logger.info("[XGBoost] Model missing or version mismatch — retraining")
                 needs_train = True
@@ -518,19 +523,19 @@ class XGBoostSignalModel:
 
     # ------------------------------------------------------------------
     def save(self):
-        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self._model_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION,
                      "metrics": self._metrics, "timeframe": self._trained_tf,
                      "feature_cols_used": self._feature_cols_used,
-                     "cross_sectional": self._cross_sectional}, MODEL_PATH)
-        logger.info(f"[XGBoost] Model saved ({MODEL_VERSION}) at {MODEL_PATH}")
+                     "cross_sectional": self._cross_sectional}, self._model_path)
+        logger.info(f"[XGBoost] Model saved ({MODEL_VERSION}) at {self._model_path}")
 
     def load(self):
-        if not MODEL_PATH.exists():
+        if not self._model_path.exists():
             logger.warning("[XGBoost] No saved model found. Train first.")
             return
         try:
-            data = joblib.load(MODEL_PATH)
+            data = joblib.load(self._model_path)
             self._version = data.get("version", "unknown")
             if self._version != MODEL_VERSION:
                 logger.warning(f"[XGBoost] Version mismatch: {self._version} != {MODEL_VERSION} — retrain needed")

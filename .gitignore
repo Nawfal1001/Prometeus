@@ -38,3 +38,6 @@ data/models/*.pkl
 data/models/*.tmp
 data/user_settings.json
 data/regime_memory.json
+
+# Per-bot runtime dirs (profiles may carry credentials, models, trades, logs)
+data/bots/

@@ -2,6 +2,7 @@
 #  PROMETHEUS — Paper Trading & Live Execution
 # ============================================================
 
+import os
 import time
 import json
 from pathlib import Path
@@ -30,7 +31,15 @@ class OrderManager:
         self.symbol_cooldowns = {}
         self._force_next_signal = False
         from pathlib import Path as _Path
-        self._trades_file = _Path(trades_file) if trades_file else TRADES_FILE
+        # Explicit arg wins; else a bot subprocess can isolate its trades via
+        # PROMETHEUS_TRADES_FILE; else the shared default.
+        if trades_file:
+            self._trades_file = _Path(trades_file)
+        elif os.getenv("PROMETHEUS_TRADES_FILE"):
+            self._trades_file = _Path(os.getenv("PROMETHEUS_TRADES_FILE"))
+        else:
+            self._trades_file = TRADES_FILE
+        self._trades_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_trades()
 
     def _resolve_taker_fee(self, is_live: bool) -> float:

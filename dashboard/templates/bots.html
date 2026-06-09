@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROMETHEUS — Bots</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+  .bots-layout { display:grid; grid-template-columns: 360px 1fr; gap:16px; align-items:start; }
+  @media (max-width: 1000px){ .bots-layout{ grid-template-columns:1fr; } }
+  .form-row { margin-bottom:10px; }
+  .form-row label { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+  .form-row input, .form-row select, .form-row textarea {
+    width:100%; padding:8px 10px; background:var(--bg3); border:1px solid var(--border);
+    border-radius:6px; color:var(--text); font-size:13px; box-sizing:border-box; font-family:inherit;
+  }
+  .form-row textarea { min-height:56px; resize:vertical; font-family:monospace; }
+  .hint { font-size:11px; color:var(--muted); margin-top:3px; }
+  .bot-card { margin-bottom:14px; }
+  .bot-card .card-header { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .bot-body { padding:14px 16px; }
+  .bot-meta { font-size:12px; color:var(--muted); margin-bottom:10px; display:flex; flex-wrap:wrap; gap:6px 14px; }
+  .mini-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; margin-bottom:10px; }
+  .mini { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:8px 10px; }
+  .mini .l { font-size:10px; color:var(--muted); text-transform:uppercase; }
+  .mini .v { font-size:16px; font-weight:700; }
+  .actions { display:flex; flex-wrap:wrap; gap:6px; }
+  table.trades { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+  table.trades th, table.trades td { padding:5px 8px; border-bottom:1px solid var(--border); text-align:left; }
+  table.trades th { color:var(--muted); text-transform:uppercase; font-size:10px; }
+  pre.logs { background:#0b0d10; border:1px solid var(--border); border-radius:6px; padding:10px;
+             font-size:11px; max-height:280px; overflow:auto; white-space:pre-wrap; color:#cfd6dd; }
+  .tabs { display:flex; gap:6px; margin:10px 0 6px; }
+  .tab { padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; background:var(--bg3); border:1px solid var(--border); }
+  .tab.active { background:var(--blue); color:#fff; }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  .empty { color:var(--muted); font-size:13px; padding:20px 0; text-align:center; }
+</style>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-brand">⚡ PROMETHEUS</div>
+  <div class="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/scan">Scanner</a>
+    <a href="/bots" class="active">Bots</a>
+    <a href="/fx">FX / Non-crypto</a>
+    <a href="/fusion-watchlist">Fusion Watchlist</a>
+    <a href="/backtest">Backtest</a>
+    <a href="/optimize">Optimize</a>
+    <a href="/robust-optimize">Robust</a>
+    <a href="/lab">Lab</a>
+    <a href="/train">Train ML</a>
+    <a href="/log-trade">Trade Logs</a>
+    <a href="/health-dashboard">Health</a>
+    <a href="/settings">Settings</a>
+  </div>
+</nav>
+
+<div class="container" style="padding:20px;">
+  <h2 style="margin:0 0 4px;">Trading Bots</h2>
+  <p class="hint" style="margin:0 0 18px;">
+    Each bot is an isolated engine in its own process — same logic &amp; gates, but its own symbols,
+    exchange, mode, ML model, optimization params and account. Multi-symbol autoscan rotates candidates
+    in <b>paper</b> mode.
+  </p>
+
+  <div class="bots-layout">
+    <!-- ───────── Create / Edit form ───────── -->
+    <div class="card">
+      <div class="card-header" id="form-title">＋ New Bot</div>
+      <div class="bot-body">
+        <input type="hidden" id="f-slug">
+        <div class="form-row">
+          <label>Name</label>
+          <input id="f-name" placeholder="e.g. Majors Futures">
+        </div>
+        <div class="form-row">
+          <label>Engine</label>
+          <select id="f-engine">
+            <option value="crypto">Crypto (BTC/USDT…)</option>
+            <option value="fx">FX / Stocks / Commodities</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Exchange</label>
+          <select id="f-exchange">
+            <option value="binance">Binance</option>
+            <option value="kucoin">KuCoin (data/paper only)</option>
+            <option value="alpaca">Alpaca (stocks)</option>
+            <option value="fusion">Fusion / cTrader</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Market type</label>
+          <select id="f-market">
+            <option value="futures">futures</option>
+            <option value="spot">spot</option>
+            <option value="margin">margin</option>
+            <option value="stocks">stocks</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Mode</label>
+          <select id="f-mode">
+            <option value="paper">paper</option>
+            <option value="live">live (real money)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Timeframe</label>
+          <input id="f-tf" value="30m" placeholder="30m / 1h / 4h">
+        </div>
+        <div class="form-row">
+          <label>Symbols (comma-separated)</label>
+          <input id="f-symbols" placeholder="BTC/USDT, ETH/USDT, SOL/USDT">
+        </div>
+        <div class="form-row">
+          <label><input type="checkbox" id="f-autoscan" style="width:auto;vertical-align:middle"> Autoscan / rotate symbols (multi-symbol, paper)</label>
+        </div>
+        <div class="form-row">
+          <label>Reuse saved model file (optional)</label>
+          <input id="f-model" placeholder="leave blank → trains its own model.pkl">
+          <div class="hint">Absolute path to an existing .pkl to share a model across bots.</div>
+        </div>
+        <div class="form-row">
+          <label>Credentials (JSON, optional — for separate live accounts)</label>
+          <textarea id="f-creds" placeholder='{"BINANCE_API_KEY":"...","BINANCE_SECRET":"..."}'></textarea>
+        </div>
+        <div class="form-row">
+          <label>Tuning overrides (JSON, optional)</label>
+          <textarea id="f-overrides" placeholder='{"FUSION_THRESHOLD":0.30,"MAX_RISK_PER_TRADE":0.01}'></textarea>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="saveBot()">💾 Save bot</button>
+          <button class="btn btn-secondary" onclick="resetForm()">Clear</button>
+        </div>
+        <div id="form-msg" class="hint" style="margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <!-- ───────── Bot list ───────── -->
+    <div id="bots-list"><div class="empty">Loading bots…</div></div>
+  </div>
+</div>
+
+<script>
+const detailOpen = {};   // slug -> bool
+const detailTab  = {};   // slug -> 'trades' | 'logs'
+
+function fmtNum(v, d=2){ if(v===null||v===undefined||isNaN(v)) return "—"; return Number(v).toFixed(d); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  let j = null; try { j = await r.json(); } catch(e){}
+  if(!r.ok) throw new Error((j && j.error) || ("HTTP "+r.status));
+  return j;
+}
+
+function statBadges(b){
+  const run = b.running
+    ? `<span class="badge badge-running">RUNNING</span>`
+    : `<span class="badge badge-stopped">STOPPED</span>`;
+  const mode = `<span class="badge badge-${b.mode==='live'?'live':'paper'}">${esc((b.mode||'').toUpperCase())}</span>`;
+  const mkt  = `<span class="badge badge-${esc(b.market_type||'futures')}">${esc((b.market_type||'').toUpperCase())}</span>`;
+  const train = b.training ? `<span class="badge badge-running">TRAINING</span>` : "";
+  return run+" "+mode+" "+mkt+" "+train;
+}
+
+function miniStats(s){
+  s = s || {};
+  const pick = (keys)=>{ for(const k of keys){ if(s[k]!==undefined && s[k]!==null) return s[k]; } return undefined; };
+  const cap   = pick(["capital","equity","balance","current_capital"]);
+  const trades= pick(["total_trades","trades","num_trades","closed_trades"]);
+  const wr    = pick(["win_rate","winrate","win_pct"]);
+  const pnl   = pick(["total_pnl","pnl","realized_pnl","net_pnl","total_return"]);
+  const pf    = pick(["profit_factor","pf"]);
+  const cell = (l,v,cls="")=>`<div class="mini"><div class="l">${l}</div><div class="v ${cls}">${v}</div></div>`;
+  const pnlCls = (pnl>0?"pos":(pnl<0?"neg":""));
+  return `<div class="mini-stats">
+    ${cell("Capital", cap!==undefined?fmtNum(cap):"—")}
+    ${cell("Trades", trades!==undefined?trades:"—")}
+    ${cell("Win rate", wr!==undefined?fmtNum(wr*( wr<=1?100:1),1)+"%":"—")}
+    ${cell("PnL", pnl!==undefined?fmtNum(pnl):"—", pnlCls)}
+    ${cell("Profit factor", pf!==undefined?fmtNum(pf):"—")}
+  </div>`;
+}
+
+function tradesTable(rows){
+  rows = rows || [];
+  if(!rows.length) return `<div class="empty">No trades yet.</div>`;
+  const head = `<tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Time</th></tr>`;
+  const body = rows.slice().reverse().slice(0,50).map(t=>{
+    const pnl = t.pnl ?? t.realized_pnl ?? t.profit;
+    const cls = pnl>0?"pos":(pnl<0?"neg":"");
+    return `<tr>
+      <td>${esc(t.symbol)}</td>
+      <td>${esc(t.side)}</td>
+      <td>${fmtNum(t.entry_price ?? t.entry)}</td>
+      <td>${fmtNum(t.exit_price ?? t.exit)}</td>
+      <td class="${cls}">${pnl!==undefined?fmtNum(pnl):"—"}</td>
+      <td>${esc(t.exit_time ?? t.close_time ?? t.time ?? t.timestamp ?? "")}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="trades"><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+async function renderDetail(slug){
+  const wrap = document.getElementById("detail-"+slug);
+  if(!wrap) return;
+  const tab = detailTab[slug] || "trades";
+  try{
+    if(tab === "logs"){
+      const txt = await (await fetch(`/api/bots/${slug}/logs?lines=200`)).text();
+      wrap.querySelector(".detail-content").innerHTML = `<pre class="logs">${esc(txt||"(no logs yet)")}</pre>`;
+    } else {
+      const d = await api(`/api/bots/${slug}`);
+      const open = (d.open_trades||[]);
+      const log  = (d.trade_log||[]);
+      wrap.querySelector(".detail-content").innerHTML =
+        `<div class="hint">Open positions (${open.length})</div>${tradesTable(open)}
+         <div class="hint" style="margin-top:12px;">Closed trades</div>${tradesTable(log)}`;
+    }
+  }catch(e){
+    wrap.querySelector(".detail-content").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+function setTab(slug, tab){ detailTab[slug]=tab; renderList(); }
+function toggleDetail(slug){ detailOpen[slug]=!detailOpen[slug]; renderList(); }
+
+async function action(slug, verb){
+  try{
+    document.getElementById("form-msg").textContent = "";
+    await api(`/api/bots/${slug}/${verb}`, {method:"POST"});
+    renderList();
+  }catch(e){ alert(verb+" failed: "+e.message); }
+}
+
+async function delBot(slug){
+  if(!confirm(`Delete bot "${slug}"? This stops it and removes its data.`)) return;
+  try{ await api(`/api/bots/${slug}`, {method:"DELETE"}); renderList(); }
+  catch(e){ alert("delete failed: "+e.message); }
+}
+
+function editBot(b){
+  document.getElementById("f-slug").value = b.slug || "";
+  document.getElementById("f-name").value = b.name || "";
+  document.getElementById("f-engine").value = b.engine || "crypto";
+  document.getElementById("f-exchange").value = b.exchange || "binance";
+  document.getElementById("f-market").value = b.market_type || "futures";
+  document.getElementById("f-mode").value = b.mode || "paper";
+  document.getElementById("f-tf").value = b.timeframe || "30m";
+  document.getElementById("f-symbols").value = (b.symbols||[]).join(", ");
+  document.getElementById("f-autoscan").checked = !!b.auto_symbol_selection;
+  document.getElementById("f-model").value = (b.model && b.model.path && b.model.path.indexOf("/model.pkl")<0) ? b.model.path : "";
+  document.getElementById("form-title").textContent = "✎ Edit: "+(b.name||b.slug);
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function resetForm(){
+  ["f-slug","f-name","f-symbols","f-model","f-creds","f-overrides"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("f-tf").value="30m";
+  document.getElementById("f-autoscan").checked=false;
+  document.getElementById("form-title").textContent="＋ New Bot";
+  document.getElementById("form-msg").textContent="";
+}
+
+async function saveBot(){
+  const msg = document.getElementById("form-msg");
+  let creds={}, overrides={};
+  try{ const c=document.getElementById("f-creds").value.trim(); if(c) creds=JSON.parse(c); }
+  catch(e){ msg.textContent="Credentials must be valid JSON."; return; }
+  try{ const o=document.getElementById("f-overrides").value.trim(); if(o) overrides=JSON.parse(o); }
+  catch(e){ msg.textContent="Tuning overrides must be valid JSON."; return; }
+
+  const payload = {
+    slug: document.getElementById("f-slug").value || undefined,
+    name: document.getElementById("f-name").value,
+    engine: document.getElementById("f-engine").value,
+    exchange: document.getElementById("f-exchange").value,
+    market_type: document.getElementById("f-market").value,
+    mode: document.getElementById("f-mode").value,
+    timeframe: document.getElementById("f-tf").value,
+    symbols: document.getElementById("f-symbols").value,
+    auto_symbol_selection: document.getElementById("f-autoscan").checked,
+    model_file: document.getElementById("f-model").value,
+    credentials: creds,
+    settings_overrides: overrides,
+  };
+  try{
+    await api("/api/bots", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    msg.textContent="Saved.";
+    resetForm();
+    renderList();
+  }catch(e){ msg.textContent="Save failed: "+e.message; }
+}
+
+function botCard(b){
+  const isOpen = !!detailOpen[b.slug];
+  const tab = detailTab[b.slug] || "trades";
+  const model = b.model||{};
+  const modelTxt = model.exists ? `model ✓ (${esc((model.mtime||"").slice(0,16))})` : "model: not trained";
+  const autoscan = b.auto_symbol_selection ? "autoscan on" : "single/fixed";
+  return `
+  <div class="card bot-card">
+    <div class="card-header">
+      <span>${esc(b.name)} <span class="hint">(${esc(b.slug)})</span></span>
+      <span>${statBadges(b)}</span>
+    </div>
+    <div class="bot-body">
+      <div class="bot-meta">
+        <span>${esc(b.engine)} · ${esc(b.exchange)} · ${esc(b.timeframe)}</span>
+        <span>${esc((b.symbols||[]).join(", "))}</span>
+        <span>${autoscan}</span>
+        <span>${modelTxt}</span>
+      </div>
+      ${miniStats(b.stats)}
+      <div class="actions">
+        ${b.running
+          ? `<button class="btn btn-danger" onclick="action('${b.slug}','stop')">■ Stop</button>`
+          : `<button class="btn btn-primary" onclick="action('${b.slug}','start')">▶ Start</button>`}
+        <button class="btn btn-warning" onclick="action('${b.slug}','train')" ${b.training?"disabled":""}>
+          ${b.training?"⏳ Training…":"🧠 Train model"}</button>
+        <button class="btn btn-secondary" onclick='editBot(${JSON.stringify(b).replace(/'/g,"&#39;")})'>✎ Edit</button>
+        <button class="btn btn-secondary" onclick="toggleDetail('${b.slug}')">${isOpen?"Hide":"Details"}</button>
+        <button class="btn btn-secondary" onclick="delBot('${b.slug}')">🗑</button>
+      </div>
+      ${isOpen ? `
+        <div id="detail-${b.slug}">
+          <div class="tabs">
+            <div class="tab ${tab==='trades'?'active':''}" onclick="setTab('${b.slug}','trades')">Performance &amp; Trades</div>
+            <div class="tab ${tab==='logs'?'active':''}" onclick="setTab('${b.slug}','logs')">Logs</div>
+          </div>
+          <div class="detail-content"><div class="empty">Loading…</div></div>
+        </div>` : ""}
+    </div>
+  </div>`;
+}
+
+let _bots = [];
+async function renderList(){
+  try{
+    const data = await api("/api/bots");
+    _bots = data.bots || [];
+  }catch(e){
+    document.getElementById("bots-list").innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    return;
+  }
+  const el = document.getElementById("bots-list");
+  if(!_bots.length){ el.innerHTML = `<div class="empty">No bots yet. Create one on the left.</div>`; return; }
+  el.innerHTML = _bots.map(botCard).join("");
+  // hydrate any open detail panes
+  _bots.forEach(b=>{ if(detailOpen[b.slug]) renderDetail(b.slug); });
+}
+
+renderList();
+setInterval(renderList, 6000);
+</script>
+</body>
+</html>
