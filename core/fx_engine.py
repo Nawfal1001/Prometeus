@@ -62,6 +62,9 @@ class FXPrometheusEngine(PrometheusEngine):
         )
         self.orders.fusion = self.fusion
         self.orders.memory = self.selector.memory
+        # Seed fusion with restored equity + adaptive risk (see engine.py).
+        self.fusion.update_live_capital(self.orders.risk.capital)
+        self.fusion.update_risk_fraction(self.orders.risk.adaptive_risk_fraction())
 
         # 4. Retag live-state broadcasts so the FX engine never overwrites the
         #    crypto dashboard on the shared WebSocket. The crypto UI ignores

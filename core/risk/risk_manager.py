@@ -177,6 +177,49 @@ class RiskManager:
             return 0.9
         return 1.0
 
+    def adaptive_risk_fraction(self) -> float:
+        """Per-trade risk fraction throttled by the *measured* edge (fractional
+        Kelly) plus a drawdown brake.
+
+        Kelly optimal fraction for payoff b and win prob p is f* = (b·p − q)/b.
+        Betting above f* lowers long-run growth and explodes drawdowns, so we
+        bet KELLY_FRACTION of it (half-Kelly default) computed from the rolling
+        last KELLY_LOOKBACK_TRADES. No measured edge → risk floor. Until enough
+        trades exist the warmup cap applies — the edge must be proven first.
+        """
+        base = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
+        if not bool(getattr(cfg, "ADAPTIVE_KELLY_ENABLED", True)):
+            return base
+        floor = float(getattr(cfg, "KELLY_RISK_FLOOR", 0.005))
+        cap = float(getattr(cfg, "KELLY_RISK_CAP", 0.05))
+        lookback = int(getattr(cfg, "KELLY_LOOKBACK_TRADES", 30))
+        min_trades = int(getattr(cfg, "KELLY_MIN_TRADES", 15))
+
+        rows = self.trade_history[-lookback:]
+        if len(rows) < min_trades:
+            risk = min(base, float(getattr(cfg, "KELLY_WARMUP_RISK", 0.02)))
+        else:
+            pnls = [float(t.get("pnl", 0) or 0) for t in rows]
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p <= 0]
+            if not wins:
+                risk = floor
+            elif not losses:
+                risk = cap
+            else:
+                p = len(wins) / len(pnls)
+                b = (sum(wins) / len(wins)) / abs(sum(losses) / len(losses))
+                f_star = (b * p - (1.0 - p)) / max(b, 1e-9)
+                if f_star <= 0:
+                    risk = floor          # no measured edge -> minimum risk
+                else:
+                    risk = f_star * float(getattr(cfg, "KELLY_FRACTION", 0.5))
+
+        dd = (self.peak_capital - self.capital) / max(self.peak_capital, 1e-9)
+        if dd >= float(getattr(cfg, "KELLY_DD_BRAKE", 0.12)):
+            risk *= float(getattr(cfg, "KELLY_DD_BRAKE_FACTOR", 0.5))
+        return round(min(max(risk, floor), cap), 6)
+
     def get_stats(self) -> dict:
         initial = self.initial_capital if self.initial_capital > 0 else 1.0
         return {
@@ -192,4 +235,5 @@ class RiskManager:
             "peak_capital": round(self.peak_capital, 2),
             "threshold_multiplier": self.threshold_multiplier(),
             "consecutive_losses": self._consec_losses,
+            "adaptive_risk_fraction": self.adaptive_risk_fraction(),
         }

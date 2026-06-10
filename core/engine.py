@@ -37,6 +37,11 @@ class PrometheusEngine:
         self.orders = OrderManager(exchange=self.exchange, paper=cfg.TRADING_MODE == "paper")
         self.orders.fusion = self.fusion
         self.orders.memory = self.selector.memory
+        # Seed fusion with restored equity + adaptive risk so position sizing
+        # compounds from the first trade after a restart (not from
+        # INITIAL_CAPITAL until the first exit happens to push an update).
+        self.fusion.update_live_capital(self.orders.risk.capital)
+        self.fusion.update_risk_fraction(self.orders.risk.adaptive_risk_fraction())
         self.telegram = TelegramBot()
         self.running = False
         self._last_candle_time = None

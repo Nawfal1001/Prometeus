@@ -210,7 +210,7 @@ class OrderManager:
         confidence_mult = float(signal.get("confidence_mult", 1.0) or 1.0)
         sizing = size_from_atr_risk(
             capital=float(self.risk.capital),
-            risk_fraction=float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05)),
+            risk_fraction=self.risk.adaptive_risk_fraction(),
             leverage=float(getattr(cfg, "LEVERAGE", 3)),
             atr_norm=atr_norm,
             sl_mult=sl_mult,
@@ -245,6 +245,25 @@ class OrderManager:
                 return {"status": "blocked", "reason": "symbol_already_open", "symbol": symbol}
             if len(existing_paper) >= max(1, max_concurrent):
                 return {"status": "blocked", "reason": "concurrent_trade_limit", "open": len(existing_paper), "max": max_concurrent}
+            # Correlated crypto majors move together: N same-direction positions
+            # are effectively one N-times-larger bet, so cap them.
+            max_same_dir = int(getattr(cfg, "MAX_SAME_DIRECTION_TRADES", 0))
+            if max_same_dir > 0:
+                same_dir = [t for t in existing_paper if t.get("side") == signal.get("side")]
+                if len(same_dir) >= max_same_dir:
+                    return {"status": "blocked", "reason": "same_direction_limit", "side": signal.get("side"), "open": len(same_dir), "max": max_same_dir}
+            # Portfolio margin: total open notional (incl. this trade) must stay
+            # within capital x aggregate leverage — per-trade sizing alone lets
+            # stacked positions exceed it.
+            max_agg_lev = float(getattr(cfg, "MAX_AGGREGATE_LEVERAGE", 0) or 0)
+            new_notional = float(signal.get("notional", signal.get("position_size", 0.0)) or 0.0)
+            if max_agg_lev > 0 and new_notional > 0:
+                open_notional = sum(float(t.get("notional_remaining", t.get("notional", 0.0)) or 0.0) for t in existing_paper)
+                budget = float(self.risk.capital) * max_agg_lev
+                if open_notional + new_notional > budget:
+                    return {"status": "blocked", "reason": "aggregate_exposure_limit",
+                            "open_notional": round(open_notional, 2), "new_notional": round(new_notional, 2),
+                            "budget": round(budget, 2)}
         if self.paper and not user_forced:
             try:
                 cooldown_until = float(self.symbol_cooldowns.get(symbol) or 0.0)
@@ -533,6 +552,8 @@ class OrderManager:
         self.risk.apply_realized_pnl(pnl)
         if self.fusion is not None:
             self.fusion.update_live_capital(self.risk.capital)
+            if hasattr(self.fusion, "update_risk_fraction"):
+                self.fusion.update_risk_fraction(self.risk.adaptive_risk_fraction())
         tag = "Live" if is_live else "Paper"
         logger.info(f"[{tag}] {event['type']} exit | {trade_id} | portion={portion:.2f} | notional=${notional:.2f} | gross={gross_pnl:+.4f} fees={fees:.4f} net={pnl:+.4f}")
 

@@ -151,9 +151,21 @@ class AdvancedExitManager:
         if bool(getattr(cfg, "EXIT_ON_SIGNAL_FLIP", True)) and signal_direction is not None and signal_score is not None:
             min_signal_flip = float(getattr(cfg, "EXIT_SIGNAL_FLIP_MIN_SCORE", 0.20))
             if signal_direction != 0 and signal_direction == -direction and abs(float(signal_score)) >= min_signal_flip:
-                events.append({"type": "SIGNAL_FLIP", "price": float(close), "portion": remaining})
-                trade["remaining_pct"] = 0.0
-                return events
+                # A counter-signal trims part of the position instead of closing
+                # it all: with a small TP1 portion banked, a full close converts
+                # developing winners into losses on one noisy opposite bar. The
+                # first flip cuts EXIT_SIGNAL_FLIP_PORTION of what's left; a
+                # second flip closes the remainder.
+                flip_portion = min(1.0, max(0.1, float(getattr(cfg, "EXIT_SIGNAL_FLIP_PORTION", 0.50))))
+                prior_trims = int(trade.get("signal_flip_trims", 0) or 0)
+                portion = remaining if (flip_portion >= 0.999 or prior_trims >= 1) else remaining * flip_portion
+                events.append({"type": "SIGNAL_FLIP", "price": float(close), "portion": portion})
+                remaining -= portion
+                trade["remaining_pct"] = remaining
+                trade["signal_flip_trims"] = prior_trims + 1
+                if remaining <= 1e-9:
+                    trade["remaining_pct"] = 0.0
+                    return events
 
         if not trade.get("tp1_hit"):
             sl_now = float(trade.get("trailing_sl", trade.get("stop_loss")))
