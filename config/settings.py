@@ -217,7 +217,9 @@ def reload_from_sources():
     INITIAL_CAPITAL = get_float("INITIAL_CAPITAL", 50)
     MAX_RISK_PER_TRADE = get_float("MAX_RISK_PER_TRADE", 0.05)
     MAX_DAILY_DRAWDOWN = get_float("MAX_DAILY_DRAWDOWN", 0.12)
-    MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 40)
+    # 40/day on 30m candles was churn: every round trip pays ~0.16% in
+    # fees+slippage, so overtrading converts a thin edge into a steady bleed.
+    MAX_TRADES_PER_DAY = get_int("MAX_TRADES_PER_DAY", 15)
     MAX_CONSEC_LOSSES = get_int("MAX_CONSEC_LOSSES", 4)
 
     FUSION_THRESHOLD = get_float("FUSION_THRESHOLD", 0.28)
@@ -358,7 +360,49 @@ def reload_from_sources():
     # at 0.28 was force-closed the instant the score wobbled to -0.20, so
     # positions rarely survived to reach TP1 (2xATR) / TP2 (4xATR).
     EXIT_SIGNAL_FLIP_MIN_SCORE = get_float("EXIT_SIGNAL_FLIP_MIN_SCORE", 0.45)
+    # A flip trims this fraction of the remaining position (second flip closes
+    # the rest). 1.0 restores the old close-everything behavior.
+    global EXIT_SIGNAL_FLIP_PORTION
+    EXIT_SIGNAL_FLIP_PORTION = get_float("EXIT_SIGNAL_FLIP_PORTION", 0.50)
     MAX_CONCURRENT_PAPER_TRADES = get_int("MAX_CONCURRENT_PAPER_TRADES", 6)
+    # Portfolio-level guards: correlated majors stacked the same way are one
+    # oversized bet, and per-trade sizing alone can exceed real margin.
+    global MAX_SAME_DIRECTION_TRADES, MAX_AGGREGATE_LEVERAGE
+    MAX_SAME_DIRECTION_TRADES = get_int("MAX_SAME_DIRECTION_TRADES", 2)
+    MAX_AGGREGATE_LEVERAGE = get_float("MAX_AGGREGATE_LEVERAGE", get_float("LEVERAGE", 3))
+    # Adaptive fractional-Kelly risk: per-trade risk follows the measured edge
+    # (rolling win rate + payoff). No proven edge -> floor risk; hot, proven
+    # streak -> up to the cap; drawdown -> brake. Maximizes compounding speed
+    # subject to survival.
+    global ADAPTIVE_KELLY_ENABLED, KELLY_FRACTION, KELLY_LOOKBACK_TRADES, KELLY_MIN_TRADES
+    global KELLY_RISK_FLOOR, KELLY_RISK_CAP, KELLY_WARMUP_RISK, KELLY_DD_BRAKE, KELLY_DD_BRAKE_FACTOR
+    ADAPTIVE_KELLY_ENABLED = get_bool("ADAPTIVE_KELLY_ENABLED", "true")
+    KELLY_FRACTION = get_float("KELLY_FRACTION", 0.5)
+    KELLY_LOOKBACK_TRADES = get_int("KELLY_LOOKBACK_TRADES", 30)
+    KELLY_MIN_TRADES = get_int("KELLY_MIN_TRADES", 15)
+    KELLY_RISK_FLOOR = get_float("KELLY_RISK_FLOOR", 0.005)
+    KELLY_RISK_CAP = get_float("KELLY_RISK_CAP", 0.05)
+    KELLY_WARMUP_RISK = get_float("KELLY_WARMUP_RISK", 0.02)
+    KELLY_DD_BRAKE = get_float("KELLY_DD_BRAKE", 0.12)
+    KELLY_DD_BRAKE_FACTOR = get_float("KELLY_DD_BRAKE_FACTOR", 0.5)
+    # Target-lock: protect banked progress toward TARGET_CAPITAL. Everything is
+    # RELATIVE to the (initial -> target) journey, so 50->150, 100->300 or any
+    # other objective works without retuning: floors engage at 25/50/75% of the
+    # journey, and risk tapers once TARGET_TAPER_START of it is reached.
+    global TARGET_LOCK_ENABLED, TARGET_CAPITAL, TARGET_TAPER_START, TARGET_TAPER_FACTOR
+    TARGET_LOCK_ENABLED = get_bool("TARGET_LOCK_ENABLED", "true")
+    TARGET_CAPITAL = get_float("TARGET_CAPITAL", get_float("OPTUNA_TARGET_CAPITAL", 150.0))
+    TARGET_TAPER_START = get_float("TARGET_TAPER_START", 0.85)
+    TARGET_TAPER_FACTOR = get_float("TARGET_TAPER_FACTOR", 0.5)
+    # Meta-labeling: a second-stage model scores each primary signal with the
+    # probability that the trade (live ATR exit geometry) wins. Below the gate
+    # the trade is skipped; above it the probability drives per-trade Kelly.
+    global META_FILTER_ENABLED, META_MIN_WIN_PROB, META_KELLY_SIZING, META_TEST_FRACTION, META_MODEL_MAX_AGE_HOURS
+    META_FILTER_ENABLED = get_bool("META_FILTER_ENABLED", "true")
+    META_MIN_WIN_PROB = get_float("META_MIN_WIN_PROB", 0.55)
+    META_KELLY_SIZING = get_bool("META_KELLY_SIZING", "true")
+    META_TEST_FRACTION = get_float("META_TEST_FRACTION", 0.2)
+    META_MODEL_MAX_AGE_HOURS = get_float("META_MODEL_MAX_AGE_HOURS", 24)
     OPTUNA_DIRECTION = "maximize"
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
     # Robustness penalty folded into the objective: reward configs that profit

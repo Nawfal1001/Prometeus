@@ -176,6 +176,7 @@ function miniStats(s){
   const wr    = pick(["win_rate","winrate","win_pct"]);
   const pnl   = pick(["total_pnl","pnl","realized_pnl","net_pnl","total_return"]);
   const pf    = pick(["profit_factor","pf"]);
+  const arf = s.adaptive_risk_fraction;
   const cell = (l,v,cls="")=>`<div class="mini"><div class="l">${l}</div><div class="v ${cls}">${v}</div></div>`;
   const pnlCls = (pnl>0?"pos":(pnl<0?"neg":""));
   return `<div class="mini-stats">
@@ -184,6 +185,7 @@ function miniStats(s){
     ${cell("Win rate", wr!==undefined?fmtNum(wr*( wr<=1?100:1),1)+"%":"—")}
     ${cell("PnL", pnl!==undefined?fmtNum(pnl):"—", pnlCls)}
     ${cell("Profit factor", pf!==undefined?fmtNum(pf):"—")}
+    ${cell("Risk/trade", arf!==undefined?fmtNum(arf*100,2)+"%":"—")}
   </div>`;
 }
 

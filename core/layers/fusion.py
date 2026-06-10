@@ -254,9 +254,14 @@ class FusionEngine:
         confidence_mult *= liq_disagreement_factor
         atr_floor = float(getattr(cfg, "MIN_ATR_NORM", 0.001))
         atr_for_exits = max(float(atr_norm or atr_floor), atr_floor)
+        # Capital fallback chain: explicit arg > live equity pushed by the order
+        # manager after each exit > initial capital. Without live_capital here,
+        # sizing never compounds (and over-risks after a drawdown).
+        if current_capital is None:
+            current_capital = getattr(self, "live_capital", None)
         sizing = size_from_atr_risk(
             capital=float(current_capital if current_capital is not None else cfg.INITIAL_CAPITAL),
-            risk_fraction=float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05)),
+            risk_fraction=self._risk_fraction(),
             leverage=float(getattr(cfg, "LEVERAGE", 3)),
             atr_norm=atr_for_exits,
             sl_mult=sl_mult,
@@ -324,6 +329,21 @@ class FusionEngine:
             logger.debug(f"[Fusion] {warning} | proxy_layers={proxy_layers} sources={sources}")
 
         return effective, {"score": independence_score, "sources": sources, "warning": warning}
+
+    def _risk_fraction(self) -> float:
+        """Per-trade risk fraction. The order manager pushes the adaptive
+        (Kelly-throttled) fraction after every closed trade; until then fall
+        back to the static MAX_RISK_PER_TRADE."""
+        live = getattr(self, "live_risk_fraction", None)
+        if live is not None and live > 0:
+            return float(live)
+        return float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
+
+    def update_risk_fraction(self, fraction: float):
+        try:
+            self.live_risk_fraction = max(0.0, float(fraction))
+        except (TypeError, ValueError):
+            self.live_risk_fraction = None
 
     def _confidence_multiplier(self, confidence: float, threshold: float = None) -> float:
         threshold = float(threshold if threshold is not None else getattr(cfg, "FUSION_THRESHOLD", 0.17))

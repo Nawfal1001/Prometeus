@@ -264,6 +264,9 @@ async def _train(bot_dir: Path, profile: dict):
                 if df is not None and not df.empty:
                     feat = compute_features(df.copy())
                     if feat is not None and not feat.empty and len(feat) >= 200:
+                        # symbol tag lets the meta-model label per symbol so
+                        # barrier windows never cross concat seams
+                        feat = feat.assign(symbol=sym)
                         frames.append(feat)
             except Exception as e:
                 logger.warning(f"[BotRunner:train] {sym} fetch/feature failed: {e}")
@@ -285,10 +288,24 @@ async def _train(bot_dir: Path, profile: dict):
         from core.models.xgboost_model import XGBoostSignalModel as ModelCls
 
     model = ModelCls()  # _model_path resolves to XGB_MODEL_FILE
-    metrics = await asyncio.to_thread(lambda: (model.train(combined, timeframe=timeframe), model.save())[0])
+    main_df = combined.drop(columns=["symbol"], errors="ignore")
+    metrics = await asyncio.to_thread(lambda: (model.train(main_df, timeframe=timeframe), model.save())[0])
+
+    # Meta-label model alongside (path derives from XGB_MODEL_FILE, so it
+    # lands in the bot's own dir). Failure is non-fatal: the bot simply runs
+    # without the meta filter until the next train.
+    meta_metrics = None
+    try:
+        from core.models.meta_model import MetaLabelModel
+        meta = MetaLabelModel()
+        meta_metrics = await asyncio.to_thread(meta.train, combined, timeframe)
+    except Exception as e:
+        logger.warning(f"[BotRunner:train] meta-model training failed: {e}")
+
     _write_result({"status": "trained", "ts": time.time(), "rows": int(len(combined)),
                    "symbols": symbols, "timeframe": timeframe,
-                   "model_path": str(model._model_path), "metrics": metrics})
+                   "model_path": str(model._model_path), "metrics": metrics,
+                   "meta_metrics": meta_metrics})
     logger.info(f"[BotRunner:train] done rows={len(combined)} -> {model._model_path}")
 
 

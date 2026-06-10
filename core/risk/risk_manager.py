@@ -47,7 +47,48 @@ class RiskManager:
         if self._consec_losses >= max_consec:
             return False, f"Consecutive losses: {self._consec_losses}"
 
+        floor = self.target_lock_floor()
+        if floor is not None and self.capital <= floor:
+            return False, f"Target-lock floor: capital {self.capital:.2f} <= protected {floor:.2f}"
+
         return True, "ok"
+
+    # ------------------------------------------------------------------
+    # Target lock: once a fraction of the (initial -> target) journey has been
+    # banked, never give back more than a shrinking share of that gain. All
+    # levels are RELATIVE, so any objective (50->150, 100->300, ...) maps the
+    # same way: floors engage at 25/50/75% of the journey with max give-backs
+    # of 40/30/20% of the banked gain.
+    _TARGET_CHECKPOINTS = ((0.75, 0.20), (0.50, 0.30), (0.25, 0.40))
+
+    def _target_span(self):
+        if not bool(getattr(cfg, "TARGET_LOCK_ENABLED", True)):
+            return None
+        initial = float(self.initial_capital)
+        target = float(getattr(cfg, "TARGET_CAPITAL", 0) or 0)
+        if target <= initial or initial <= 0:
+            return None
+        return initial, target
+
+    def target_lock_floor(self):
+        span = self._target_span()
+        if span is None:
+            return None
+        initial, target = span
+        journey = target - initial
+        peak = max(self.peak_capital, self.capital)
+        progress = (peak - initial) / journey
+        for checkpoint, giveback in self._TARGET_CHECKPOINTS:
+            if progress >= checkpoint:
+                return round(initial + journey * checkpoint * (1.0 - giveback), 4)
+        return None
+
+    def target_progress(self):
+        span = self._target_span()
+        if span is None:
+            return None
+        initial, target = span
+        return round((self.capital - initial) / (target - initial), 4)
 
     def apply_realized_pnl(self, pnl: float):
         """Apply a single (possibly partial) realized PnL to capital/equity.
@@ -177,6 +218,73 @@ class RiskManager:
             return 0.9
         return 1.0
 
+    def _recent_payoff(self, rows) -> float | None:
+        pnls = [float(t.get("pnl", 0) or 0) for t in rows]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        if not wins or not losses:
+            return None
+        return (sum(wins) / len(wins)) / abs(sum(losses) / len(losses))
+
+    @staticmethod
+    def _kelly(p: float, b: float) -> float:
+        return (b * p - (1.0 - p)) / max(b, 1e-9)
+
+    def adaptive_risk_fraction(self, win_prob: float = None) -> float:
+        """Per-trade risk fraction throttled by the *measured* edge (fractional
+        Kelly) plus a drawdown brake.
+
+        Kelly optimal fraction for payoff b and win prob p is f* = (b·p − q)/b.
+        Betting above f* lowers long-run growth and explodes drawdowns, so we
+        bet KELLY_FRACTION of it (half-Kelly default) computed from the rolling
+        last KELLY_LOOKBACK_TRADES. No measured edge → risk floor. Until enough
+        trades exist the warmup cap applies — the edge must be proven first.
+
+        When the meta-model supplies a per-trade ``win_prob``, Kelly runs on
+        THAT probability (the trade-specific edge) — but bounded at twice the
+        rolling fraction so model optimism can never outrun realized results.
+        """
+        base = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
+        if not bool(getattr(cfg, "ADAPTIVE_KELLY_ENABLED", True)):
+            return base
+        floor = float(getattr(cfg, "KELLY_RISK_FLOOR", 0.005))
+        cap = float(getattr(cfg, "KELLY_RISK_CAP", 0.05))
+        lookback = int(getattr(cfg, "KELLY_LOOKBACK_TRADES", 30))
+        min_trades = int(getattr(cfg, "KELLY_MIN_TRADES", 15))
+        frac = float(getattr(cfg, "KELLY_FRACTION", 0.5))
+
+        rows = self.trade_history[-lookback:]
+        payoff = self._recent_payoff(rows)
+        if len(rows) < min_trades:
+            risk = min(base, float(getattr(cfg, "KELLY_WARMUP_RISK", 0.02)))
+        else:
+            pnls = [float(t.get("pnl", 0) or 0) for t in rows]
+            wins = [p for p in pnls if p > 0]
+            if not wins:
+                risk = floor
+            elif payoff is None:          # no losses in window
+                risk = cap
+            else:
+                f_star = self._kelly(len(wins) / len(pnls), payoff)
+                risk = floor if f_star <= 0 else f_star * frac
+
+        if win_prob is not None and bool(getattr(cfg, "META_KELLY_SIZING", True)):
+            b = payoff if payoff is not None else 1.4   # synth-calibrated default
+            f_trade = self._kelly(float(win_prob), b)
+            f_trade = floor if f_trade <= 0 else f_trade * frac
+            risk = min(f_trade, max(risk * 2.0, floor))
+
+        dd = (self.peak_capital - self.capital) / max(self.peak_capital, 1e-9)
+        if dd >= float(getattr(cfg, "KELLY_DD_BRAKE", 0.12)):
+            risk *= float(getattr(cfg, "KELLY_DD_BRAKE_FACTOR", 0.5))
+
+        # Near the objective, protecting the result beats squeezing the last
+        # few percent out of it: taper risk once most of the journey is done.
+        progress = self.target_progress()
+        if progress is not None and progress >= float(getattr(cfg, "TARGET_TAPER_START", 0.85)):
+            risk *= float(getattr(cfg, "TARGET_TAPER_FACTOR", 0.5))
+        return round(min(max(risk, floor), cap), 6)
+
     def get_stats(self) -> dict:
         initial = self.initial_capital if self.initial_capital > 0 else 1.0
         return {
@@ -192,4 +300,8 @@ class RiskManager:
             "peak_capital": round(self.peak_capital, 2),
             "threshold_multiplier": self.threshold_multiplier(),
             "consecutive_losses": self._consec_losses,
+            "adaptive_risk_fraction": self.adaptive_risk_fraction(),
+            "target_capital": float(getattr(cfg, "TARGET_CAPITAL", 0) or 0) or None,
+            "target_progress": self.target_progress(),
+            "target_floor": self.target_lock_floor(),
         }

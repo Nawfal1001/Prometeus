@@ -259,24 +259,21 @@ class BacktestEngine:
         return self.compute_signal(row, current_capital)
 
     def _simulate(self, df: pd.DataFrame, start_bar: int = 0):
+        # Exits are driven by the LIVE AdvancedExitManager via TradeSimulator,
+        # so the backtest trades the same machine as paper/live: TP1 partial +
+        # breakeven, TP2 partial, ratchet trailing, conservative same-bar rule,
+        # early-kill and time exits — with one accounting formula.
+        from backtest.lifecycle import TradeSimulator, position_notional
+        sim = TradeSimulator(taker_fee=TAKER_FEE, slippage=SLIPPAGE)
         capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
         leverage = float(getattr(cfg, "LEVERAGE", 3))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.08))
         max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 6))
-        max_dur = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 32))
-        tp1_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.50))
-        in_trade = False
-        entry_px = sl = tp1 = tp2 = atr_abs = sl_mult = 0.0
-        trade_side = entry_bar = 0
+        trade = None
         entry_score = 0.0
         entry_capital = capital
-        entry_confidence_mult = 1.0
-        entry_notional = 0.0
-        tp1_hit = False
-        remaining = 1.0
-        realized_pnl = 0.0
-        peak_px = trough_px = 0.0
+        entry_regime = None
         trades = []
         trades_today = 0
         day_start_cap = capital
@@ -296,52 +293,17 @@ class BacktestEngine:
                 day_start_cap = capital
                 last_day = day
 
-            if in_trade:
-                peak_px = max(peak_px, high)
-                trough_px = min(trough_px, low)
-                if tp1_hit:
-                    an = float(row.get("atr_norm", 0.003))
-                    if trade_side == 1:
-                        sl = max(sl, peak_px - entry_px * an * sl_mult)
-                    else:
-                        sl = min(sl, trough_px + entry_px * an * sl_mult)
-                if not tp1_hit:
-                    hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
-                    if hit_tp1:
-                        ep = tp1 * (1 - trade_side * SLIPPAGE)
-                        rret = ((ep - entry_px) / entry_px) * trade_side
-                        partial_notional = entry_notional * tp1_pct
-                        p1 = partial_notional * rret - partial_notional * TAKER_FEE * 2
-                        realized_pnl += p1
-                        capital += p1
-                        remaining = 1.0 - tp1_pct
-                        tp1_hit = True
-                        consec_losses = 0
-                        be = entry_px * (1 + trade_side * float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0002)))
-                        sl = max(sl, be) if trade_side == 1 else min(sl, be)
-                        continue
-
-                hit_tp2 = (trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)
-                hit_sl = (trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl)
-                expired = (i - entry_bar) >= max_dur
-                if hit_tp2 or hit_sl or expired:
-                    if expired and not hit_tp2 and not hit_sl:
-                        exit_px_v = close
-                        raw_ret = ((close - entry_px) / entry_px) * trade_side
-                        raw_ret = max(raw_ret, -0.0002)
-                        exit_type = "TIME"
-                    else:
-                        exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
-                        raw_ret = ((exit_px_v - entry_px) / entry_px) * trade_side
-                        exit_type = "TP" if hit_tp2 else "SL"
-                    remaining_notional = entry_notional * remaining
-                    fee = remaining_notional * TAKER_FEE * 2
-                    pnl_rem = remaining_notional * raw_ret - fee
-                    total_pnl = pnl_rem + realized_pnl
-                    capital += pnl_rem
+            if trade is not None:
+                events, pnl_delta, closed = sim.step(trade, high=high, low=low, close=close, bar_index=i)
+                capital += pnl_delta
+                if any(ev["type"] == "TP1" for ev in events):
+                    consec_losses = 0
+                if closed:
+                    total_pnl = float(trade["realized_pnl"])
+                    exit_type = trade.get("exit_type") or "CLOSED"
                     if total_pnl > 0:
                         consec_losses = 0
-                    elif exit_type == "SL":
+                    elif exit_type in ("TRAIL", "EARLY_KILL"):   # stop-style losses
                         consec_losses += 1
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
@@ -350,12 +312,11 @@ class BacktestEngine:
                         self.regime_memory.update({"atr_norm": float(row.get("atr_norm", 0.003)), "vol_zscore": float(row.get("vol_zscore", 0)), "ema_stack": float(row.get("ema_stack", 0)), "fusion_score": entry_score}, total_pnl)
                     except Exception as e:
                         logger.debug(f"[Backtest] regime_memory.update skipped: {e}")
-                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + entry_bar, "fusion_score": entry_score, "regime": entry_regime})
-                    in_trade = False
-                    remaining = 1.0
-                    realized_pnl = 0.0
-                    entry_notional = 0.0
-                    tp1_hit = False
+                    entry_px = float(trade["entry_price"])
+                    exit_px_v = float(trade.get("exit_price") or close)
+                    raw_ret = (exit_px_v - entry_px) / entry_px * trade["direction"]
+                    trades.append({"entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade["direction"] == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(float(trade["notional"]), 6), "exit_type": exit_type, "tp1_hit": bool(trade.get("tp1_hit")), "capital": round(capital, 6), "bar": start_bar + i, "entry_bar": start_bar + int(trade["entry_bar"]), "fusion_score": entry_score, "regime": entry_regime})
+                    trade = None
                     if capital <= 0:
                         break
                 continue
@@ -374,27 +335,17 @@ class BacktestEngine:
             entry_score = float(sig.get("fusion_score", 0))
             entry_regime = label_regime(row)   # regime tag captured AT ENTRY
             entry_capital = capital
-            entry_confidence_mult = float(sig.get("confidence_mult", 1.0) or 1.0)
-            entry_px = close * (1 + trade_side * SLIPPAGE)
             an = float(sig.get("atr_norm", 0.003))
-            sl_mult = float(sig.get("sl_mult", 1.2))
-            stop_distance = max(an * sl_mult, 1e-9)
-            risk_amount = entry_capital * risk_frac * entry_confidence_mult
-            max_notional = entry_capital * leverage
-            entry_notional = min(risk_amount / stop_distance, max_notional)
-            tp1_m = float(sig.get("tp1_mult", 1.2))
-            tp2_m = float(sig.get("tp2_mult", 2.4))
-            atr_abs = entry_px * an
-            sl = entry_px * (1 - trade_side * an * sl_mult)
-            tp1 = entry_px * (1 + trade_side * an * tp1_m)
-            tp2 = entry_px * (1 + trade_side * an * tp2_m)
-            entry_bar = i
-            peak_px = high
-            trough_px = low
-            tp1_hit = False
-            remaining = 1.0
-            realized_pnl = 0.0
-            in_trade = True
+            sl_mult = float(sig.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.2)))
+            entry_notional = position_notional(
+                capital=entry_capital, risk_fraction=risk_frac, atr_norm=an,
+                sl_mult=sl_mult, leverage=leverage,
+                confidence_mult=float(sig.get("confidence_mult", 1.0) or 1.0),
+            )
+            trade = sim.open(entry_close=close, direction=trade_side, atr_norm=an,
+                             notional=entry_notional, bar_index=i,
+                             recent_high=high, recent_low=low)
+            capital += -entry_notional * TAKER_FEE   # entry fee hits equity now
             trades_today += 1
         return trades, capital
 
@@ -650,26 +601,21 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         return float(edge * 0.45 + abs_score * 0.25 + vol_quality * 0.15 + vol_participation * 0.10 + rr_quality * 0.05)
 
     def _simulate_competing(self, data_by_symbol: dict):
+        # Exits via the LIVE AdvancedExitManager (see backtest.lifecycle) so
+        # multi-symbol backtests share live exit semantics + accounting.
+        from backtest.lifecycle import TradeSimulator, position_notional
+        sim = TradeSimulator(taker_fee=TAKER_FEE, slippage=SLIPPAGE)
         capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
         leverage = float(getattr(cfg, "LEVERAGE", 3))
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.08))
         max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 6))
-        max_dur = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 32))
-        tp1_pct = float(getattr(cfg, "TP1_EXIT_PCT", 0.50))
         min_len = min(len(df) for df in data_by_symbol.values())
-        in_trade = False
+        trade = None
         active_symbol = None
-        entry_px = sl = tp1 = tp2 = sl_mult = 0.0
-        trade_side = entry_bar = 0
         entry_score = 0.0
         entry_capital = capital
-        entry_confidence_mult = 1.0
-        entry_notional = 0.0
-        tp1_hit = False
-        remaining = 1.0
-        realized_pnl = 0.0
-        peak_px = trough_px = 0.0
+        entry_regime = None
         trades = []
         trades_today = 0
         day_start_cap = capital
@@ -686,71 +632,34 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                 day_start_cap = capital
                 last_day = day
 
-            if in_trade:
+            if trade is not None:
                 row = data_by_symbol[active_symbol].iloc[i]
-                high = float(row["high"])
-                low = float(row["low"])
-                close = float(row["close"])
-                peak_px = max(peak_px, high)
-                trough_px = min(trough_px, low)
-                if tp1_hit:
-                    an = float(row.get("atr_norm", 0.003))
-                    if trade_side == 1:
-                        sl = max(sl, peak_px - entry_px * an * sl_mult)
-                    else:
-                        sl = min(sl, trough_px + entry_px * an * sl_mult)
-                if not tp1_hit:
-                    hit_tp1 = (trade_side == 1 and high >= tp1) or (trade_side == -1 and low <= tp1)
-                    if hit_tp1:
-                        ep = tp1 * (1 - trade_side * SLIPPAGE)
-                        rret = ((ep - entry_px) / entry_px) * trade_side
-                        partial_notional = entry_notional * tp1_pct
-                        p1 = partial_notional * rret - partial_notional * TAKER_FEE * 2
-                        realized_pnl += p1
-                        capital += p1
-                        remaining = 1.0 - tp1_pct
-                        tp1_hit = True
-                        consec_losses = 0
-                        be = entry_px * (1 + trade_side * float(getattr(cfg, "BREAKEVEN_BUFFER_PCT", 0.0002)))
-                        sl = max(sl, be) if trade_side == 1 else min(sl, be)
-                        continue
-
-                hit_tp2 = (trade_side == 1 and high >= tp2) or (trade_side == -1 and low <= tp2)
-                hit_sl = (trade_side == 1 and low <= sl) or (trade_side == -1 and high >= sl)
-                expired = (i - entry_bar) >= max_dur
-                if hit_tp2 or hit_sl or expired:
-                    if expired and not hit_tp2 and not hit_sl:
-                        exit_px_v = close
-                        raw_ret = ((close - entry_px) / entry_px) * trade_side
-                        raw_ret = max(raw_ret, -0.0002)
-                        exit_type = "TIME"
-                    else:
-                        exit_px_v = (tp2 if hit_tp2 else sl) * (1 - trade_side * SLIPPAGE)
-                        raw_ret = ((exit_px_v - entry_px) / entry_px) * trade_side
-                        exit_type = "TP" if hit_tp2 else "SL"
-                    remaining_notional = entry_notional * remaining
-                    fee = remaining_notional * TAKER_FEE * 2
-                    pnl_rem = remaining_notional * raw_ret - fee
-                    total_pnl = pnl_rem + realized_pnl
-                    capital += pnl_rem
+                events, pnl_delta, closed = sim.step(
+                    trade, high=float(row["high"]), low=float(row["low"]),
+                    close=float(row["close"]), bar_index=i)
+                capital += pnl_delta
+                if any(ev["type"] == "TP1" for ev in events):
+                    consec_losses = 0
+                if closed:
+                    total_pnl = float(trade["realized_pnl"])
+                    exit_type = trade.get("exit_type") or "CLOSED"
                     st = selection_stats[active_symbol]
                     st["trades"] += 1
                     st["pnl"] = round(float(st["pnl"]) + float(total_pnl), 6)
                     if total_pnl > 0:
                         st["wins"] += 1
                         consec_losses = 0
-                    elif exit_type == "SL":
+                    elif exit_type in ("TRAIL", "EARLY_KILL"):
                         consec_losses += 1
                         if consec_losses >= MAX_CONSEC:
                             cooldown = 5
                             consec_losses = 0
-                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade_side == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(entry_notional, 6), "exit_type": exit_type, "tp1_hit": tp1_hit, "capital": round(capital, 6), "bar": i, "entry_bar": entry_bar, "fusion_score": entry_score, "regime": entry_regime})
-                    in_trade = False
+                    entry_px = float(trade["entry_price"])
+                    exit_px_v = float(trade.get("exit_price") or row["close"])
+                    raw_ret = (exit_px_v - entry_px) / entry_px * trade["direction"]
+                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade["direction"] == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(float(trade["notional"]), 6), "exit_type": exit_type, "tp1_hit": bool(trade.get("tp1_hit")), "capital": round(capital, 6), "bar": i, "entry_bar": int(trade["entry_bar"]), "fusion_score": entry_score, "regime": entry_regime})
+                    trade = None
                     active_symbol = None
-                    remaining = 1.0
-                    realized_pnl = 0.0
-                    entry_notional = 0.0
-                    tp1_hit = False
                     if capital <= 0:
                         break
                 continue
@@ -780,28 +689,16 @@ class MultiSymbolBacktestEngine(BacktestEngine):
             entry_score = float(sig.get("fusion_score", 0))
             entry_regime = label_regime(row)   # regime tag captured AT ENTRY
             entry_capital = capital
-            entry_confidence_mult = float(sig.get("confidence_mult", 1.0) or 1.0)
-            close = float(row["close"])
-            high = float(row["high"])
-            low = float(row["low"])
-            entry_px = close * (1 + trade_side * SLIPPAGE)
             an = float(sig.get("atr_norm", 0.003))
-            sl_mult = float(sig.get("sl_mult", 1.2))
-            stop_distance = max(an * sl_mult, 1e-9)
-            risk_amount = entry_capital * risk_frac * entry_confidence_mult
-            max_notional = entry_capital * leverage
-            entry_notional = min(risk_amount / stop_distance, max_notional)
-            tp1_m = float(sig.get("tp1_mult", 1.2))
-            tp2_m = float(sig.get("tp2_mult", 2.4))
-            sl = entry_px * (1 - trade_side * an * sl_mult)
-            tp1 = entry_px * (1 + trade_side * an * tp1_m)
-            tp2 = entry_px * (1 + trade_side * an * tp2_m)
-            entry_bar = i
-            peak_px = high
-            trough_px = low
-            tp1_hit = False
-            remaining = 1.0
-            realized_pnl = 0.0
-            in_trade = True
+            sl_mult = float(sig.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.2)))
+            entry_notional = position_notional(
+                capital=entry_capital, risk_fraction=risk_frac, atr_norm=an,
+                sl_mult=sl_mult, leverage=leverage,
+                confidence_mult=float(sig.get("confidence_mult", 1.0) or 1.0),
+            )
+            trade = sim.open(entry_close=float(row["close"]), direction=trade_side,
+                             atr_norm=an, notional=entry_notional, bar_index=i,
+                             recent_high=float(row["high"]), recent_low=float(row["low"]))
+            capital += -entry_notional * TAKER_FEE   # entry fee hits equity now
             trades_today += 1
         return trades, capital, selection_stats
