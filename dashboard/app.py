@@ -297,6 +297,7 @@ async def _fetch_training_frame(symbols: list[str], timeframe: str, candles: int
             if df is not None and not df.empty:
                 df = df.copy()
                 df["symbol"] = symbol
+                df["ts"] = df.index   # survives the ignore_index concat; used by edge-profile learning
                 frames.append(df)
         except Exception as e:
             ui_log(f"Training data fetch failed for {symbol}: {e}", "warning")
@@ -332,6 +333,20 @@ async def _run_training_job(params: dict):
         except Exception as me:
             result["meta"] = {"error": str(me)}
             ui_log(f"Meta-label training failed: {me}", "warning")
+        # Learn the edge-profile hypotheses (session edge, BTC lead) from the
+        # same real data; applied live only where statistically significant.
+        try:
+            from core.analytics.edge_profiles import learn_profiles, save_profiles
+            profile = await asyncio.to_thread(learn_profiles, df)
+            save_profiles(profile)
+            result["edge_profiles"] = {
+                "sessions": {k: v.get("multiplier") for k, v in profile.get("sessions", {}).items()},
+                "btc_lead_penalty": (profile.get("btc_lead") or {}).get("penalty"),
+            }
+            ui_log(f"Edge profiles learned | sessions={result['edge_profiles']['sessions']} "
+                   f"btc_lead_penalty={result['edge_profiles']['btc_lead_penalty']}")
+        except Exception as ee:
+            ui_log(f"Edge profile learning failed: {ee}", "warning")
         del df
         gc.collect()
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "result": result})

@@ -176,6 +176,7 @@ def _child_env(profile: dict, slug: str) -> dict:
         "PROMETHEUS_OPTIMIZED_PARAMS_FILE": str(bot_dir / "optimized_params.json"),
         "PROMETHEUS_TRADES_FILE": str(bot_dir / "trades.json"),
         "XGB_MODEL_FILE": str(model_file),
+        "EDGE_PROFILE_FILE": str(bot_dir / "edge_profiles.json"),
         "EXCHANGE": str(profile.get("exchange", "")).lower(),
         "MARKET_TYPE": str(profile.get("market_type", "futures")).lower(),
         "TRADING_MODE": str(profile.get("mode", "paper")).lower(),

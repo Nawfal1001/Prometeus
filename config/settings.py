@@ -403,6 +403,18 @@ def reload_from_sources():
     META_KELLY_SIZING = get_bool("META_KELLY_SIZING", "true")
     META_TEST_FRACTION = get_float("META_TEST_FRACTION", 0.2)
     META_MODEL_MAX_AGE_HOURS = get_float("META_MODEL_MAX_AGE_HOURS", 24)
+    # Learned edge profiles (hypothesis engine): session-of-day multiplier and
+    # BTC-lead penalty are LEARNED from real data during training and applied
+    # only when statistically significant (two-proportion z-test). Neutral
+    # (1.0) otherwise — the data decides, not hardcoded beliefs.
+    global EDGE_PROFILES_ENABLED, EDGE_PROFILE_FILE, EDGE_MIN_SAMPLES, EDGE_Z_THRESHOLD
+    global BTC_LEAD_REF_SYMBOL, BTC_LEAD_LOOKBACK
+    EDGE_PROFILES_ENABLED = get_bool("EDGE_PROFILES_ENABLED", "true")
+    EDGE_PROFILE_FILE = get("EDGE_PROFILE_FILE", str(DATA_DIR / "edge_profiles.json"))
+    EDGE_MIN_SAMPLES = get_int("EDGE_MIN_SAMPLES", 200)
+    EDGE_Z_THRESHOLD = get_float("EDGE_Z_THRESHOLD", 1.96)
+    BTC_LEAD_REF_SYMBOL = get("BTC_LEAD_REF_SYMBOL", "BTC/USDT")
+    BTC_LEAD_LOOKBACK = get_int("BTC_LEAD_LOOKBACK", 6)
     OPTUNA_DIRECTION = "maximize"
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
     # Robustness penalty folded into the objective: reward configs that profit
