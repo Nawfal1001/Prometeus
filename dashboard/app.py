@@ -320,6 +320,18 @@ async def _run_training_job(params: dict):
         if df.empty:
             raise RuntimeError("No training data fetched")
         result = await asyncio.to_thread(train_xgb_model, df, timeframe)
+        # Meta-label model on the same data (non-fatal: the engine simply runs
+        # without the meta filter until a later train succeeds). The running
+        # engine hot-reloads both models from disk, no restart needed.
+        try:
+            from core.models.meta_model import MetaLabelModel
+            meta_metrics = await asyncio.to_thread(MetaLabelModel().train, df, timeframe)
+            result["meta"] = meta_metrics
+            ui_log(f"Meta-label model trained | AUC={meta_metrics.get('holdout_auc')} "
+                   f"prec@gate={meta_metrics.get('precision_at_gate')} vs base={meta_metrics.get('holdout_base_rate')}")
+        except Exception as me:
+            result["meta"] = {"error": str(me)}
+            ui_log(f"Meta-label training failed: {me}", "warning")
         del df
         gc.collect()
         _model_status.update({"running": False, "finished_at": datetime.utcnow().isoformat(), "result": result})

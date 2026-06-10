@@ -47,6 +47,7 @@ class XGBoostSignalModel:
         # bot subprocess sets XGB_MODEL_FILE so each bot owns its own .pkl.
         # Subclasses (e.g. NonCryptoXGBoostModel) may override after super().
         self._model_path = Path(os.getenv("XGB_MODEL_FILE") or MODEL_PATH)
+        self._loaded_mtime = None
         self._version = None
         self._metrics = {}
         self._trained_tf = None
@@ -522,6 +523,25 @@ class XGBoostSignalModel:
         return float(np.clip(score, -1.0, 1.0))
 
     # ------------------------------------------------------------------
+    def maybe_reload(self):
+        """Pick up a model file written by ANOTHER process (the dashboard's
+        Train ML job, a bot's --train run) without restarting the engine.
+        EntrySignal previously loaded the model once at startup, so a freshly
+        trained .pkl never reached the running paper/live engine."""
+        try:
+            if not self._model_path.exists():
+                return
+            mtime = self._model_path.stat().st_mtime
+        except OSError:
+            return
+        if self._loaded_mtime is not None and mtime <= self._loaded_mtime:
+            return
+        first = self._loaded_mtime is None
+        self._loaded_mtime = mtime
+        if not first:
+            logger.info(f"[XGBoost] Model file changed on disk — hot-reloading {self._model_path.name}")
+        self.load()
+
     def save(self):
         self._model_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump({"model": self.model, "le": self.le, "version": MODEL_VERSION,

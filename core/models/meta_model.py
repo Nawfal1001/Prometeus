@@ -51,6 +51,24 @@ class MetaLabelModel:
         self._metrics = {}
         self._feature_cols = None
         self._model_path = _resolve_meta_path()
+        self._loaded_mtime = None
+
+    def maybe_reload(self):
+        """Pick up a meta-model file written by another process (Train ML job,
+        bot --train) without restarting the engine."""
+        try:
+            if not self._model_path.exists():
+                return
+            mtime = self._model_path.stat().st_mtime
+        except OSError:
+            return
+        if self._loaded_mtime is not None and mtime <= self._loaded_mtime:
+            return
+        first = self._loaded_mtime is None
+        self._loaded_mtime = mtime
+        if not first:
+            logger.info(f"[Meta] model file changed on disk — hot-reloading {self._model_path.name}")
+        self.load()
 
     # ------------------------------------------------------------------
     def _features_frame(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -67,20 +85,33 @@ class MetaLabelModel:
 
     # ------------------------------------------------------------------
     def train(self, df: pd.DataFrame, timeframe: str = None) -> dict:
-        df = self._features_frame(df)
-        if df is None or df.empty or len(df) < 400:
+        # Multi-symbol training frames carry a 'symbol' column; label each
+        # symbol separately so triple-barrier forward windows never cross a
+        # symbol seam (where concatenated prices jump scale).
+        if "symbol" in df.columns and df["symbol"].nunique() > 1:
+            groups = [g.drop(columns=["symbol"]) for _, g in df.groupby("symbol", sort=False)]
+        else:
+            groups = [df.drop(columns=["symbol"], errors="ignore")]
+        groups = [self._features_frame(g) for g in groups]
+        groups = [g for g in groups if g is not None and len(g) >= 150]
+        if not groups or sum(len(g) for g in groups) < 400:
             raise ValueError("not enough rows for meta-model training (need >= 400)")
-        cols = self._select_cols(df)
+        cols = self._select_cols(groups[0])
         if not cols:
             raise ValueError("no known feature columns present")
 
         frames = []
-        for d in (1, -1):
-            y = triple_barrier_labels(df, d)
-            sub = df[cols].copy()
-            sub["direction"] = float(d)
-            sub["__y"] = y
-            frames.append(sub)
+        for gi, g in enumerate(groups):
+            for c in cols:
+                if c not in g.columns:
+                    g[c] = 0.0
+            for d in (1, -1):
+                y = triple_barrier_labels(g, d)
+                sub = g[cols].copy()
+                sub["direction"] = float(d)
+                sub["__y"] = y
+                sub["__grp"] = gi
+                frames.append(sub)
         data = pd.concat(frames, ignore_index=True).replace([np.inf, -np.inf], np.nan)
         data = data.dropna(subset=["__y"])
         data[cols] = data[cols].fillna(0.0)
@@ -88,23 +119,24 @@ class MetaLabelModel:
             raise ValueError("not enough resolved triple-barrier labels")
 
         feature_cols = cols + ["direction"]
-        # Purged time-ordered split. Both direction frames share the same time
-        # order (concat of two aligned copies), so split on the original bar
-        # index modulo the frame, with an embargo of max_bars to keep
-        # overlapping outcome windows out of the holdout.
-        per_dir = len(data) // 2
-        test_n = max(50, int(per_dir * float(getattr(cfg, "META_TEST_FRACTION", 0.2))))
+        # Purged time-ordered split PER symbol and direction: holdout is the
+        # last fraction of each symbol's bars, with an embargo of max_bars so
+        # overlapping outcome windows can't leak into the holdout.
+        test_frac = float(getattr(cfg, "META_TEST_FRACTION", 0.2))
         embargo = int(getattr(cfg, "MAX_TRADE_DURATION_BARS", 36))
-        data = data.reset_index(drop=True)
-        data["__pos"] = data.groupby("direction").cumcount()
-        max_pos = int(data["__pos"].max())
-        test_start = max_pos - test_n
-        train_mask = data["__pos"] < (test_start - embargo)
-        test_mask = data["__pos"] >= test_start
-        X_tr = data.loc[train_mask, feature_cols]
-        y_tr = data.loc[train_mask, "__y"].astype(int)
-        X_te = data.loc[test_mask, feature_cols]
-        y_te = data.loc[test_mask, "__y"].astype(int)
+        parts_tr, parts_te = [], []
+        for _, gsub in data.groupby(["__grp", "direction"], sort=False):
+            n = len(gsub)
+            test_n = max(25, int(n * test_frac))
+            test_start = n - test_n
+            parts_tr.append(gsub.iloc[:max(0, test_start - embargo)])
+            parts_te.append(gsub.iloc[test_start:])
+        train_df = pd.concat(parts_tr, ignore_index=True)
+        test_df = pd.concat(parts_te, ignore_index=True)
+        X_tr = train_df[feature_cols]
+        y_tr = train_df["__y"].astype(int)
+        X_te = test_df[feature_cols]
+        y_te = test_df["__y"].astype(int)
         if len(X_tr) < 200 or len(X_te) < 50:
             raise ValueError("purged split left too few rows")
 
@@ -152,8 +184,7 @@ class MetaLabelModel:
     # ------------------------------------------------------------------
     def predict_win_prob(self, df: pd.DataFrame, direction: int) -> float | None:
         """P(win) for entering the LAST bar of df in ``direction``."""
-        if self.model is None:
-            self.load()
+        self.maybe_reload()
         if self.model is None or not self._feature_cols:
             return None
         try:
