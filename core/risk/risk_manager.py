@@ -47,7 +47,48 @@ class RiskManager:
         if self._consec_losses >= max_consec:
             return False, f"Consecutive losses: {self._consec_losses}"
 
+        floor = self.target_lock_floor()
+        if floor is not None and self.capital <= floor:
+            return False, f"Target-lock floor: capital {self.capital:.2f} <= protected {floor:.2f}"
+
         return True, "ok"
+
+    # ------------------------------------------------------------------
+    # Target lock: once a fraction of the (initial -> target) journey has been
+    # banked, never give back more than a shrinking share of that gain. All
+    # levels are RELATIVE, so any objective (50->150, 100->300, ...) maps the
+    # same way: floors engage at 25/50/75% of the journey with max give-backs
+    # of 40/30/20% of the banked gain.
+    _TARGET_CHECKPOINTS = ((0.75, 0.20), (0.50, 0.30), (0.25, 0.40))
+
+    def _target_span(self):
+        if not bool(getattr(cfg, "TARGET_LOCK_ENABLED", True)):
+            return None
+        initial = float(self.initial_capital)
+        target = float(getattr(cfg, "TARGET_CAPITAL", 0) or 0)
+        if target <= initial or initial <= 0:
+            return None
+        return initial, target
+
+    def target_lock_floor(self):
+        span = self._target_span()
+        if span is None:
+            return None
+        initial, target = span
+        journey = target - initial
+        peak = max(self.peak_capital, self.capital)
+        progress = (peak - initial) / journey
+        for checkpoint, giveback in self._TARGET_CHECKPOINTS:
+            if progress >= checkpoint:
+                return round(initial + journey * checkpoint * (1.0 - giveback), 4)
+        return None
+
+    def target_progress(self):
+        span = self._target_span()
+        if span is None:
+            return None
+        initial, target = span
+        return round((self.capital - initial) / (target - initial), 4)
 
     def apply_realized_pnl(self, pnl: float):
         """Apply a single (possibly partial) realized PnL to capital/equity.
@@ -236,6 +277,12 @@ class RiskManager:
         dd = (self.peak_capital - self.capital) / max(self.peak_capital, 1e-9)
         if dd >= float(getattr(cfg, "KELLY_DD_BRAKE", 0.12)):
             risk *= float(getattr(cfg, "KELLY_DD_BRAKE_FACTOR", 0.5))
+
+        # Near the objective, protecting the result beats squeezing the last
+        # few percent out of it: taper risk once most of the journey is done.
+        progress = self.target_progress()
+        if progress is not None and progress >= float(getattr(cfg, "TARGET_TAPER_START", 0.85)):
+            risk *= float(getattr(cfg, "TARGET_TAPER_FACTOR", 0.5))
         return round(min(max(risk, floor), cap), 6)
 
     def get_stats(self) -> dict:
@@ -254,4 +301,7 @@ class RiskManager:
             "threshold_multiplier": self.threshold_multiplier(),
             "consecutive_losses": self._consec_losses,
             "adaptive_risk_fraction": self.adaptive_risk_fraction(),
+            "target_capital": float(getattr(cfg, "TARGET_CAPITAL", 0) or 0) or None,
+            "target_progress": self.target_progress(),
+            "target_floor": self.target_lock_floor(),
         }

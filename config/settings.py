@@ -385,6 +385,15 @@ def reload_from_sources():
     KELLY_WARMUP_RISK = get_float("KELLY_WARMUP_RISK", 0.02)
     KELLY_DD_BRAKE = get_float("KELLY_DD_BRAKE", 0.12)
     KELLY_DD_BRAKE_FACTOR = get_float("KELLY_DD_BRAKE_FACTOR", 0.5)
+    # Target-lock: protect banked progress toward TARGET_CAPITAL. Everything is
+    # RELATIVE to the (initial -> target) journey, so 50->150, 100->300 or any
+    # other objective works without retuning: floors engage at 25/50/75% of the
+    # journey, and risk tapers once TARGET_TAPER_START of it is reached.
+    global TARGET_LOCK_ENABLED, TARGET_CAPITAL, TARGET_TAPER_START, TARGET_TAPER_FACTOR
+    TARGET_LOCK_ENABLED = get_bool("TARGET_LOCK_ENABLED", "true")
+    TARGET_CAPITAL = get_float("TARGET_CAPITAL", get_float("OPTUNA_TARGET_CAPITAL", 150.0))
+    TARGET_TAPER_START = get_float("TARGET_TAPER_START", 0.85)
+    TARGET_TAPER_FACTOR = get_float("TARGET_TAPER_FACTOR", 0.5)
     # Meta-labeling: a second-stage model scores each primary signal with the
     # probability that the trade (live ATR exit geometry) wins. Below the gate
     # the trade is skipped; above it the probability drives per-trade Kelly.
