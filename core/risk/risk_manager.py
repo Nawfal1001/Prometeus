@@ -177,7 +177,19 @@ class RiskManager:
             return 0.9
         return 1.0
 
-    def adaptive_risk_fraction(self) -> float:
+    def _recent_payoff(self, rows) -> float | None:
+        pnls = [float(t.get("pnl", 0) or 0) for t in rows]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        if not wins or not losses:
+            return None
+        return (sum(wins) / len(wins)) / abs(sum(losses) / len(losses))
+
+    @staticmethod
+    def _kelly(p: float, b: float) -> float:
+        return (b * p - (1.0 - p)) / max(b, 1e-9)
+
+    def adaptive_risk_fraction(self, win_prob: float = None) -> float:
         """Per-trade risk fraction throttled by the *measured* edge (fractional
         Kelly) plus a drawdown brake.
 
@@ -186,6 +198,10 @@ class RiskManager:
         bet KELLY_FRACTION of it (half-Kelly default) computed from the rolling
         last KELLY_LOOKBACK_TRADES. No measured edge → risk floor. Until enough
         trades exist the warmup cap applies — the edge must be proven first.
+
+        When the meta-model supplies a per-trade ``win_prob``, Kelly runs on
+        THAT probability (the trade-specific edge) — but bounded at twice the
+        rolling fraction so model optimism can never outrun realized results.
         """
         base = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         if not bool(getattr(cfg, "ADAPTIVE_KELLY_ENABLED", True)):
@@ -194,26 +210,28 @@ class RiskManager:
         cap = float(getattr(cfg, "KELLY_RISK_CAP", 0.05))
         lookback = int(getattr(cfg, "KELLY_LOOKBACK_TRADES", 30))
         min_trades = int(getattr(cfg, "KELLY_MIN_TRADES", 15))
+        frac = float(getattr(cfg, "KELLY_FRACTION", 0.5))
 
         rows = self.trade_history[-lookback:]
+        payoff = self._recent_payoff(rows)
         if len(rows) < min_trades:
             risk = min(base, float(getattr(cfg, "KELLY_WARMUP_RISK", 0.02)))
         else:
             pnls = [float(t.get("pnl", 0) or 0) for t in rows]
             wins = [p for p in pnls if p > 0]
-            losses = [p for p in pnls if p <= 0]
             if not wins:
                 risk = floor
-            elif not losses:
+            elif payoff is None:          # no losses in window
                 risk = cap
             else:
-                p = len(wins) / len(pnls)
-                b = (sum(wins) / len(wins)) / abs(sum(losses) / len(losses))
-                f_star = (b * p - (1.0 - p)) / max(b, 1e-9)
-                if f_star <= 0:
-                    risk = floor          # no measured edge -> minimum risk
-                else:
-                    risk = f_star * float(getattr(cfg, "KELLY_FRACTION", 0.5))
+                f_star = self._kelly(len(wins) / len(pnls), payoff)
+                risk = floor if f_star <= 0 else f_star * frac
+
+        if win_prob is not None and bool(getattr(cfg, "META_KELLY_SIZING", True)):
+            b = payoff if payoff is not None else 1.4   # synth-calibrated default
+            f_trade = self._kelly(float(win_prob), b)
+            f_trade = floor if f_trade <= 0 else f_trade * frac
+            risk = min(f_trade, max(risk * 2.0, floor))
 
         dd = (self.peak_capital - self.capital) / max(self.peak_capital, 1e-9)
         if dd >= float(getattr(cfg, "KELLY_DD_BRAKE", 0.12)):

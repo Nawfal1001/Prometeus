@@ -385,6 +385,15 @@ def reload_from_sources():
     KELLY_WARMUP_RISK = get_float("KELLY_WARMUP_RISK", 0.02)
     KELLY_DD_BRAKE = get_float("KELLY_DD_BRAKE", 0.12)
     KELLY_DD_BRAKE_FACTOR = get_float("KELLY_DD_BRAKE_FACTOR", 0.5)
+    # Meta-labeling: a second-stage model scores each primary signal with the
+    # probability that the trade (live ATR exit geometry) wins. Below the gate
+    # the trade is skipped; above it the probability drives per-trade Kelly.
+    global META_FILTER_ENABLED, META_MIN_WIN_PROB, META_KELLY_SIZING, META_TEST_FRACTION, META_MODEL_MAX_AGE_HOURS
+    META_FILTER_ENABLED = get_bool("META_FILTER_ENABLED", "true")
+    META_MIN_WIN_PROB = get_float("META_MIN_WIN_PROB", 0.55)
+    META_KELLY_SIZING = get_bool("META_KELLY_SIZING", "true")
+    META_TEST_FRACTION = get_float("META_TEST_FRACTION", 0.2)
+    META_MODEL_MAX_AGE_HOURS = get_float("META_MODEL_MAX_AGE_HOURS", 24)
     OPTUNA_DIRECTION = "maximize"
     OPTUNA_TARGET_CAPITAL = get_float("OPTUNA_TARGET_CAPITAL", 150.0)
     # Robustness penalty folded into the objective: reward configs that profit

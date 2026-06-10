@@ -136,6 +136,22 @@ class PrometheusEngine:
     def arm_next_signal(self, enabled: bool = True) -> dict:
         return self.orders.arm_next_signal(enabled)
 
+    def _get_meta(self):
+        if getattr(self, "_meta_model", None) is None:
+            try:
+                from core.models.meta_model import MetaLabelModel
+                self._meta_model = MetaLabelModel()
+            except Exception as e:
+                logger.warning(f"[Engine] meta model init failed: {e}")
+                self._meta_model = False    # don't retry every bar
+        return self._meta_model or None
+
+    def _meta_win_prob(self, df, direction: int):
+        meta = self._get_meta()
+        if meta is None:
+            return None
+        return meta.predict_win_prob(df, direction)
+
     def _rotator_enabled(self) -> bool:
         return bool(getattr(cfg, "AUTO_SYMBOL_SELECTION", False) and cfg.TRADING_MODE == "paper")
 
@@ -261,6 +277,18 @@ class PrometheusEngine:
             "recent_high": recent_high,
             "recent_low": recent_low,
         })
+        # Meta-labeling gate: score the primary signal with P(win | features,
+        # direction, live exit geometry). Low-probability entries are skipped;
+        # the probability also drives per-trade Kelly sizing downstream.
+        if signal.get("trade") and bool(getattr(cfg, "META_FILTER_ENABLED", True)):
+            wp = self._meta_win_prob(df, int(signal.get("direction", 1) or 1))
+            if wp is not None:
+                signal["win_prob"] = round(wp, 4)
+                gate = float(getattr(cfg, "META_MIN_WIN_PROB", 0.55))
+                if wp < gate:
+                    signal["trade"] = False
+                    signal["reason"] = "meta_filter"
+                    journal.add("decision", f"{symbol} meta filter blocked trade win_prob={wp:.3f} < {gate}", symbol=symbol, win_prob=wp, gate=gate)
         layer_scores = {
             "regime": float(regime_result.get("score", 0.0) or 0.0),
             "sentiment": sentiment_score,
@@ -430,6 +458,9 @@ class PrometheusEngine:
                         # websocket/HTTP server -- a forced retrain on every
                         # auto-restart was pegging CPU and stalling health checks.
                         await asyncio.to_thread(model.train_if_stale, df, 6)
+                    meta = self._get_meta()
+                    if meta is not None:
+                        await asyncio.to_thread(meta.train_if_stale, df, float(getattr(cfg, "META_MODEL_MAX_AGE_HOURS", 24)))
                 self._xgb_trained_on_start = True
             except Exception as e:
                 logger.warning(f"[Engine] XGBoost startup training failed: {e}")
@@ -475,6 +506,9 @@ class PrometheusEngine:
                                 # doesn't block the event loop / websockets.
                                 await asyncio.to_thread(model.train_if_stale, df, 6)
                                 journal.add("ml", f"XGBoost retrain checked symbol={train_symbol}", symbol=train_symbol)
+                        meta = self._get_meta()
+                        if meta is not None and df is not None and not df.empty:
+                            await asyncio.to_thread(meta.train_if_stale, df, float(getattr(cfg, "META_MODEL_MAX_AGE_HOURS", 24)))
                     except Exception as e:
                         logger.warning(f"[Engine] XGBoost retrain check failed: {e}")
                         journal.add("ml", f"XGBoost retrain check failed: {e}")
@@ -540,6 +574,7 @@ class PrometheusEngine:
                 "side": sig.get("side"),
                 "reason": sig.get("reason"),
                 "confidence": sig.get("confidence"),
+                "win_prob": sig.get("win_prob"),
                 "fusion_score": sig.get("fusion_score"),
                 "rr_ratio": sig.get("rr_ratio"),
                 "price": r.get("price"),

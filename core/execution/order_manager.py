@@ -198,9 +198,13 @@ class OrderManager:
                 "open_trades": len(self.open_trades)}
 
     def _sizing_from_signal(self, signal: dict, price: float):
+        win_prob = signal.get("win_prob")
+        meta_sizing = win_prob is not None and bool(getattr(cfg, "META_KELLY_SIZING", True))
         notional = float(signal.get("notional", signal.get("position_size", 0.0)) or 0.0)
         qty = float(signal.get("qty", 0.0) or 0.0)
-        if notional > 0:
+        # A meta-scored signal is re-sized here with per-trade Kelly — the
+        # notional fusion computed didn't know the trade's win probability yet.
+        if notional > 0 and not meta_sizing:
             if qty <= 0 and price > 0:
                 qty = notional / price
             return notional, qty, float(signal.get("risk_amount", 0.0) or 0.0), float(signal.get("base_margin", 0.0) or 0.0)
@@ -210,7 +214,7 @@ class OrderManager:
         confidence_mult = float(signal.get("confidence_mult", 1.0) or 1.0)
         sizing = size_from_atr_risk(
             capital=float(self.risk.capital),
-            risk_fraction=self.risk.adaptive_risk_fraction(),
+            risk_fraction=self.risk.adaptive_risk_fraction(win_prob=float(win_prob) if meta_sizing else None),
             leverage=float(getattr(cfg, "LEVERAGE", 3)),
             atr_norm=atr_norm,
             sl_mult=sl_mult,

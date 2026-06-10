@@ -49,6 +49,16 @@ def _load_rows(path: Path) -> list[dict]:
     return []
 
 
+@router.get("/api/meta/status")
+async def meta_status():
+    """Meta-label model status + holdout metrics for the dashboard."""
+    try:
+        from core.models.meta_model import MetaLabelModel
+        return MetaLabelModel().status()
+    except Exception as e:
+        return JSONResponse({"loaded": False, "error": str(e)}, status_code=200)
+
+
 @router.get("/api/performance")
 async def performance(source: str = "paper", include_live: bool = True, mode: str = "all"):
     """Performance breakdown for a trade ledger.

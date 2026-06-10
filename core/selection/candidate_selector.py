@@ -31,6 +31,15 @@ class CandidateSelector:
 
     @staticmethod
     def _norm_confidence(signal) -> float:
+        # Meta-model win probability is the best confidence estimate when
+        # present — it is calibrated against actual trade outcomes, unlike the
+        # fusion-score-derived percentage.
+        wp = signal.get("win_prob")
+        if wp is not None:
+            try:
+                return max(0.0, min(1.0, float(wp)))
+            except (TypeError, ValueError):
+                pass
         c = float(signal.get("confidence", 0.0) or 0.0)
         if c > 1.0:          # 0-100 percentage -> 0-1
             c /= 100.0
