@@ -600,9 +600,21 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         rr_quality = min(max((rr - 1.0) / 2.0, 0.0), 1.0) if rr else 0.0
         return float(edge * 0.45 + abs_score * 0.25 + vol_quality * 0.15 + vol_participation * 0.10 + rr_quality * 0.05)
 
+    def _order_entry_candidates(self, candidates, capital):
+        """Rank tradable candidates best-first for this bar. Base engine ranks
+        by the internal candidate score; the aligned (rotator) engine overrides
+        this with the live CandidateSelector + ROTATOR_MIN_SCORE filter.
+        Returns a list of (score, symbol, sig, row)."""
+        return sorted(candidates, key=lambda x: x[0], reverse=True)
+
     def _simulate_competing(self, data_by_symbol: dict):
-        # Exits via the LIVE AdvancedExitManager (see backtest.lifecycle) so
-        # multi-symbol backtests share live exit semantics + accounting.
+        # Multi-position portfolio sim on the LIVE exit engine + live caps, so
+        # the optimizer can tune concurrency the same way it runs in paper:
+        #   MAX_CONCURRENT_PAPER_TRADES  total open positions
+        #   MAX_SAME_DIRECTION_TRADES    correlated same-side cap (0 = off)
+        #   MAX_AGGREGATE_LEVERAGE       sum(open notional) <= capital * cap
+        #   SYMBOL_COOLDOWN_BARS         per-symbol re-entry cooldown
+        #   one position per symbol, MAX_TRADES_PER_DAY, daily drawdown gate
         from backtest.lifecycle import TradeSimulator, position_notional
         sim = TradeSimulator(taker_fee=TAKER_FEE, slippage=SLIPPAGE)
         capital = float(getattr(cfg, "INITIAL_CAPITAL", 50))
@@ -610,18 +622,20 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         risk_frac = float(getattr(cfg, "MAX_RISK_PER_TRADE", 0.05))
         max_daily_dd = float(getattr(cfg, "MAX_DAILY_DRAWDOWN", 0.08))
         max_tpd = int(getattr(cfg, "MAX_TRADES_PER_DAY", 6))
+        max_concurrent = max(1, int(getattr(cfg, "MAX_CONCURRENT_PAPER_TRADES", 1)))
+        max_same_dir = int(getattr(cfg, "MAX_SAME_DIRECTION_TRADES", 0))
+        max_agg_lev = float(getattr(cfg, "MAX_AGGREGATE_LEVERAGE", 0) or 0)
+        cooldown_bars = int(round(float(getattr(cfg, "SYMBOL_COOLDOWN_BARS", 1.0))))
         min_len = min(len(df) for df in data_by_symbol.values())
-        trade = None
-        active_symbol = None
-        entry_score = 0.0
-        entry_capital = capital
-        entry_regime = None
+
+        open_trades = {}          # symbol -> trade dict (+ entry metadata)
+        cooldowns = {}            # symbol -> bars remaining
         trades = []
         trades_today = 0
         day_start_cap = capital
         last_day = -1
         consec_losses = 0
-        cooldown = 0
+        global_pause = 0          # bars to stand fully aside after a loss streak
         selection_stats = {s: {"selected": 0, "trades": 0, "wins": 0, "pnl": 0.0} for s in data_by_symbol}
         MAX_CONSEC = int(getattr(cfg, "MAX_CONSEC_LOSSES", 5))
 
@@ -632,8 +646,10 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                 day_start_cap = capital
                 last_day = day
 
-            if trade is not None:
-                row = data_by_symbol[active_symbol].iloc[i]
+            # 1) advance every open position one bar
+            for symbol in list(open_trades.keys()):
+                trade = open_trades[symbol]
+                row = data_by_symbol[symbol].iloc[i]
                 events, pnl_delta, closed = sim.step(
                     trade, high=float(row["high"]), low=float(row["low"]),
                     close=float(row["close"]), bar_index=i)
@@ -643,7 +659,7 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                 if closed:
                     total_pnl = float(trade["realized_pnl"])
                     exit_type = trade.get("exit_type") or "CLOSED"
-                    st = selection_stats[active_symbol]
+                    st = selection_stats[symbol]
                     st["trades"] += 1
                     st["pnl"] = round(float(st["pnl"]) + float(total_pnl), 6)
                     if total_pnl > 0:
@@ -652,53 +668,77 @@ class MultiSymbolBacktestEngine(BacktestEngine):
                     elif exit_type in ("TRAIL", "EARLY_KILL"):
                         consec_losses += 1
                         if consec_losses >= MAX_CONSEC:
-                            cooldown = 5
+                            global_pause = 5
                             consec_losses = 0
                     entry_px = float(trade["entry_price"])
                     exit_px_v = float(trade.get("exit_price") or row["close"])
                     raw_ret = (exit_px_v - entry_px) / entry_px * trade["direction"]
-                    trades.append({"symbol": active_symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade["direction"] == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(entry_capital, 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(float(trade["notional"]), 6), "exit_type": exit_type, "tp1_hit": bool(trade.get("tp1_hit")), "capital": round(capital, 6), "bar": i, "entry_bar": int(trade["entry_bar"]), "fusion_score": entry_score, "regime": entry_regime})
-                    trade = None
-                    active_symbol = None
-                    if capital <= 0:
-                        break
+                    trades.append({"symbol": symbol, "entry": round(entry_px, 4), "exit": round(exit_px_v, 4), "side": "long" if trade["direction"] == 1 else "short", "pnl": round(total_pnl, 6), "pnl_pct": round((total_pnl / max(trade["entry_capital"], 1e-9)) * 100, 3), "raw_return_pct": round(raw_ret * 100, 3), "notional": round(float(trade["notional"]), 6), "exit_type": exit_type, "tp1_hit": bool(trade.get("tp1_hit")), "capital": round(capital, 6), "bar": i, "entry_bar": int(trade["entry_bar"]), "fusion_score": trade["entry_score"], "regime": trade["entry_regime"]})
+                    del open_trades[symbol]
+                    if cooldown_bars > 0:
+                        cooldowns[symbol] = cooldown_bars
+            if capital <= 0:
+                break
+
+            # 2) decay cooldowns / global pause
+            for s in list(cooldowns.keys()):
+                cooldowns[s] -= 1
+                if cooldowns[s] <= 0:
+                    del cooldowns[s]
+            if global_pause > 0:
+                global_pause -= 1
                 continue
 
-            if cooldown > 0:
-                cooldown -= 1
-                continue
+            # 3) entry-side daily gates
             if trades_today >= max_tpd:
                 continue
             if (day_start_cap - capital) / (day_start_cap + 1e-9) >= max_daily_dd:
                 continue
+            if len(open_trades) >= max_concurrent:
+                continue
 
+            # 4) build candidates for symbols that are free to enter
             candidates = []
             for symbol, df in data_by_symbol.items():
+                if symbol in open_trades or symbol in cooldowns:
+                    continue
                 row = df.iloc[i]
                 sig = self.compute_signal(row, current_capital=capital)
                 if not sig.get("trade"):
                     continue
-                score = self._candidate_score(sig, row)
-                candidates.append((score, symbol, sig, row))
+                candidates.append((self._candidate_score(sig, row), symbol, sig, row))
             if not candidates:
                 continue
-            score, symbol, sig, row = max(candidates, key=lambda x: x[0])
-            selection_stats[symbol]["selected"] += 1
-            active_symbol = symbol
-            trade_side = int(sig["direction"])
-            entry_score = float(sig.get("fusion_score", 0))
-            entry_regime = label_regime(row)   # regime tag captured AT ENTRY
-            entry_capital = capital
-            an = float(sig.get("atr_norm", 0.003))
-            sl_mult = float(sig.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.2)))
-            entry_notional = position_notional(
-                capital=entry_capital, risk_fraction=risk_frac, atr_norm=an,
-                sl_mult=sl_mult, leverage=leverage,
-                confidence_mult=float(sig.get("confidence_mult", 1.0) or 1.0),
-            )
-            trade = sim.open(entry_close=float(row["close"]), direction=trade_side,
-                             atr_norm=an, notional=entry_notional, bar_index=i,
-                             recent_high=float(row["high"]), recent_low=float(row["low"]))
-            capital += -entry_notional * TAKER_FEE   # entry fee hits equity now
-            trades_today += 1
+
+            # 5) fill open slots from the ranked candidates, respecting caps
+            open_notional = sum(float(t["notional"]) for t in open_trades.values())
+            for ranked in self._order_entry_candidates(candidates, capital):
+                if len(open_trades) >= max_concurrent or trades_today >= max_tpd:
+                    break
+                score, symbol, sig, row = ranked
+                trade_side = int(sig["direction"])
+                if max_same_dir > 0:
+                    same = sum(1 for t in open_trades.values() if t["direction"] == trade_side)
+                    if same >= max_same_dir:
+                        continue
+                an = float(sig.get("atr_norm", 0.003))
+                sl_mult = float(sig.get("sl_mult", getattr(cfg, "ATR_SL_MULT", 1.2)))
+                entry_notional = position_notional(
+                    capital=capital, risk_fraction=risk_frac, atr_norm=an,
+                    sl_mult=sl_mult, leverage=leverage,
+                    confidence_mult=float(sig.get("confidence_mult", 1.0) or 1.0),
+                )
+                if max_agg_lev > 0 and open_notional + entry_notional > capital * max_agg_lev:
+                    continue
+                trade = sim.open(entry_close=float(row["close"]), direction=trade_side,
+                                 atr_norm=an, notional=entry_notional, bar_index=i,
+                                 recent_high=float(row["high"]), recent_low=float(row["low"]))
+                trade["entry_score"] = float(sig.get("fusion_score", 0))
+                trade["entry_regime"] = label_regime(row)
+                trade["entry_capital"] = capital
+                open_trades[symbol] = trade
+                open_notional += entry_notional
+                capital += -entry_notional * TAKER_FEE
+                selection_stats[symbol]["selected"] += 1
+                trades_today += 1
         return trades, capital, selection_stats

@@ -34,7 +34,7 @@ _OPT_KEYS = [
     "REGIME_GATE_BYPASS_SCORE", "XGB_ENTRY_WEIGHT",
     "BREAKEVEN_BUFFER_PCT", "EXIT_SIGNAL_FLIP_MIN_SCORE", "EXIT_REGIME_FLIP_MIN_SCORE",
     "PROFIT_RATCHET_ATR_MULT", "EARLY_KILL_BARS", "EARLY_KILL_SL_PCT",
-    "MAX_CONCURRENT_PAPER_TRADES",
+    "MAX_CONCURRENT_PAPER_TRADES", "MAX_SAME_DIRECTION_TRADES",
 ]
 
 SEED_PARAMS = [
@@ -392,7 +392,12 @@ class PrometheusOptimizer:
 
         if "risk" in groups:
             params["MAX_RISK_PER_TRADE"] = trial.suggest_float("MAX_RISK_PER_TRADE", 0.02, 0.06, step=0.005)
-            params["MAX_CONCURRENT_PAPER_TRADES"] = trial.suggest_int("MAX_CONCURRENT_PAPER_TRADES", 2, 8)
+            # Concurrency is now honored by the multi-symbol backtest, so the
+            # optimizer can trade off more parallel positions (faster compounding)
+            # against the correlation risk of holding several at once.
+            mc = trial.suggest_int("MAX_CONCURRENT_PAPER_TRADES", 1, 8)
+            params["MAX_CONCURRENT_PAPER_TRADES"] = mc
+            params["MAX_SAME_DIRECTION_TRADES"] = trial.suggest_int("MAX_SAME_DIRECTION_TRADES", 1, mc)
 
         if "duration" in groups:
             params["MAX_TRADE_DURATION_BARS"] = trial.suggest_int("MAX_TRADE_DURATION_BARS", 8, 54)
