@@ -277,6 +277,31 @@ class PrometheusEngine:
             "recent_high": recent_high,
             "recent_low": recent_low,
         })
+        # BTC-lead gate (learned hypothesis): alt entries opposed to BTC's
+        # recent momentum get the learned penalty; if the penalized score drops
+        # under the fusion threshold the trade is skipped. Inactive until the
+        # profile is learned AND statistically significant (penalty < 1).
+        ref_symbol = str(getattr(cfg, "BTC_LEAD_REF_SYMBOL", "BTC/USDT"))
+        if symbol == ref_symbol:
+            try:
+                lb = int(getattr(cfg, "BTC_LEAD_LOOKBACK", 6))
+                chg = float(df["close"].pct_change(lb).iloc[-1])
+                self._btc_mom = 1 if chg > 0 else -1 if chg < 0 else 0
+            except Exception:
+                self._btc_mom = 0
+        elif signal.get("trade") and int(getattr(self, "_btc_mom", 0) or 0) != 0:
+            try:
+                from core.analytics.edge_profiles import btc_opposition_penalty
+                pen = btc_opposition_penalty()
+                if pen < 1.0 and int(signal.get("direction", 0)) == -int(self._btc_mom):
+                    signal["btc_opposed"] = True
+                    signal["btc_penalty"] = round(pen, 4)
+                    if abs(float(signal.get("fusion_score", 0) or 0)) * pen < float(cfg.FUSION_THRESHOLD):
+                        signal["trade"] = False
+                        signal["reason"] = "btc_lead_gate"
+                        journal.add("decision", f"{symbol} blocked: opposes BTC momentum (penalty={pen:.2f})", symbol=symbol, btc_mom=int(self._btc_mom), penalty=pen)
+            except Exception:
+                pass
         # Meta-labeling gate: score the primary signal with P(win | features,
         # direction, live exit geometry). Low-probability entries are skipped;
         # the probability also drives per-trade Kelly sizing downstream.
@@ -544,6 +569,14 @@ class PrometheusEngine:
             self._4h_bias = 0
 
     def _session_multiplier(self) -> float:
+        # Learned (statistically significant) session edge wins over the old
+        # hardcoded guesses; falls back to them until a profile is learned.
+        try:
+            from core.analytics.edge_profiles import get_profiles, session_multiplier
+            if get_profiles() is not None:
+                return session_multiplier()
+        except Exception:
+            pass
         hour = datetime.utcnow().hour
         if 0 <= hour < 7:
             return 0.85

@@ -42,6 +42,7 @@ def _hydrate_env_from_profile(bot_dir: Path) -> dict:
     os.environ.setdefault("PROMETHEUS_TRADES_FILE", str(bot_dir / "trades.json"))
     model_file = profile.get("model_file") or str(bot_dir / "model.pkl")
     os.environ.setdefault("XGB_MODEL_FILE", model_file)
+    os.environ.setdefault("EDGE_PROFILE_FILE", str(bot_dir / "edge_profiles.json"))
 
     symbols = profile.get("symbols") or []
     if isinstance(symbols, str):
@@ -265,8 +266,10 @@ async def _train(bot_dir: Path, profile: dict):
                     feat = compute_features(df.copy())
                     if feat is not None and not feat.empty and len(feat) >= 200:
                         # symbol tag lets the meta-model label per symbol so
-                        # barrier windows never cross concat seams
+                        # barrier windows never cross concat seams; ts column
+                        # preserves timestamps for edge-profile learning
                         feat = feat.assign(symbol=sym)
+                        feat["ts"] = feat.index
                         frames.append(feat)
             except Exception as e:
                 logger.warning(f"[BotRunner:train] {sym} fetch/feature failed: {e}")
@@ -301,6 +304,14 @@ async def _train(bot_dir: Path, profile: dict):
         meta_metrics = await asyncio.to_thread(meta.train, combined, timeframe)
     except Exception as e:
         logger.warning(f"[BotRunner:train] meta-model training failed: {e}")
+
+    # Edge profiles (session edge + BTC lead) learned from the same data; the
+    # bot's EDGE_PROFILE_FILE env isolates the profile per bot.
+    try:
+        from core.analytics.edge_profiles import learn_profiles, save_profiles
+        save_profiles(await asyncio.to_thread(learn_profiles, combined))
+    except Exception as e:
+        logger.warning(f"[BotRunner:train] edge-profile learning failed: {e}")
 
     _write_result({"status": "trained", "ts": time.time(), "rows": int(len(combined)),
                    "symbols": symbols, "timeframe": timeframe,

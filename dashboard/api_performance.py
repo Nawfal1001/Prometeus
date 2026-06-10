@@ -59,6 +59,16 @@ async def meta_status():
         return JSONResponse({"loaded": False, "error": str(e)}, status_code=200)
 
 
+@router.get("/api/edge/status")
+async def edge_status():
+    """Learned edge-profile status (session multipliers, BTC-lead penalty)."""
+    try:
+        from core.analytics.edge_profiles import status
+        return status()
+    except Exception as e:
+        return JSONResponse({"learned": False, "error": str(e)}, status_code=200)
+
+
 @router.get("/api/performance")
 async def performance(source: str = "paper", include_live: bool = True, mode: str = "all"):
     """Performance breakdown for a trade ledger.

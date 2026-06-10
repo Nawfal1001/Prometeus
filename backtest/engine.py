@@ -185,7 +185,7 @@ class BacktestEngine:
         score = float(np.clip(0.40 * es + 0.30 * pvs + 0.20 * np.sign(r6) + 0.10 * rt, -1, 1))
         return (1 if score > 0.20 else -1 if score < -0.20 else 0), score
 
-    def compute_signal(self, row: pd.Series, current_capital: float = None) -> dict:
+    def compute_signal(self, row: pd.Series, current_capital: float = None, btc_mom: int = None) -> dict:
         vol_z = float(row.get("vol_zscore", 0) or 0)
         atr_norm = float(row.get("atr_norm", 0.003) or 0.003)
         if vol_z > float(getattr(cfg, "MAX_VOL_ZSCORE", 3.5)):
@@ -206,6 +206,19 @@ class BacktestEngine:
         # no-trade plateau that broke convergence.
         w_total = max(w_e + w_r, 1e-9)
         fusion_score = float(np.clip((entry_score * w_e + regime_score * w_r) / w_total, -1, 1))
+        # Learned edge profiles — same as live: session multiplier scales the
+        # score by UTC hour; alt entries opposed to BTC momentum get the learned
+        # penalty. Both are 1.0 until learned + statistically significant.
+        try:
+            from core.analytics import edge_profiles as _edge
+            if _edge.get_profiles() is not None:
+                ts = getattr(row, "name", None)
+                if ts is not None and hasattr(ts, "hour"):
+                    fusion_score = float(np.clip(fusion_score * _edge.session_multiplier(int(ts.hour)), -1, 1))
+                if btc_mom is not None and btc_mom != 0 and fusion_score * btc_mom < 0:
+                    fusion_score *= _edge.btc_opposition_penalty()
+        except Exception:
+            pass
         direction = 1 if fusion_score > 0 else -1
         abs_score = abs(fusion_score)
         side = "long" if direction == 1 else "short"
@@ -627,6 +640,13 @@ class MultiSymbolBacktestEngine(BacktestEngine):
         max_agg_lev = float(getattr(cfg, "MAX_AGGREGATE_LEVERAGE", 0) or 0)
         cooldown_bars = int(round(float(getattr(cfg, "SYMBOL_COOLDOWN_BARS", 1.0))))
         min_len = min(len(df) for df in data_by_symbol.values())
+        # BTC-lead context for the learned edge gate (same as live): per-bar
+        # sign of the reference symbol's recent momentum, None if not scanned.
+        ref_symbol = str(getattr(cfg, "BTC_LEAD_REF_SYMBOL", "BTC/USDT"))
+        btc_mom_arr = None
+        if ref_symbol in data_by_symbol:
+            lb = int(getattr(cfg, "BTC_LEAD_LOOKBACK", 6))
+            btc_mom_arr = np.sign(data_by_symbol[ref_symbol]["close"].pct_change(lb).fillna(0.0).to_numpy())
 
         open_trades = {}          # symbol -> trade dict (+ entry metadata)
         cooldowns = {}            # symbol -> bars remaining
@@ -699,11 +719,13 @@ class MultiSymbolBacktestEngine(BacktestEngine):
 
             # 4) build candidates for symbols that are free to enter
             candidates = []
+            bar_btc_mom = int(btc_mom_arr[i]) if btc_mom_arr is not None else None
             for symbol, df in data_by_symbol.items():
                 if symbol in open_trades or symbol in cooldowns:
                     continue
                 row = df.iloc[i]
-                sig = self.compute_signal(row, current_capital=capital)
+                sig = self.compute_signal(row, current_capital=capital,
+                                          btc_mom=None if symbol == ref_symbol else bar_btc_mom)
                 if not sig.get("trade"):
                     continue
                 candidates.append((self._candidate_score(sig, row), symbol, sig, row))
