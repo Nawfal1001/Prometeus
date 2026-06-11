@@ -1,0 +1,2777 @@
+{
+  "best_value": 1.2905,
+  "best_params": {
+    "WEIGHT_REGIME": 0.2191,
+    "WEIGHT_SENTIMENT": 0.071,
+    "WEIGHT_WHALE": 0.0565,
+    "WEIGHT_LIQUIDATION": 0.1404,
+    "WEIGHT_ENTRY": 0.513,
+    "XGB_ENTRY_WEIGHT": 2.0,
+    "ATR_SL_MULT": 1.65,
+    "ATR_TP1_MULT": 3.0,
+    "ATR_TP2_MULT": 6.5,
+    "MIN_RR_RATIO": 2.3,
+    "TP1_EXIT_PCT": 0.8,
+    "TP2_EXIT_PCT": 0.2,
+    "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.1,
+    "EARLY_KILL_BARS": 4,
+    "EARLY_KILL_SL_PCT": 0.6,
+    "FUSION_THRESHOLD": 0.32,
+    "REGIME_BLOCK_THRESHOLD": 0.16,
+    "HTF_BLOCK_THRESHOLD": 0.28,
+    "ROTATOR_MIN_SCORE": 0.18,
+    "REGIME_GATE_BYPASS_SCORE": 0.25,
+    "MAX_RISK_PER_TRADE": 0.025,
+    "MAX_CONCURRENT_PAPER_TRADES": 1,
+    "MAX_SAME_DIRECTION_TRADES": 1,
+    "MAX_TRADE_DURATION_BARS": 33
+  },
+  "best_metric": "target_150",
+  "mode": "compete",
+  "n_trials": 14,
+  "trial_results": [
+    {
+      "trial": 0,
+      "score": 1.019,
+      "params": {
+        "WEIGHT_REGIME": 0.18,
+        "WEIGHT_SENTIMENT": 0.12,
+        "WEIGHT_WHALE": 0.1,
+        "WEIGHT_LIQUIDATION": 0.25,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 3.0,
+        "ATR_SL_MULT": 2.5,
+        "ATR_TP1_MULT": 2.4,
+        "ATR_TP2_MULT": 6.5,
+        "MIN_RR_RATIO": 2.5,
+        "TP1_EXIT_PCT": 0.15,
+        "TP2_EXIT_PCT": 0.85,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.2,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.19,
+        "REGIME_BLOCK_THRESHOLD": 0.25,
+        "HTF_BLOCK_THRESHOLD": 0.2,
+        "ROTATOR_MIN_SCORE": 0.28,
+        "REGIME_GATE_BYPASS_SCORE": 0.45,
+        "MAX_RISK_PER_TRADE": 0.05,
+        "MAX_CONCURRENT_PAPER_TRADES": 8,
+        "MAX_SAME_DIRECTION_TRADES": 6,
+        "MAX_TRADE_DURATION_BARS": 84
+      },
+      "metrics": {
+        "win_rate": 0.7232,
+        "profit_factor": 4.1,
+        "sharpe": 20.87,
+        "total_return": 16.6456,
+        "max_drawdown": 0.1746,
+        "total_trades": 112,
+        "final_capital": 882.28,
+        "tp1_hit_rate": 0.7232,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 54,
+            "trades": 53,
+            "wins": 42,
+            "pnl": 646.127396
+          },
+          "ETH/USDT": {
+            "selected": 59,
+            "trades": 59,
+            "wins": 39,
+            "pnl": 186.151654
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.641544,
+        "ret_skew": -0.3281,
+        "ret_kurtosis": 1.647,
+        "n_returns": 112,
+        "window_returns": [],
+        "bucket_returns": [
+          0.487057,
+          0.688889,
+          0.175519,
+          0.183122,
+          1.099522,
+          0.556087,
+          -0.654896,
+          2.30281,
+          2.775838,
+          0.935872,
+          2.182595,
+          5.913165
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 86,
+            "win_rate": 0.7674,
+            "expectancy": 8.989444,
+            "total_pnl": 773.0922,
+            "profit_factor": 6.051
+          },
+          "volatile": {
+            "trades": 8,
+            "win_rate": 0.875,
+            "expectancy": 11.585715,
+            "total_pnl": 92.6857,
+            "profit_factor": 20.596
+          },
+          "chop": {
+            "trades": 18,
+            "win_rate": 0.4444,
+            "expectancy": -1.861047,
+            "total_pnl": -33.4988,
+            "profit_factor": 0.696
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 1,
+      "score": 0.9,
+      "params": {
+        "WEIGHT_REGIME": 0.18,
+        "WEIGHT_SENTIMENT": 0.12,
+        "WEIGHT_WHALE": 0.1,
+        "WEIGHT_LIQUIDATION": 0.25,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 5.0,
+        "ATR_SL_MULT": 1.2,
+        "ATR_TP1_MULT": 1.5,
+        "ATR_TP2_MULT": 3.0,
+        "MIN_RR_RATIO": 2.5,
+        "TP1_EXIT_PCT": 0.65,
+        "TP2_EXIT_PCT": 0.35,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.3,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.22,
+        "REGIME_BLOCK_THRESHOLD": 0.25,
+        "HTF_BLOCK_THRESHOLD": 0.22,
+        "ROTATOR_MIN_SCORE": 0.15,
+        "REGIME_GATE_BYPASS_SCORE": 0.25,
+        "MAX_RISK_PER_TRADE": 0.025,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 36
+      },
+      "metrics": {
+        "win_rate": 0.7202,
+        "profit_factor": 2.94,
+        "sharpe": 22.39,
+        "total_return": 5.2103,
+        "max_drawdown": 0.1987,
+        "total_trades": 243,
+        "final_capital": 310.52,
+        "tp1_hit_rate": 0.7202,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 116,
+            "trades": 116,
+            "wins": 89,
+            "pnl": 168.350463
+          },
+          "ETH/USDT": {
+            "selected": 128,
+            "trades": 127,
+            "wins": 86,
+            "pnl": 92.166252
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.468989,
+        "ret_skew": -0.6813,
+        "ret_kurtosis": 1.8189,
+        "n_returns": 243,
+        "window_returns": [],
+        "bucket_returns": [
+          0.289854,
+          0.273507,
+          0.103818,
+          -0.160712,
+          0.477438,
+          0.240628,
+          -0.355658,
+          0.88921,
+          0.695117,
+          0.305855,
+          0.588427,
+          1.862849
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 187,
+            "win_rate": 0.7861,
+            "expectancy": 1.405185,
+            "total_pnl": 262.7696,
+            "profit_factor": 4.314
+          },
+          "volatile": {
+            "trades": 10,
+            "win_rate": 0.8,
+            "expectancy": 1.659247,
+            "total_pnl": 16.5925,
+            "profit_factor": 7.038
+          },
+          "chop": {
+            "trades": 46,
+            "win_rate": 0.4348,
+            "expectancy": -0.409681,
+            "total_pnl": -18.8453,
+            "profit_factor": 0.64
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 2,
+      "score": 0.8405,
+      "params": {
+        "WEIGHT_REGIME": 0.18,
+        "WEIGHT_SENTIMENT": 0.1,
+        "WEIGHT_WHALE": 0.1,
+        "WEIGHT_LIQUIDATION": 0.27,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 7.0,
+        "ATR_SL_MULT": 1.0,
+        "ATR_TP1_MULT": 1.4,
+        "ATR_TP2_MULT": 2.8,
+        "MIN_RR_RATIO": 2.0,
+        "TP1_EXIT_PCT": 0.7,
+        "TP2_EXIT_PCT": 0.3,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.65,
+        "FUSION_THRESHOLD": 0.18,
+        "REGIME_BLOCK_THRESHOLD": 0.22,
+        "HTF_BLOCK_THRESHOLD": 0.2,
+        "ROTATOR_MIN_SCORE": 0.12,
+        "REGIME_GATE_BYPASS_SCORE": 0.5,
+        "MAX_RISK_PER_TRADE": 0.05,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 30
+      },
+      "metrics": {
+        "win_rate": 0.6976,
+        "profit_factor": 2.44,
+        "sharpe": 20.88,
+        "total_return": 4.6731,
+        "max_drawdown": 0.217,
+        "total_trades": 291,
+        "final_capital": 283.66,
+        "tp1_hit_rate": 0.6976,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 137,
+            "trades": 137,
+            "wins": 101,
+            "pnl": 152.997088
+          },
+          "ETH/USDT": {
+            "selected": 155,
+            "trades": 154,
+            "wins": 102,
+            "pnl": 80.659406
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.399781,
+        "ret_skew": -0.5956,
+        "ret_kurtosis": 1.6589,
+        "n_returns": 291,
+        "window_returns": [],
+        "bucket_returns": [
+          0.292998,
+          0.255572,
+          0.069567,
+          -0.02241,
+          0.422314,
+          0.232342,
+          -0.424183,
+          0.789915,
+          0.816988,
+          0.205212,
+          0.580398,
+          1.454416
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 213,
+            "win_rate": 0.7465,
+            "expectancy": 1.042002,
+            "total_pnl": 221.9464,
+            "profit_factor": 3.207
+          },
+          "volatile": {
+            "trades": 16,
+            "win_rate": 0.875,
+            "expectancy": 1.692984,
+            "total_pnl": 27.0877,
+            "profit_factor": 8.773
+          },
+          "chop": {
+            "trades": 62,
+            "win_rate": 0.4839,
+            "expectancy": -0.248027,
+            "total_pnl": -15.3776,
+            "profit_factor": 0.736
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 3,
+      "score": 0.8994,
+      "params": {
+        "WEIGHT_REGIME": 0.2,
+        "WEIGHT_SENTIMENT": 0.1,
+        "WEIGHT_WHALE": 0.08,
+        "WEIGHT_LIQUIDATION": 0.27,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 8.0,
+        "ATR_SL_MULT": 1.1,
+        "ATR_TP1_MULT": 1.6,
+        "ATR_TP2_MULT": 3.5,
+        "MIN_RR_RATIO": 2.8,
+        "TP1_EXIT_PCT": 0.6,
+        "TP2_EXIT_PCT": 0.4,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.35,
+        "EARLY_KILL_BARS": 3,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.26,
+        "REGIME_BLOCK_THRESHOLD": 0.28,
+        "HTF_BLOCK_THRESHOLD": 0.24,
+        "ROTATOR_MIN_SCORE": 0.2,
+        "REGIME_GATE_BYPASS_SCORE": 0.65,
+        "MAX_RISK_PER_TRADE": 0.025,
+        "MAX_CONCURRENT_PAPER_TRADES": 2,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 40
+      },
+      "metrics": {
+        "win_rate": 0.6891,
+        "profit_factor": 3.08,
+        "sharpe": 22.27,
+        "total_return": 6.2459,
+        "max_drawdown": 0.1992,
+        "total_trades": 238,
+        "final_capital": 362.29,
+        "tp1_hit_rate": 0.6891,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 113,
+            "trades": 113,
+            "wins": 80,
+            "pnl": 178.39084
+          },
+          "ETH/USDT": {
+            "selected": 126,
+            "trades": 125,
+            "wins": 84,
+            "pnl": 133.903202
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.471196,
+        "ret_skew": -0.4065,
+        "ret_kurtosis": 1.5523,
+        "n_returns": 238,
+        "window_returns": [],
+        "bucket_returns": [
+          0.330864,
+          0.342922,
+          0.003531,
+          -0.036526,
+          0.378816,
+          0.316914,
+          -0.180457,
+          1.010327,
+          0.684864,
+          0.280453,
+          0.766505,
+          2.347666
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 177,
+            "win_rate": 0.7288,
+            "expectancy": 1.62309,
+            "total_pnl": 287.287,
+            "profit_factor": 3.95
+          },
+          "volatile": {
+            "trades": 16,
+            "win_rate": 0.8125,
+            "expectancy": 1.874143,
+            "total_pnl": 29.9863,
+            "profit_factor": 5.148
+          },
+          "chop": {
+            "trades": 45,
+            "win_rate": 0.4889,
+            "expectancy": -0.110649,
+            "total_pnl": -4.9792,
+            "profit_factor": 0.89
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 4,
+      "score": 0.5686,
+      "params": {
+        "WEIGHT_REGIME": 0.147,
+        "WEIGHT_SENTIMENT": 0.0883,
+        "WEIGHT_WHALE": 0.1092,
+        "WEIGHT_LIQUIDATION": 0.2074,
+        "WEIGHT_ENTRY": 0.4482,
+        "XGB_ENTRY_WEIGHT": 5.0,
+        "ATR_SL_MULT": 1.15,
+        "ATR_TP1_MULT": 1.55,
+        "ATR_TP2_MULT": 4.0,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.65,
+        "TP2_EXIT_PCT": 0.35,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.15000000000000002,
+        "EARLY_KILL_BARS": 3,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.060000000000000005,
+        "REGIME_BLOCK_THRESHOLD": 0.28,
+        "HTF_BLOCK_THRESHOLD": 0.14,
+        "ROTATOR_MIN_SCORE": 0.02,
+        "REGIME_GATE_BYPASS_SCORE": 0.7,
+        "MAX_RISK_PER_TRADE": 0.06,
+        "MAX_CONCURRENT_PAPER_TRADES": 7,
+        "MAX_SAME_DIRECTION_TRADES": 3,
+        "MAX_TRADE_DURATION_BARS": 12
+      },
+      "metrics": {
+        "win_rate": 0.6143,
+        "profit_factor": 1.92,
+        "sharpe": 13.34,
+        "total_return": 2.876,
+        "max_drawdown": 0.303,
+        "total_trades": 280,
+        "final_capital": 193.8,
+        "tp1_hit_rate": 0.6071,
+        "time_exit_rate": 0.1214,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 136,
+            "trades": 136,
+            "wins": 87,
+            "pnl": 103.92439
+          },
+          "ETH/USDT": {
+            "selected": 145,
+            "trades": 144,
+            "wins": 85,
+            "pnl": 39.877268
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.268442,
+        "ret_skew": -0.145,
+        "ret_kurtosis": 1.3917,
+        "n_returns": 280,
+        "window_returns": [],
+        "bucket_returns": [
+          -0.084317,
+          0.308126,
+          0.307861,
+          -0.199365,
+          0.141555,
+          0.365998,
+          -0.413177,
+          0.248076,
+          0.658695,
+          0.239798,
+          0.369513,
+          0.93327
+        ],
+        "consistency": 0.875,
+        "regime_breakdown": {
+          "chop": {
+            "trades": 63,
+            "win_rate": 0.4444,
+            "expectancy": -0.255521,
+            "total_pnl": -16.0978,
+            "profit_factor": 0.684
+          },
+          "trend": {
+            "trades": 200,
+            "win_rate": 0.665,
+            "expectancy": 0.728448,
+            "total_pnl": 145.6895,
+            "profit_factor": 2.493
+          },
+          "volatile": {
+            "trades": 17,
+            "win_rate": 0.6471,
+            "expectancy": 0.83588,
+            "total_pnl": 14.21,
+            "profit_factor": 2.646
+          },
+          "_summary": {
+            "regimes_seen": [
+              "chop",
+              "trend",
+              "volatile"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 5,
+      "score": 0.7042,
+      "params": {
+        "WEIGHT_REGIME": 0.2306,
+        "WEIGHT_SENTIMENT": 0.0772,
+        "WEIGHT_WHALE": 0.0595,
+        "WEIGHT_LIQUIDATION": 0.2686,
+        "WEIGHT_ENTRY": 0.3641,
+        "XGB_ENTRY_WEIGHT": 0.0,
+        "ATR_SL_MULT": 2.5500000000000003,
+        "ATR_TP1_MULT": 1.5,
+        "ATR_TP2_MULT": 5.7,
+        "MIN_RR_RATIO": 2.0,
+        "TP1_EXIT_PCT": 0.5,
+        "TP2_EXIT_PCT": 0.5,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 1,
+        "EARLY_KILL_SL_PCT": 0.9,
+        "FUSION_THRESHOLD": 0.26,
+        "REGIME_BLOCK_THRESHOLD": 0.4,
+        "HTF_BLOCK_THRESHOLD": 0.38,
+        "ROTATOR_MIN_SCORE": 0.26,
+        "REGIME_GATE_BYPASS_SCORE": 0.7,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 2,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 23
+      },
+      "metrics": {
+        "win_rate": 0.7487,
+        "profit_factor": 2.45,
+        "sharpe": 16.85,
+        "total_return": 1.7838,
+        "max_drawdown": 0.1281,
+        "total_trades": 199,
+        "final_capital": 139.19,
+        "tp1_hit_rate": 0.7487,
+        "time_exit_rate": 0.0653,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 93,
+            "trades": 93,
+            "wins": 71,
+            "pnl": 49.489729
+          },
+          "ETH/USDT": {
+            "selected": 107,
+            "trades": 106,
+            "wins": 78,
+            "pnl": 39.699546
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.389333,
+        "ret_skew": -0.1859,
+        "ret_kurtosis": 2.2631,
+        "n_returns": 199,
+        "window_returns": [],
+        "bucket_returns": [
+          0.141978,
+          0.180809,
+          0.04177,
+          -0.0327,
+          0.23504,
+          0.03762,
+          -0.1598,
+          0.476075,
+          0.404734,
+          0.020442,
+          0.075656,
+          0.362161
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 142,
+            "win_rate": 0.8239,
+            "expectancy": 0.674851,
+            "total_pnl": 95.8289,
+            "profit_factor": 4.156
+          },
+          "volatile": {
+            "trades": 12,
+            "win_rate": 0.75,
+            "expectancy": 0.645469,
+            "total_pnl": 7.7456,
+            "profit_factor": 3.327
+          },
+          "chop": {
+            "trades": 45,
+            "win_rate": 0.5111,
+            "expectancy": -0.319672,
+            "total_pnl": -14.3852,
+            "profit_factor": 0.484
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 6,
+      "score": 1.0976,
+      "params": {
+        "WEIGHT_REGIME": 0.1654,
+        "WEIGHT_SENTIMENT": 0.0553,
+        "WEIGHT_WHALE": 0.1725,
+        "WEIGHT_LIQUIDATION": 0.2269,
+        "WEIGHT_ENTRY": 0.3798,
+        "XGB_ENTRY_WEIGHT": 2.0,
+        "ATR_SL_MULT": 1.9,
+        "ATR_TP1_MULT": 1.25,
+        "ATR_TP2_MULT": 6.4,
+        "MIN_RR_RATIO": 1.6,
+        "TP1_EXIT_PCT": 0.8,
+        "TP2_EXIT_PCT": 0.2,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.35,
+        "EARLY_KILL_BARS": 1,
+        "EARLY_KILL_SL_PCT": 0.5,
+        "FUSION_THRESHOLD": 0.27,
+        "REGIME_BLOCK_THRESHOLD": 0.32,
+        "HTF_BLOCK_THRESHOLD": 0.32,
+        "ROTATOR_MIN_SCORE": 0.34,
+        "REGIME_GATE_BYPASS_SCORE": 0.2,
+        "MAX_RISK_PER_TRADE": 0.035,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 48
+      },
+      "metrics": {
+        "win_rate": 0.8311,
+        "profit_factor": 3.08,
+        "sharpe": 19.14,
+        "total_return": 2.192,
+        "max_drawdown": 0.0957,
+        "total_trades": 148,
+        "final_capital": 159.6,
+        "tp1_hit_rate": 0.8311,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 58,
+            "trades": 58,
+            "wins": 48,
+            "pnl": 50.825483
+          },
+          "ETH/USDT": {
+            "selected": 91,
+            "trades": 90,
+            "wins": 75,
+            "pnl": 58.773634
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.512871,
+        "ret_skew": -1.0379,
+        "ret_kurtosis": 3.25,
+        "n_returns": 148,
+        "window_returns": [],
+        "bucket_returns": [
+          0.128441,
+          0.170594,
+          0.075685,
+          0.093551,
+          0.119327,
+          0.160491,
+          -0.010422,
+          0.374646,
+          0.283226,
+          -0.092582,
+          0.349144,
+          0.539882
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 109,
+            "win_rate": 0.8349,
+            "expectancy": 0.854428,
+            "total_pnl": 93.1326,
+            "profit_factor": 3.45
+          },
+          "volatile": {
+            "trades": 13,
+            "win_rate": 0.7692,
+            "expectancy": 0.540014,
+            "total_pnl": 7.0202,
+            "profit_factor": 2.363
+          },
+          "chop": {
+            "trades": 26,
+            "win_rate": 0.8462,
+            "expectancy": 0.36332,
+            "total_pnl": 9.4463,
+            "profit_factor": 1.995
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 7,
+      "score": 1.2756,
+      "params": {
+        "WEIGHT_REGIME": 0.2172,
+        "WEIGHT_SENTIMENT": 0.063,
+        "WEIGHT_WHALE": 0.0502,
+        "WEIGHT_LIQUIDATION": 0.2134,
+        "WEIGHT_ENTRY": 0.4562,
+        "XGB_ENTRY_WEIGHT": 2.5,
+        "ATR_SL_MULT": 2.2,
+        "ATR_TP1_MULT": 2.3,
+        "ATR_TP2_MULT": 6.9,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.2,
+        "TP2_EXIT_PCT": 0.8,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.30000000000000004,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.26,
+        "REGIME_BLOCK_THRESHOLD": 0.24,
+        "HTF_BLOCK_THRESHOLD": 0.26,
+        "ROTATOR_MIN_SCORE": 0.18,
+        "REGIME_GATE_BYPASS_SCORE": 0.2,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 37
+      },
+      "metrics": {
+        "win_rate": 0.7009,
+        "profit_factor": 3.93,
+        "sharpe": 20.34,
+        "total_return": 3.4491,
+        "max_drawdown": 0.0789,
+        "total_trades": 117,
+        "final_capital": 222.45,
+        "tp1_hit_rate": 0.7009,
+        "time_exit_rate": 0.0085,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 56,
+            "trades": 55,
+            "wins": 42,
+            "pnl": 111.77626
+          },
+          "ETH/USDT": {
+            "selected": 62,
+            "trades": 62,
+            "wins": 40,
+            "pnl": 60.678
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.609981,
+        "ret_skew": 0.111,
+        "ret_kurtosis": 1.7962,
+        "n_returns": 117,
+        "window_returns": [],
+        "bucket_returns": [
+          0.25006,
+          0.319083,
+          0.094785,
+          -0.047215,
+          0.387733,
+          0.231636,
+          -0.102589,
+          0.537122,
+          0.558635,
+          0.108292,
+          0.379023,
+          0.732519
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 86,
+            "win_rate": 0.7558,
+            "expectancy": 1.845213,
+            "total_pnl": 158.6883,
+            "profit_factor": 5.442
+          },
+          "volatile": {
+            "trades": 9,
+            "win_rate": 0.8889,
+            "expectancy": 2.354697,
+            "total_pnl": 21.1923,
+            "profit_factor": 42.621
+          },
+          "chop": {
+            "trades": 22,
+            "win_rate": 0.4091,
+            "expectancy": -0.337561,
+            "total_pnl": -7.4264,
+            "profit_factor": 0.672
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 9,
+      "score": 0.7091,
+      "params": {
+        "WEIGHT_REGIME": 0.1302,
+        "WEIGHT_SENTIMENT": 0.0755,
+        "WEIGHT_WHALE": 0.1709,
+        "WEIGHT_LIQUIDATION": 0.3783,
+        "WEIGHT_ENTRY": 0.2451,
+        "XGB_ENTRY_WEIGHT": 0.0,
+        "ATR_SL_MULT": 1.8,
+        "ATR_TP1_MULT": 1.85,
+        "ATR_TP2_MULT": 3.2,
+        "MIN_RR_RATIO": 1.7,
+        "TP1_EXIT_PCT": 0.35,
+        "TP2_EXIT_PCT": 0.65,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.4,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.24,
+        "REGIME_BLOCK_THRESHOLD": 0.2,
+        "HTF_BLOCK_THRESHOLD": 0.4,
+        "ROTATOR_MIN_SCORE": 0.44,
+        "REGIME_GATE_BYPASS_SCORE": 0.30000000000000004,
+        "MAX_RISK_PER_TRADE": 0.04,
+        "MAX_CONCURRENT_PAPER_TRADES": 3,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 9
+      },
+      "metrics": {
+        "win_rate": 0.7384,
+        "profit_factor": 4.21,
+        "sharpe": 25.53,
+        "total_return": 7.8886,
+        "max_drawdown": 0.1263,
+        "total_trades": 172,
+        "final_capital": 444.43,
+        "tp1_hit_rate": 0.6395,
+        "time_exit_rate": 0.3779,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 79,
+            "trades": 79,
+            "wins": 59,
+            "pnl": 235.335609
+          },
+          "ETH/USDT": {
+            "selected": 94,
+            "trades": 93,
+            "wins": 68,
+            "pnl": 159.096866
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.626505,
+        "ret_skew": -0.8033,
+        "ret_kurtosis": 2.2111,
+        "n_returns": 172,
+        "window_returns": [],
+        "bucket_returns": [
+          0.44728,
+          0.440377,
+          -0.156692,
+          0.210892,
+          0.494454,
+          0.063945,
+          -0.224669,
+          1.458957,
+          1.196393,
+          0.701297,
+          0.684336,
+          2.572078
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "volatile": {
+            "trades": 8,
+            "win_rate": 0.625,
+            "expectancy": 2.075707,
+            "total_pnl": 16.6057,
+            "profit_factor": 2.542
+          },
+          "trend": {
+            "trades": 132,
+            "win_rate": 0.8106,
+            "expectancy": 2.908764,
+            "total_pnl": 383.9569,
+            "profit_factor": 6.905
+          },
+          "chop": {
+            "trades": 32,
+            "win_rate": 0.4688,
+            "expectancy": -0.191565,
+            "total_pnl": -6.1301,
+            "profit_factor": 0.87
+          },
+          "_summary": {
+            "regimes_seen": [
+              "volatile",
+              "trend",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "volatile",
+              "trend"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 10,
+      "score": 1.1002,
+      "params": {
+        "WEIGHT_REGIME": 0.2916,
+        "WEIGHT_SENTIMENT": 0.0535,
+        "WEIGHT_WHALE": 0.0725,
+        "WEIGHT_LIQUIDATION": 0.1505,
+        "WEIGHT_ENTRY": 0.432,
+        "XGB_ENTRY_WEIGHT": 3.0,
+        "ATR_SL_MULT": 1.8,
+        "ATR_TP1_MULT": 2.6,
+        "ATR_TP2_MULT": 6.9,
+        "MIN_RR_RATIO": 1.6,
+        "TP1_EXIT_PCT": 0.2,
+        "TP2_EXIT_PCT": 0.8,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.13,
+        "REGIME_BLOCK_THRESHOLD": 0.38,
+        "HTF_BLOCK_THRESHOLD": 0.30000000000000004,
+        "ROTATOR_MIN_SCORE": 0.16,
+        "REGIME_GATE_BYPASS_SCORE": 0.35000000000000003,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 3,
+        "MAX_SAME_DIRECTION_TRADES": 2,
+        "MAX_TRADE_DURATION_BARS": 33
+      },
+      "metrics": {
+        "win_rate": 0.6323,
+        "profit_factor": 5.48,
+        "sharpe": 21.78,
+        "total_return": 18.0765,
+        "max_drawdown": 0.1466,
+        "total_trades": 155,
+        "final_capital": 953.82,
+        "tp1_hit_rate": 0.6323,
+        "time_exit_rate": 0.0129,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 76,
+            "trades": 75,
+            "wins": 48,
+            "pnl": 653.863537
+          },
+          "ETH/USDT": {
+            "selected": 80,
+            "trades": 80,
+            "wins": 50,
+            "pnl": 249.960535
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.586042,
+        "ret_skew": 0.4584,
+        "ret_kurtosis": 1.8958,
+        "n_returns": 155,
+        "window_returns": [],
+        "bucket_returns": [
+          0.031918,
+          0.652501,
+          1.010012,
+          -0.168773,
+          0.426334,
+          1.472153,
+          -0.201163,
+          0.601102,
+          3.333077,
+          1.724372,
+          3.122467,
+          6.07248
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "chop": {
+            "trades": 39,
+            "win_rate": 0.359,
+            "expectancy": 0.032172,
+            "total_pnl": 1.2547,
+            "profit_factor": 1.016
+          },
+          "trend": {
+            "trades": 105,
+            "win_rate": 0.7333,
+            "expectancy": 7.925841,
+            "total_pnl": 832.2133,
+            "profit_factor": 9.263
+          },
+          "volatile": {
+            "trades": 11,
+            "win_rate": 0.6364,
+            "expectancy": 6.396008,
+            "total_pnl": 70.3561,
+            "profit_factor": 4.134
+          },
+          "_summary": {
+            "regimes_seen": [
+              "chop",
+              "trend",
+              "volatile"
+            ],
+            "regimes_profitable": [
+              "chop",
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 11,
+      "score": 0.8655,
+      "params": {
+        "WEIGHT_REGIME": 0.2979,
+        "WEIGHT_SENTIMENT": 0.0228,
+        "WEIGHT_WHALE": 0.0617,
+        "WEIGHT_LIQUIDATION": 0.1765,
+        "WEIGHT_ENTRY": 0.4412,
+        "XGB_ENTRY_WEIGHT": 1.5,
+        "ATR_SL_MULT": 1.9500000000000002,
+        "ATR_TP1_MULT": 2.9000000000000004,
+        "ATR_TP2_MULT": 6.0,
+        "MIN_RR_RATIO": 1.6,
+        "TP1_EXIT_PCT": 0.2,
+        "TP2_EXIT_PCT": 0.8,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 3,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.22000000000000003,
+        "REGIME_BLOCK_THRESHOLD": 0.36000000000000004,
+        "HTF_BLOCK_THRESHOLD": 0.33999999999999997,
+        "ROTATOR_MIN_SCORE": 0.22,
+        "REGIME_GATE_BYPASS_SCORE": 0.4,
+        "MAX_RISK_PER_TRADE": 0.04,
+        "MAX_CONCURRENT_PAPER_TRADES": 3,
+        "MAX_SAME_DIRECTION_TRADES": 2,
+        "MAX_TRADE_DURATION_BARS": 23
+      },
+      "metrics": {
+        "win_rate": 0.6923,
+        "profit_factor": 4.91,
+        "sharpe": 23.92,
+        "total_return": 22.8903,
+        "max_drawdown": 0.2027,
+        "total_trades": 130,
+        "final_capital": 1194.52,
+        "tp1_hit_rate": 0.6692,
+        "time_exit_rate": 0.1077,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 59,
+            "trades": 59,
+            "wins": 41,
+            "pnl": 605.381473
+          },
+          "ETH/USDT": {
+            "selected": 72,
+            "trades": 71,
+            "wins": 49,
+            "pnl": 539.134221
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.681771,
+        "ret_skew": -0.2864,
+        "ret_kurtosis": 1.5453,
+        "n_returns": 130,
+        "window_returns": [],
+        "bucket_returns": [
+          0.524516,
+          0.84384,
+          0.091088,
+          0.116242,
+          1.131802,
+          1.249429,
+          -0.85458,
+          2.8151,
+          3.111177,
+          0.606962,
+          4.167769,
+          9.086969
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 96,
+            "win_rate": 0.7396,
+            "expectancy": 9.290023,
+            "total_pnl": 891.8422,
+            "profit_factor": 5.514
+          },
+          "volatile": {
+            "trades": 9,
+            "win_rate": 0.7778,
+            "expectancy": 13.467294,
+            "total_pnl": 121.2056,
+            "profit_factor": 7.714
+          },
+          "chop": {
+            "trades": 25,
+            "win_rate": 0.48,
+            "expectancy": 5.258712,
+            "total_pnl": 131.4678,
+            "profit_factor": 2.71
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 12,
+      "score": 1.2776,
+      "params": {
+        "WEIGHT_REGIME": 0.2032,
+        "WEIGHT_SENTIMENT": 0.0841,
+        "WEIGHT_WHALE": 0.0597,
+        "WEIGHT_LIQUIDATION": 0.1508,
+        "WEIGHT_ENTRY": 0.5022,
+        "XGB_ENTRY_WEIGHT": 1.0,
+        "ATR_SL_MULT": 1.8,
+        "ATR_TP1_MULT": 2.75,
+        "ATR_TP2_MULT": 5.9,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.45000000000000007,
+        "TP2_EXIT_PCT": 0.55,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.2,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.32,
+        "REGIME_BLOCK_THRESHOLD": 0.16,
+        "HTF_BLOCK_THRESHOLD": 0.36,
+        "ROTATOR_MIN_SCORE": 0.04,
+        "REGIME_GATE_BYPASS_SCORE": 0.35000000000000003,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 2,
+        "MAX_SAME_DIRECTION_TRADES": 2,
+        "MAX_TRADE_DURATION_BARS": 29
+      },
+      "metrics": {
+        "win_rate": 0.7091,
+        "profit_factor": 4.49,
+        "sharpe": 26.8,
+        "total_return": 4.6976,
+        "max_drawdown": 0.0692,
+        "total_trades": 165,
+        "final_capital": 284.88,
+        "tp1_hit_rate": 0.697,
+        "time_exit_rate": 0.0485,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 82,
+            "trades": 82,
+            "wins": 59,
+            "pnl": 134.886527
+          },
+          "ETH/USDT": {
+            "selected": 84,
+            "trades": 83,
+            "wins": 58,
+            "pnl": 97.742084
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.679343,
+        "ret_skew": -0.4377,
+        "ret_kurtosis": 1.7039,
+        "n_returns": 165,
+        "window_returns": [],
+        "bucket_returns": [
+          0.212578,
+          0.329795,
+          0.083829,
+          0.03155,
+          0.258432,
+          0.230113,
+          -0.081481,
+          0.753805,
+          0.833171,
+          0.055629,
+          0.70586,
+          1.239291
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "volatile": {
+            "trades": 12,
+            "win_rate": 0.8333,
+            "expectancy": 1.846432,
+            "total_pnl": 22.1572,
+            "profit_factor": 13.912
+          },
+          "trend": {
+            "trades": 125,
+            "win_rate": 0.76,
+            "expectancy": 1.681525,
+            "total_pnl": 210.1906,
+            "profit_factor": 5.835
+          },
+          "chop": {
+            "trades": 28,
+            "win_rate": 0.4286,
+            "expectancy": 0.010028,
+            "total_pnl": 0.2808,
+            "profit_factor": 1.013
+          },
+          "_summary": {
+            "regimes_seen": [
+              "volatile",
+              "trend",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "volatile",
+              "trend",
+              "chop"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 13,
+      "score": 1.2905,
+      "params": {
+        "WEIGHT_REGIME": 0.2191,
+        "WEIGHT_SENTIMENT": 0.071,
+        "WEIGHT_WHALE": 0.0565,
+        "WEIGHT_LIQUIDATION": 0.1404,
+        "WEIGHT_ENTRY": 0.513,
+        "XGB_ENTRY_WEIGHT": 2.0,
+        "ATR_SL_MULT": 1.65,
+        "ATR_TP1_MULT": 3.0,
+        "ATR_TP2_MULT": 6.5,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.8,
+        "TP2_EXIT_PCT": 0.2,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.1,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.6,
+        "FUSION_THRESHOLD": 0.32,
+        "REGIME_BLOCK_THRESHOLD": 0.16,
+        "HTF_BLOCK_THRESHOLD": 0.28,
+        "ROTATOR_MIN_SCORE": 0.18,
+        "REGIME_GATE_BYPASS_SCORE": 0.25,
+        "MAX_RISK_PER_TRADE": 0.025,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 33
+      },
+      "metrics": {
+        "win_rate": 0.7477,
+        "profit_factor": 4.55,
+        "sharpe": 25.53,
+        "total_return": 3.9119,
+        "max_drawdown": 0.0686,
+        "total_trades": 107,
+        "final_capital": 245.59,
+        "tp1_hit_rate": 0.7383,
+        "time_exit_rate": 0.0467,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 54,
+            "trades": 53,
+            "wins": 43,
+            "pnl": 128.462474
+          },
+          "ETH/USDT": {
+            "selected": 54,
+            "trades": 54,
+            "wins": 37,
+            "pnl": 67.131703
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.802847,
+        "ret_skew": -0.8348,
+        "ret_kurtosis": 2.1356,
+        "n_returns": 107,
+        "window_returns": [],
+        "bucket_returns": [
+          0.289637,
+          0.322416,
+          0.0491,
+          0.046999,
+          0.383087,
+          0.194064,
+          -0.053997,
+          0.59719,
+          0.409336,
+          0.081147,
+          0.631614,
+          0.96129
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 82,
+            "win_rate": 0.8293,
+            "expectancy": 2.311631,
+            "total_pnl": 189.5537,
+            "profit_factor": 7.225
+          },
+          "volatile": {
+            "trades": 8,
+            "win_rate": 0.625,
+            "expectancy": 0.977634,
+            "total_pnl": 7.8211,
+            "profit_factor": 2.397
+          },
+          "chop": {
+            "trades": 17,
+            "win_rate": 0.4118,
+            "expectancy": -0.104742,
+            "total_pnl": -1.7806,
+            "profit_factor": 0.906
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    }
+  ],
+  "top_10": [
+    {
+      "trial": 13,
+      "score": 1.2905,
+      "params": {
+        "WEIGHT_REGIME": 0.2191,
+        "WEIGHT_SENTIMENT": 0.071,
+        "WEIGHT_WHALE": 0.0565,
+        "WEIGHT_LIQUIDATION": 0.1404,
+        "WEIGHT_ENTRY": 0.513,
+        "XGB_ENTRY_WEIGHT": 2.0,
+        "ATR_SL_MULT": 1.65,
+        "ATR_TP1_MULT": 3.0,
+        "ATR_TP2_MULT": 6.5,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.8,
+        "TP2_EXIT_PCT": 0.2,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.1,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.6,
+        "FUSION_THRESHOLD": 0.32,
+        "REGIME_BLOCK_THRESHOLD": 0.16,
+        "HTF_BLOCK_THRESHOLD": 0.28,
+        "ROTATOR_MIN_SCORE": 0.18,
+        "REGIME_GATE_BYPASS_SCORE": 0.25,
+        "MAX_RISK_PER_TRADE": 0.025,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 33
+      },
+      "metrics": {
+        "win_rate": 0.7477,
+        "profit_factor": 4.55,
+        "sharpe": 25.53,
+        "total_return": 3.9119,
+        "max_drawdown": 0.0686,
+        "total_trades": 107,
+        "final_capital": 245.59,
+        "tp1_hit_rate": 0.7383,
+        "time_exit_rate": 0.0467,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 54,
+            "trades": 53,
+            "wins": 43,
+            "pnl": 128.462474
+          },
+          "ETH/USDT": {
+            "selected": 54,
+            "trades": 54,
+            "wins": 37,
+            "pnl": 67.131703
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.802847,
+        "ret_skew": -0.8348,
+        "ret_kurtosis": 2.1356,
+        "n_returns": 107,
+        "window_returns": [],
+        "bucket_returns": [
+          0.289637,
+          0.322416,
+          0.0491,
+          0.046999,
+          0.383087,
+          0.194064,
+          -0.053997,
+          0.59719,
+          0.409336,
+          0.081147,
+          0.631614,
+          0.96129
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 82,
+            "win_rate": 0.8293,
+            "expectancy": 2.311631,
+            "total_pnl": 189.5537,
+            "profit_factor": 7.225
+          },
+          "volatile": {
+            "trades": 8,
+            "win_rate": 0.625,
+            "expectancy": 0.977634,
+            "total_pnl": 7.8211,
+            "profit_factor": 2.397
+          },
+          "chop": {
+            "trades": 17,
+            "win_rate": 0.4118,
+            "expectancy": -0.104742,
+            "total_pnl": -1.7806,
+            "profit_factor": 0.906
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 12,
+      "score": 1.2776,
+      "params": {
+        "WEIGHT_REGIME": 0.2032,
+        "WEIGHT_SENTIMENT": 0.0841,
+        "WEIGHT_WHALE": 0.0597,
+        "WEIGHT_LIQUIDATION": 0.1508,
+        "WEIGHT_ENTRY": 0.5022,
+        "XGB_ENTRY_WEIGHT": 1.0,
+        "ATR_SL_MULT": 1.8,
+        "ATR_TP1_MULT": 2.75,
+        "ATR_TP2_MULT": 5.9,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.45000000000000007,
+        "TP2_EXIT_PCT": 0.55,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.2,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.32,
+        "REGIME_BLOCK_THRESHOLD": 0.16,
+        "HTF_BLOCK_THRESHOLD": 0.36,
+        "ROTATOR_MIN_SCORE": 0.04,
+        "REGIME_GATE_BYPASS_SCORE": 0.35000000000000003,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 2,
+        "MAX_SAME_DIRECTION_TRADES": 2,
+        "MAX_TRADE_DURATION_BARS": 29
+      },
+      "metrics": {
+        "win_rate": 0.7091,
+        "profit_factor": 4.49,
+        "sharpe": 26.8,
+        "total_return": 4.6976,
+        "max_drawdown": 0.0692,
+        "total_trades": 165,
+        "final_capital": 284.88,
+        "tp1_hit_rate": 0.697,
+        "time_exit_rate": 0.0485,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 82,
+            "trades": 82,
+            "wins": 59,
+            "pnl": 134.886527
+          },
+          "ETH/USDT": {
+            "selected": 84,
+            "trades": 83,
+            "wins": 58,
+            "pnl": 97.742084
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.679343,
+        "ret_skew": -0.4377,
+        "ret_kurtosis": 1.7039,
+        "n_returns": 165,
+        "window_returns": [],
+        "bucket_returns": [
+          0.212578,
+          0.329795,
+          0.083829,
+          0.03155,
+          0.258432,
+          0.230113,
+          -0.081481,
+          0.753805,
+          0.833171,
+          0.055629,
+          0.70586,
+          1.239291
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "volatile": {
+            "trades": 12,
+            "win_rate": 0.8333,
+            "expectancy": 1.846432,
+            "total_pnl": 22.1572,
+            "profit_factor": 13.912
+          },
+          "trend": {
+            "trades": 125,
+            "win_rate": 0.76,
+            "expectancy": 1.681525,
+            "total_pnl": 210.1906,
+            "profit_factor": 5.835
+          },
+          "chop": {
+            "trades": 28,
+            "win_rate": 0.4286,
+            "expectancy": 0.010028,
+            "total_pnl": 0.2808,
+            "profit_factor": 1.013
+          },
+          "_summary": {
+            "regimes_seen": [
+              "volatile",
+              "trend",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "volatile",
+              "trend",
+              "chop"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 7,
+      "score": 1.2756,
+      "params": {
+        "WEIGHT_REGIME": 0.2172,
+        "WEIGHT_SENTIMENT": 0.063,
+        "WEIGHT_WHALE": 0.0502,
+        "WEIGHT_LIQUIDATION": 0.2134,
+        "WEIGHT_ENTRY": 0.4562,
+        "XGB_ENTRY_WEIGHT": 2.5,
+        "ATR_SL_MULT": 2.2,
+        "ATR_TP1_MULT": 2.3,
+        "ATR_TP2_MULT": 6.9,
+        "MIN_RR_RATIO": 2.3,
+        "TP1_EXIT_PCT": 0.2,
+        "TP2_EXIT_PCT": 0.8,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.30000000000000004,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.26,
+        "REGIME_BLOCK_THRESHOLD": 0.24,
+        "HTF_BLOCK_THRESHOLD": 0.26,
+        "ROTATOR_MIN_SCORE": 0.18,
+        "REGIME_GATE_BYPASS_SCORE": 0.2,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 37
+      },
+      "metrics": {
+        "win_rate": 0.7009,
+        "profit_factor": 3.93,
+        "sharpe": 20.34,
+        "total_return": 3.4491,
+        "max_drawdown": 0.0789,
+        "total_trades": 117,
+        "final_capital": 222.45,
+        "tp1_hit_rate": 0.7009,
+        "time_exit_rate": 0.0085,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 56,
+            "trades": 55,
+            "wins": 42,
+            "pnl": 111.77626
+          },
+          "ETH/USDT": {
+            "selected": 62,
+            "trades": 62,
+            "wins": 40,
+            "pnl": 60.678
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.609981,
+        "ret_skew": 0.111,
+        "ret_kurtosis": 1.7962,
+        "n_returns": 117,
+        "window_returns": [],
+        "bucket_returns": [
+          0.25006,
+          0.319083,
+          0.094785,
+          -0.047215,
+          0.387733,
+          0.231636,
+          -0.102589,
+          0.537122,
+          0.558635,
+          0.108292,
+          0.379023,
+          0.732519
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 86,
+            "win_rate": 0.7558,
+            "expectancy": 1.845213,
+            "total_pnl": 158.6883,
+            "profit_factor": 5.442
+          },
+          "volatile": {
+            "trades": 9,
+            "win_rate": 0.8889,
+            "expectancy": 2.354697,
+            "total_pnl": 21.1923,
+            "profit_factor": 42.621
+          },
+          "chop": {
+            "trades": 22,
+            "win_rate": 0.4091,
+            "expectancy": -0.337561,
+            "total_pnl": -7.4264,
+            "profit_factor": 0.672
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 10,
+      "score": 1.1002,
+      "params": {
+        "WEIGHT_REGIME": 0.2916,
+        "WEIGHT_SENTIMENT": 0.0535,
+        "WEIGHT_WHALE": 0.0725,
+        "WEIGHT_LIQUIDATION": 0.1505,
+        "WEIGHT_ENTRY": 0.432,
+        "XGB_ENTRY_WEIGHT": 3.0,
+        "ATR_SL_MULT": 1.8,
+        "ATR_TP1_MULT": 2.6,
+        "ATR_TP2_MULT": 6.9,
+        "MIN_RR_RATIO": 1.6,
+        "TP1_EXIT_PCT": 0.2,
+        "TP2_EXIT_PCT": 0.8,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 4,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.13,
+        "REGIME_BLOCK_THRESHOLD": 0.38,
+        "HTF_BLOCK_THRESHOLD": 0.30000000000000004,
+        "ROTATOR_MIN_SCORE": 0.16,
+        "REGIME_GATE_BYPASS_SCORE": 0.35000000000000003,
+        "MAX_RISK_PER_TRADE": 0.02,
+        "MAX_CONCURRENT_PAPER_TRADES": 3,
+        "MAX_SAME_DIRECTION_TRADES": 2,
+        "MAX_TRADE_DURATION_BARS": 33
+      },
+      "metrics": {
+        "win_rate": 0.6323,
+        "profit_factor": 5.48,
+        "sharpe": 21.78,
+        "total_return": 18.0765,
+        "max_drawdown": 0.1466,
+        "total_trades": 155,
+        "final_capital": 953.82,
+        "tp1_hit_rate": 0.6323,
+        "time_exit_rate": 0.0129,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 76,
+            "trades": 75,
+            "wins": 48,
+            "pnl": 653.863537
+          },
+          "ETH/USDT": {
+            "selected": 80,
+            "trades": 80,
+            "wins": 50,
+            "pnl": 249.960535
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.586042,
+        "ret_skew": 0.4584,
+        "ret_kurtosis": 1.8958,
+        "n_returns": 155,
+        "window_returns": [],
+        "bucket_returns": [
+          0.031918,
+          0.652501,
+          1.010012,
+          -0.168773,
+          0.426334,
+          1.472153,
+          -0.201163,
+          0.601102,
+          3.333077,
+          1.724372,
+          3.122467,
+          6.07248
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "chop": {
+            "trades": 39,
+            "win_rate": 0.359,
+            "expectancy": 0.032172,
+            "total_pnl": 1.2547,
+            "profit_factor": 1.016
+          },
+          "trend": {
+            "trades": 105,
+            "win_rate": 0.7333,
+            "expectancy": 7.925841,
+            "total_pnl": 832.2133,
+            "profit_factor": 9.263
+          },
+          "volatile": {
+            "trades": 11,
+            "win_rate": 0.6364,
+            "expectancy": 6.396008,
+            "total_pnl": 70.3561,
+            "profit_factor": 4.134
+          },
+          "_summary": {
+            "regimes_seen": [
+              "chop",
+              "trend",
+              "volatile"
+            ],
+            "regimes_profitable": [
+              "chop",
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 6,
+      "score": 1.0976,
+      "params": {
+        "WEIGHT_REGIME": 0.1654,
+        "WEIGHT_SENTIMENT": 0.0553,
+        "WEIGHT_WHALE": 0.1725,
+        "WEIGHT_LIQUIDATION": 0.2269,
+        "WEIGHT_ENTRY": 0.3798,
+        "XGB_ENTRY_WEIGHT": 2.0,
+        "ATR_SL_MULT": 1.9,
+        "ATR_TP1_MULT": 1.25,
+        "ATR_TP2_MULT": 6.4,
+        "MIN_RR_RATIO": 1.6,
+        "TP1_EXIT_PCT": 0.8,
+        "TP2_EXIT_PCT": 0.2,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.35,
+        "EARLY_KILL_BARS": 1,
+        "EARLY_KILL_SL_PCT": 0.5,
+        "FUSION_THRESHOLD": 0.27,
+        "REGIME_BLOCK_THRESHOLD": 0.32,
+        "HTF_BLOCK_THRESHOLD": 0.32,
+        "ROTATOR_MIN_SCORE": 0.34,
+        "REGIME_GATE_BYPASS_SCORE": 0.2,
+        "MAX_RISK_PER_TRADE": 0.035,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 48
+      },
+      "metrics": {
+        "win_rate": 0.8311,
+        "profit_factor": 3.08,
+        "sharpe": 19.14,
+        "total_return": 2.192,
+        "max_drawdown": 0.0957,
+        "total_trades": 148,
+        "final_capital": 159.6,
+        "tp1_hit_rate": 0.8311,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 58,
+            "trades": 58,
+            "wins": 48,
+            "pnl": 50.825483
+          },
+          "ETH/USDT": {
+            "selected": 91,
+            "trades": 90,
+            "wins": 75,
+            "pnl": 58.773634
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.512871,
+        "ret_skew": -1.0379,
+        "ret_kurtosis": 3.25,
+        "n_returns": 148,
+        "window_returns": [],
+        "bucket_returns": [
+          0.128441,
+          0.170594,
+          0.075685,
+          0.093551,
+          0.119327,
+          0.160491,
+          -0.010422,
+          0.374646,
+          0.283226,
+          -0.092582,
+          0.349144,
+          0.539882
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 109,
+            "win_rate": 0.8349,
+            "expectancy": 0.854428,
+            "total_pnl": 93.1326,
+            "profit_factor": 3.45
+          },
+          "volatile": {
+            "trades": 13,
+            "win_rate": 0.7692,
+            "expectancy": 0.540014,
+            "total_pnl": 7.0202,
+            "profit_factor": 2.363
+          },
+          "chop": {
+            "trades": 26,
+            "win_rate": 0.8462,
+            "expectancy": 0.36332,
+            "total_pnl": 9.4463,
+            "profit_factor": 1.995
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 0,
+      "score": 1.019,
+      "params": {
+        "WEIGHT_REGIME": 0.18,
+        "WEIGHT_SENTIMENT": 0.12,
+        "WEIGHT_WHALE": 0.1,
+        "WEIGHT_LIQUIDATION": 0.25,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 3.0,
+        "ATR_SL_MULT": 2.5,
+        "ATR_TP1_MULT": 2.4,
+        "ATR_TP2_MULT": 6.5,
+        "MIN_RR_RATIO": 2.5,
+        "TP1_EXIT_PCT": 0.15,
+        "TP2_EXIT_PCT": 0.85,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.2,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.19,
+        "REGIME_BLOCK_THRESHOLD": 0.25,
+        "HTF_BLOCK_THRESHOLD": 0.2,
+        "ROTATOR_MIN_SCORE": 0.28,
+        "REGIME_GATE_BYPASS_SCORE": 0.45,
+        "MAX_RISK_PER_TRADE": 0.05,
+        "MAX_CONCURRENT_PAPER_TRADES": 8,
+        "MAX_SAME_DIRECTION_TRADES": 6,
+        "MAX_TRADE_DURATION_BARS": 84
+      },
+      "metrics": {
+        "win_rate": 0.7232,
+        "profit_factor": 4.1,
+        "sharpe": 20.87,
+        "total_return": 16.6456,
+        "max_drawdown": 0.1746,
+        "total_trades": 112,
+        "final_capital": 882.28,
+        "tp1_hit_rate": 0.7232,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 54,
+            "trades": 53,
+            "wins": 42,
+            "pnl": 646.127396
+          },
+          "ETH/USDT": {
+            "selected": 59,
+            "trades": 59,
+            "wins": 39,
+            "pnl": 186.151654
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.641544,
+        "ret_skew": -0.3281,
+        "ret_kurtosis": 1.647,
+        "n_returns": 112,
+        "window_returns": [],
+        "bucket_returns": [
+          0.487057,
+          0.688889,
+          0.175519,
+          0.183122,
+          1.099522,
+          0.556087,
+          -0.654896,
+          2.30281,
+          2.775838,
+          0.935872,
+          2.182595,
+          5.913165
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 86,
+            "win_rate": 0.7674,
+            "expectancy": 8.989444,
+            "total_pnl": 773.0922,
+            "profit_factor": 6.051
+          },
+          "volatile": {
+            "trades": 8,
+            "win_rate": 0.875,
+            "expectancy": 11.585715,
+            "total_pnl": 92.6857,
+            "profit_factor": 20.596
+          },
+          "chop": {
+            "trades": 18,
+            "win_rate": 0.4444,
+            "expectancy": -1.861047,
+            "total_pnl": -33.4988,
+            "profit_factor": 0.696
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 1,
+      "score": 0.9,
+      "params": {
+        "WEIGHT_REGIME": 0.18,
+        "WEIGHT_SENTIMENT": 0.12,
+        "WEIGHT_WHALE": 0.1,
+        "WEIGHT_LIQUIDATION": 0.25,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 5.0,
+        "ATR_SL_MULT": 1.2,
+        "ATR_TP1_MULT": 1.5,
+        "ATR_TP2_MULT": 3.0,
+        "MIN_RR_RATIO": 2.5,
+        "TP1_EXIT_PCT": 0.65,
+        "TP2_EXIT_PCT": 0.35,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.3,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.22,
+        "REGIME_BLOCK_THRESHOLD": 0.25,
+        "HTF_BLOCK_THRESHOLD": 0.22,
+        "ROTATOR_MIN_SCORE": 0.15,
+        "REGIME_GATE_BYPASS_SCORE": 0.25,
+        "MAX_RISK_PER_TRADE": 0.025,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 36
+      },
+      "metrics": {
+        "win_rate": 0.7202,
+        "profit_factor": 2.94,
+        "sharpe": 22.39,
+        "total_return": 5.2103,
+        "max_drawdown": 0.1987,
+        "total_trades": 243,
+        "final_capital": 310.52,
+        "tp1_hit_rate": 0.7202,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 116,
+            "trades": 116,
+            "wins": 89,
+            "pnl": 168.350463
+          },
+          "ETH/USDT": {
+            "selected": 128,
+            "trades": 127,
+            "wins": 86,
+            "pnl": 92.166252
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.468989,
+        "ret_skew": -0.6813,
+        "ret_kurtosis": 1.8189,
+        "n_returns": 243,
+        "window_returns": [],
+        "bucket_returns": [
+          0.289854,
+          0.273507,
+          0.103818,
+          -0.160712,
+          0.477438,
+          0.240628,
+          -0.355658,
+          0.88921,
+          0.695117,
+          0.305855,
+          0.588427,
+          1.862849
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 187,
+            "win_rate": 0.7861,
+            "expectancy": 1.405185,
+            "total_pnl": 262.7696,
+            "profit_factor": 4.314
+          },
+          "volatile": {
+            "trades": 10,
+            "win_rate": 0.8,
+            "expectancy": 1.659247,
+            "total_pnl": 16.5925,
+            "profit_factor": 7.038
+          },
+          "chop": {
+            "trades": 46,
+            "win_rate": 0.4348,
+            "expectancy": -0.409681,
+            "total_pnl": -18.8453,
+            "profit_factor": 0.64
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 3,
+      "score": 0.8994,
+      "params": {
+        "WEIGHT_REGIME": 0.2,
+        "WEIGHT_SENTIMENT": 0.1,
+        "WEIGHT_WHALE": 0.08,
+        "WEIGHT_LIQUIDATION": 0.27,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 8.0,
+        "ATR_SL_MULT": 1.1,
+        "ATR_TP1_MULT": 1.6,
+        "ATR_TP2_MULT": 3.5,
+        "MIN_RR_RATIO": 2.8,
+        "TP1_EXIT_PCT": 0.6,
+        "TP2_EXIT_PCT": 0.4,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.35,
+        "EARLY_KILL_BARS": 3,
+        "EARLY_KILL_SL_PCT": 0.75,
+        "FUSION_THRESHOLD": 0.26,
+        "REGIME_BLOCK_THRESHOLD": 0.28,
+        "HTF_BLOCK_THRESHOLD": 0.24,
+        "ROTATOR_MIN_SCORE": 0.2,
+        "REGIME_GATE_BYPASS_SCORE": 0.65,
+        "MAX_RISK_PER_TRADE": 0.025,
+        "MAX_CONCURRENT_PAPER_TRADES": 2,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 40
+      },
+      "metrics": {
+        "win_rate": 0.6891,
+        "profit_factor": 3.08,
+        "sharpe": 22.27,
+        "total_return": 6.2459,
+        "max_drawdown": 0.1992,
+        "total_trades": 238,
+        "final_capital": 362.29,
+        "tp1_hit_rate": 0.6891,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 113,
+            "trades": 113,
+            "wins": 80,
+            "pnl": 178.39084
+          },
+          "ETH/USDT": {
+            "selected": 126,
+            "trades": 125,
+            "wins": 84,
+            "pnl": 133.903202
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.471196,
+        "ret_skew": -0.4065,
+        "ret_kurtosis": 1.5523,
+        "n_returns": 238,
+        "window_returns": [],
+        "bucket_returns": [
+          0.330864,
+          0.342922,
+          0.003531,
+          -0.036526,
+          0.378816,
+          0.316914,
+          -0.180457,
+          1.010327,
+          0.684864,
+          0.280453,
+          0.766505,
+          2.347666
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 177,
+            "win_rate": 0.7288,
+            "expectancy": 1.62309,
+            "total_pnl": 287.287,
+            "profit_factor": 3.95
+          },
+          "volatile": {
+            "trades": 16,
+            "win_rate": 0.8125,
+            "expectancy": 1.874143,
+            "total_pnl": 29.9863,
+            "profit_factor": 5.148
+          },
+          "chop": {
+            "trades": 45,
+            "win_rate": 0.4889,
+            "expectancy": -0.110649,
+            "total_pnl": -4.9792,
+            "profit_factor": 0.89
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 11,
+      "score": 0.8655,
+      "params": {
+        "WEIGHT_REGIME": 0.2979,
+        "WEIGHT_SENTIMENT": 0.0228,
+        "WEIGHT_WHALE": 0.0617,
+        "WEIGHT_LIQUIDATION": 0.1765,
+        "WEIGHT_ENTRY": 0.4412,
+        "XGB_ENTRY_WEIGHT": 1.5,
+        "ATR_SL_MULT": 1.9500000000000002,
+        "ATR_TP1_MULT": 2.9000000000000004,
+        "ATR_TP2_MULT": 6.0,
+        "MIN_RR_RATIO": 1.6,
+        "TP1_EXIT_PCT": 0.2,
+        "TP2_EXIT_PCT": 0.8,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 3,
+        "EARLY_KILL_SL_PCT": 0.7,
+        "FUSION_THRESHOLD": 0.22000000000000003,
+        "REGIME_BLOCK_THRESHOLD": 0.36000000000000004,
+        "HTF_BLOCK_THRESHOLD": 0.33999999999999997,
+        "ROTATOR_MIN_SCORE": 0.22,
+        "REGIME_GATE_BYPASS_SCORE": 0.4,
+        "MAX_RISK_PER_TRADE": 0.04,
+        "MAX_CONCURRENT_PAPER_TRADES": 3,
+        "MAX_SAME_DIRECTION_TRADES": 2,
+        "MAX_TRADE_DURATION_BARS": 23
+      },
+      "metrics": {
+        "win_rate": 0.6923,
+        "profit_factor": 4.91,
+        "sharpe": 23.92,
+        "total_return": 22.8903,
+        "max_drawdown": 0.2027,
+        "total_trades": 130,
+        "final_capital": 1194.52,
+        "tp1_hit_rate": 0.6692,
+        "time_exit_rate": 0.1077,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 59,
+            "trades": 59,
+            "wins": 41,
+            "pnl": 605.381473
+          },
+          "ETH/USDT": {
+            "selected": 72,
+            "trades": 71,
+            "wins": 49,
+            "pnl": 539.134221
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.681771,
+        "ret_skew": -0.2864,
+        "ret_kurtosis": 1.5453,
+        "n_returns": 130,
+        "window_returns": [],
+        "bucket_returns": [
+          0.524516,
+          0.84384,
+          0.091088,
+          0.116242,
+          1.131802,
+          1.249429,
+          -0.85458,
+          2.8151,
+          3.111177,
+          0.606962,
+          4.167769,
+          9.086969
+        ],
+        "consistency": 0.9583,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 96,
+            "win_rate": 0.7396,
+            "expectancy": 9.290023,
+            "total_pnl": 891.8422,
+            "profit_factor": 5.514
+          },
+          "volatile": {
+            "trades": 9,
+            "win_rate": 0.7778,
+            "expectancy": 13.467294,
+            "total_pnl": 121.2056,
+            "profit_factor": 7.714
+          },
+          "chop": {
+            "trades": 25,
+            "win_rate": 0.48,
+            "expectancy": 5.258712,
+            "total_pnl": 131.4678,
+            "profit_factor": 2.71
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    },
+    {
+      "trial": 2,
+      "score": 0.8405,
+      "params": {
+        "WEIGHT_REGIME": 0.18,
+        "WEIGHT_SENTIMENT": 0.1,
+        "WEIGHT_WHALE": 0.1,
+        "WEIGHT_LIQUIDATION": 0.27,
+        "WEIGHT_ENTRY": 0.35,
+        "XGB_ENTRY_WEIGHT": 7.0,
+        "ATR_SL_MULT": 1.0,
+        "ATR_TP1_MULT": 1.4,
+        "ATR_TP2_MULT": 2.8,
+        "MIN_RR_RATIO": 2.0,
+        "TP1_EXIT_PCT": 0.7,
+        "TP2_EXIT_PCT": 0.3,
+        "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.25,
+        "EARLY_KILL_BARS": 2,
+        "EARLY_KILL_SL_PCT": 0.65,
+        "FUSION_THRESHOLD": 0.18,
+        "REGIME_BLOCK_THRESHOLD": 0.22,
+        "HTF_BLOCK_THRESHOLD": 0.2,
+        "ROTATOR_MIN_SCORE": 0.12,
+        "REGIME_GATE_BYPASS_SCORE": 0.5,
+        "MAX_RISK_PER_TRADE": 0.05,
+        "MAX_CONCURRENT_PAPER_TRADES": 1,
+        "MAX_SAME_DIRECTION_TRADES": 1,
+        "MAX_TRADE_DURATION_BARS": 30
+      },
+      "metrics": {
+        "win_rate": 0.6976,
+        "profit_factor": 2.44,
+        "sharpe": 20.88,
+        "total_return": 4.6731,
+        "max_drawdown": 0.217,
+        "total_trades": 291,
+        "final_capital": 283.66,
+        "tp1_hit_rate": 0.6976,
+        "time_exit_rate": 0.0,
+        "symbols_traded": {
+          "BTC/USDT": {
+            "selected": 137,
+            "trades": 137,
+            "wins": 101,
+            "pnl": 152.997088
+          },
+          "ETH/USDT": {
+            "selected": 155,
+            "trades": 154,
+            "wins": 102,
+            "pnl": 80.659406
+          }
+        },
+        "symbols_loaded": [
+          "BTC/USDT",
+          "ETH/USDT"
+        ],
+        "sharpe_per_obs": 0.399781,
+        "ret_skew": -0.5956,
+        "ret_kurtosis": 1.6589,
+        "n_returns": 291,
+        "window_returns": [],
+        "bucket_returns": [
+          0.292998,
+          0.255572,
+          0.069567,
+          -0.02241,
+          0.422314,
+          0.232342,
+          -0.424183,
+          0.789915,
+          0.816988,
+          0.205212,
+          0.580398,
+          1.454416
+        ],
+        "consistency": 0.9167,
+        "regime_breakdown": {
+          "trend": {
+            "trades": 213,
+            "win_rate": 0.7465,
+            "expectancy": 1.042002,
+            "total_pnl": 221.9464,
+            "profit_factor": 3.207
+          },
+          "volatile": {
+            "trades": 16,
+            "win_rate": 0.875,
+            "expectancy": 1.692984,
+            "total_pnl": 27.0877,
+            "profit_factor": 8.773
+          },
+          "chop": {
+            "trades": 62,
+            "win_rate": 0.4839,
+            "expectancy": -0.248027,
+            "total_pnl": -15.3776,
+            "profit_factor": 0.736
+          },
+          "_summary": {
+            "regimes_seen": [
+              "trend",
+              "volatile",
+              "chop"
+            ],
+            "regimes_profitable": [
+              "trend",
+              "volatile"
+            ],
+            "edge_is_regime_robust": true
+          }
+        }
+      }
+    }
+  ],
+  "importance": {
+    "ATR_TP2_MULT": 0.3497,
+    "WEIGHT_WHALE": 0.1185,
+    "REGIME_GATE_BYPASS_SCORE": 0.0644,
+    "ROTATOR_MIN_SCORE": 0.0642,
+    "MAX_CONCURRENT_PAPER_TRADES": 0.0489,
+    "EXIT_SIGNAL_FLIP_MIN_SCORE": 0.0417,
+    "MAX_TRADE_DURATION_BARS": 0.0404,
+    "REGIME_BLOCK_THRESHOLD": 0.0351,
+    "WEIGHT_LIQUIDATION": 0.0344,
+    "WEIGHT_REGIME": 0.0327,
+    "ATR_TP1_MULT": 0.0298,
+    "FUSION_THRESHOLD": 0.0288,
+    "MAX_RISK_PER_TRADE": 0.0189,
+    "EARLY_KILL_BARS": 0.0187,
+    "TP1_EXIT_PCT": 0.018,
+    "HTF_BLOCK_THRESHOLD": 0.0176,
+    "ATR_SL_MULT": 0.0163,
+    "WEIGHT_SENTIMENT": 0.0086,
+    "EARLY_KILL_SL_PCT": 0.0081,
+    "MIN_RR_RATIO": 0.0044,
+    "XGB_ENTRY_WEIGHT": 0.0008
+  },
+  "overfitting": {
+    "pbo": {
+      "pbo": 0.4881,
+      "n_configs": 13,
+      "n_splits": 12,
+      "n_combinations": 924,
+      "median_logit": 0.2877,
+      "note": "PBO>0.5 \u21d2 selection picks overfit configs more often than not"
+    },
+    "deflated_sharpe": {
+      "deflated_sharpe": 1.0,
+      "psr_vs_zero": 1.0,
+      "benchmark_sharpe": 0.2502,
+      "observed_sharpe": 0.8028,
+      "n_obs": 107,
+      "n_trials": 13
+    },
+    "best_regime_breakdown": {
+      "trend": {
+        "trades": 82,
+        "win_rate": 0.8293,
+        "expectancy": 2.311631,
+        "total_pnl": 189.5537,
+        "profit_factor": 7.225
+      },
+      "volatile": {
+        "trades": 8,
+        "win_rate": 0.625,
+        "expectancy": 0.977634,
+        "total_pnl": 7.8211,
+        "profit_factor": 2.397
+      },
+      "chop": {
+        "trades": 17,
+        "win_rate": 0.4118,
+        "expectancy": -0.104742,
+        "total_pnl": -1.7806,
+        "profit_factor": 0.906
+      },
+      "_summary": {
+        "regimes_seen": [
+          "trend",
+          "volatile",
+          "chop"
+        ],
+        "regimes_profitable": [
+          "trend",
+          "volatile"
+        ],
+        "edge_is_regime_robust": true
+      }
+    },
+    "signal_edge": {
+      "round_trip_cost_pct": 0.16,
+      "bars": 2000,
+      "H6": {
+        "ic": 0.4204,
+        "hit_rate": 0.665,
+        "gross_edge_pct": 0.3339,
+        "net_edge_pct": 0.1739,
+        "pays_for_costs": true
+      },
+      "H12": {
+        "ic": 0.4589,
+        "hit_rate": 0.6745,
+        "gross_edge_pct": 0.6334,
+        "net_edge_pct": 0.4734,
+        "pays_for_costs": true
+      },
+      "H24": {
+        "ic": 0.4827,
+        "hit_rate": 0.6913,
+        "gross_edge_pct": 1.2197,
+        "net_edge_pct": 1.0597,
+        "pays_for_costs": true
+      },
+      "avg_ic": 0.454,
+      "verdict": "has_edge"
+    },
+    "verdict": "inconclusive"
+  },
+  "trial_health": {
+    "total": 14,
+    "scored": 13,
+    "no_trade": 1,
+    "errors": 0,
+    "first_errors": []
+  }
+}

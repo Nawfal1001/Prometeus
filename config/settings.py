@@ -333,7 +333,10 @@ def reload_from_sources():
     # Default groups are exits+thresholds+duration (9+4+1 = 14 dims).
     # Removed "weights" (normalization distorts TPE's model) and "risk"
     # (risk sizing is better set manually).  Add them back via settings if wanted.
-    OPTUNA_TUNE_GROUPS = get("OPTUNA_TUNE_GROUPS", "exits,thresholds,duration")
+    # All non-indicator groups on by default: leaving risk/weights out silently
+    # froze MAX_RISK_PER_TRADE, concurrency and the layer weights at defaults,
+    # shrinking the search space the dashboard *appeared* to be optimizing.
+    OPTUNA_TUNE_GROUPS = get("OPTUNA_TUNE_GROUPS", "weights,exits,thresholds,risk,duration")
     REGIME_DEAD_ZONE = get_float("REGIME_DEAD_ZONE", 0.0)
     EXIT_ON_REGIME_FLIP = get_bool("EXIT_ON_REGIME_FLIP", "true")
     EXIT_REGIME_FLIP_MIN_SCORE = get_float("EXIT_REGIME_FLIP_MIN_SCORE", 0.30)
