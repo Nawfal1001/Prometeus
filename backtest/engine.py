@@ -165,6 +165,11 @@ class BacktestEngine:
         add(row.get("pressure_signal", 0), 0.45)
         add(row.get("ob_signal", 0), 0.75)
         add(row.get("funding_signal", 0), 0.45)
+        # Trader price-action patterns — same weights as live EntrySignal
+        add(row.get("liquidity_sweep", 0), 0.6)
+        add(row.get("pinbar", 0), 0.4)
+        add(row.get("engulfing", 0), 0.4)
+        add(row.get("sr_proximity", 0), 0.5)
         try:
             if self._xgb is not None and self._xgb.model is not None:
                 add(self._xgb.get_entry_score(row.to_frame().T.reset_index(drop=True)), float(getattr(cfg, "XGB_ENTRY_WEIGHT", 1.0)))
