@@ -89,6 +89,7 @@ class PrometheusOptimizer:
         self.n_trials = n_trials or cfg.OPTUNA_TRIALS
         self.timeout = timeout or cfg.OPTUNA_TIMEOUT_SEC
         self.progress_callback = progress_callback
+        self._health = {"no_trade": 0, "errors": 0, "first_errors": []}
         self.best_params = {}
         self.best_value = -999.0
         self.study = None
@@ -154,7 +155,12 @@ class PrometheusOptimizer:
         # switches to exploitation.  At 13–16 active dimensions, ~30 % random
         # trials (floor 10, cap 25) is the minimum for meaningful coverage.
         startup = min(25, max(10, int(self.n_trials * 0.30)))
-        sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=startup, multivariate=True)
+        # group=True decomposes the multivariate KDE along the param groups
+        # (weights/exits/thresholds/...) — markedly better convergence in
+        # spaces like this one where groups interact weakly with each other.
+        sampler = optuna.samplers.TPESampler(seed=42, n_startup_trials=startup,
+                                             multivariate=True, group=True, constant_liar=True)
+        self._health = {"no_trade": 0, "errors": 0, "first_errors": []}
         # Pruning is off by default: with single-step reporting (step=1) the
         # MedianPruner has no progression signal and aggressively kills promising
         # exploratory trials that haven't warmed up yet.
@@ -177,15 +183,32 @@ class PrometheusOptimizer:
         if not self.study.trials:
             return {"error": "No optimizer trials completed"}
         best = self.study.best_trial
-        self.best_params = best.params
+        # Optuna's best.params only contains SUGGESTED keys — derived params
+        # (WEIGHT_ENTRY = 1 - sum of the others) are missing, so apply_best
+        # would inject a weight set that doesn't sum to 1. Prefer the full
+        # params dict recorded when the trial was scored.
+        full = next((t["params"] for t in self.trial_results if t.get("trial") == best.number), None)
+        self.best_params = full or best.params
         self.best_value = best.value
         result = self._build_result()
+        # Convergence telemetry: how many trials actually informed the search.
+        # A high crash/no-trade fraction is THE usual cause of "doesn't
+        # converge", and it used to be invisible.
+        result["trial_health"] = {
+            "total": len(self.study.trials),
+            "scored": len(self.trial_results),
+            "no_trade": self._health.get("no_trade", 0),
+            "errors": self._health.get("errors", 0),
+            "first_errors": list(self._health.get("first_errors", [])),
+        }
         self._save_results(result)
         ov = result.get("overfitting", {})
         pbo = (ov.get("pbo") or {}).get("pbo")
         dsr = (ov.get("deflated_sharpe") or {}).get("deflated_sharpe")
         edge = (ov.get("signal_edge") or {})
+        th = result.get("trial_health", {})
         logger.info(f"[Optimizer] Done | mode={self._mode} best={self.best_value:.4f} in {len(self.study.trials)} trials "
+                    f"(scored={th.get('scored')} no_trade={th.get('no_trade')} crashed={th.get('errors')}) "
                     f"| PBO={pbo} DeflatedSharpe={dsr} verdict={ov.get('verdict')} "
                     f"| signal_edge: avg_ic={edge.get('avg_ic')} edge_verdict={edge.get('verdict')}")
         return result
@@ -269,6 +292,7 @@ class PrometheusOptimizer:
                     score = -0.45 + 0.30 * closeness + self._param_softness_bonus(params)
                 else:
                     score = -0.5 + self._param_softness_bonus(params)
+                self._health["no_trade"] = self._health.get("no_trade", 0) + 1
                 trial.report(score, step=1)
                 return score
 
@@ -313,8 +337,16 @@ class PrometheusOptimizer:
         except optuna.TrialPruned:
             raise
         except Exception as e:
-            logger.debug(f"[Optimizer] Trial {trial.number} failed: {e}")
-            return -1.0
+            # Crashed trials used to vanish at debug level with a flat -1.0:
+            # when many trials crash the surface goes flat and the study
+            # "doesn't converge" with no visible reason. Count them, surface
+            # the first few errors in the result, and keep the penalty BELOW
+            # the no-trade band so TPE still ranks crash < no-trade < traded.
+            self._health["errors"] = self._health.get("errors", 0) + 1
+            if len(self._health.get("first_errors", [])) < 5:
+                self._health.setdefault("first_errors", []).append(f"{type(e).__name__}: {e}")
+            logger.warning(f"[Optimizer] Trial {trial.number} crashed: {type(e).__name__}: {e}")
+            return -0.8
         finally:
             for k, v in snapshot.items():
                 if v is not None and hasattr(cfg, k):
@@ -498,10 +530,11 @@ class PrometheusOptimizer:
 
             score = base * time_penalty * ruin_penalty
 
-            # Large bonus for configs that actually reach the target in backtest.
-            # No minimum-trade requirement: 5 excellent trades are fine.
-            if final >= target:
-                score += 0.30
+            # Target bonus as a RAMP from 85% -> 100% of target instead of a
+            # step at 100%: a cliff gives TPE no gradient to climb, so configs
+            # at 95% of target scored the same as ones at 40% — one reason
+            # studies wandered instead of converging on near-target regions.
+            score += 0.30 * min(1.0, max(0.0, (progress - 0.85) / 0.15))
             return score
 
         # ── Legacy metrics – kept for UI selector compatibility ──────────────
