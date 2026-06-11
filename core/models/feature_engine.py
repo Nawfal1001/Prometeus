@@ -86,6 +86,36 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["prev_low"] = df["low"].rolling(20).min().shift(1)
     df["market_structure"] = np.select([df["close"] > df["prev_high"], df["close"] < df["prev_low"]], [1, -1], default=0)
 
+    # ── Trader price-action patterns (all causal: current + past bars only) ──
+    upper_wick = df["high"] - np.maximum(df["close"], df["open"])
+    lower_wick = np.minimum(df["close"], df["open"]) - df["low"]
+    body_abs = (df["close"] - df["open"]).abs()
+    # Pin bar: dominant rejection wick >= 2x body and >= 55% of the range.
+    # +1 hammer (long lower wick = sellers rejected), -1 shooting star.
+    df["pinbar"] = np.select(
+        [(lower_wick >= 2 * body_abs) & (lower_wick / rng >= 0.55),
+         (upper_wick >= 2 * body_abs) & (upper_wick / rng >= 0.55)],
+        [1, -1], default=0)
+    # Engulfing: opposite-color body fully engulfs the prior body.
+    prev_open, prev_close = df["open"].shift(1), df["close"].shift(1)
+    df["engulfing"] = np.select(
+        [(df["close"] > df["open"]) & (prev_close < prev_open) & (df["close"] >= prev_open) & (df["open"] <= prev_close),
+         (df["close"] < df["open"]) & (prev_close > prev_open) & (df["close"] <= prev_open) & (df["open"] >= prev_close)],
+        [1, -1], default=0)
+    # Liquidity sweep ("stop hunt"): wick takes out the prior 20-bar swing
+    # low/high but the bar CLOSES back inside. +1 swept lows (bullish), -1
+    # swept highs (bearish).
+    df["liquidity_sweep"] = np.select(
+        [(df["low"] < df["prev_low"]) & (df["close"] > df["prev_low"]),
+         (df["high"] > df["prev_high"]) & (df["close"] < df["prev_high"])],
+        [1, -1], default=0)
+    # Support/resistance proximity in ATR units, signed: positive near support
+    # with room above (bullish location), negative near resistance.
+    atr_abs_px = (df["atr_norm"].clip(lower=1e-6) * df["close"]).replace(0, np.nan)
+    dist_res = (df["prev_high"] - df["close"]) / atr_abs_px
+    dist_sup = (df["close"] - df["prev_low"]) / atr_abs_px
+    df["sr_proximity"] = np.clip((dist_res - dist_sup) / 4.0, -1, 1).fillna(0)
+
     df["squeeze_on"] = df["bb_width"] < df["bb_width"].rolling(100).quantile(0.2)
     df["squeeze_fire"] = np.where(df["squeeze_on"].shift(1).fillna(False) & (~df["squeeze_on"].fillna(False)), np.sign(df["macd_hist"]), 0)
 
@@ -208,6 +238,7 @@ def get_feature_columns() -> list[str]:
         "vol_zscore_lag3", "ret_1_lag3", "ret_1_lag6", "adx_direction_lag3",
         "ret_skew_20", "ret_kurt_20", "close_pct_change_5", "high_low_range_pct",
         "rsi_x_adx", "vol_z_x_atr", "macd_x_rsi",
+        "pinbar", "engulfing", "liquidity_sweep", "sr_proximity",
     ]
 
 

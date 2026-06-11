@@ -85,6 +85,13 @@ class EntrySignal:
         add(row.get("ob_signal", 0), 0.75)
         add(row.get("funding_signal", 0), 0.45)
 
+        # Trader price-action patterns (validated per-account by the edge
+        # profile pattern report; the meta-model weighs them empirically too)
+        add(row.get("liquidity_sweep", 0), 0.6)
+        add(row.get("pinbar", 0), 0.4)
+        add(row.get("engulfing", 0), 0.4)
+        add(row.get("sr_proximity", 0), 0.5)
+
         try:
             self._load_xgb()
             if self._xgb is not None:

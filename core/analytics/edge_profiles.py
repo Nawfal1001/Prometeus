@@ -105,6 +105,11 @@ def learn_profiles(df: pd.DataFrame) -> dict:
     # -- collect per-bar outcomes with hour + symbol ------------------------
     rows = []     # (symbol, hour, direction, win)
     mom_by_symbol = {}
+    # H3 pattern report: outcomes of entries ALIGNED with each trader pattern
+    # (pattern sign == trade direction). Report-only — the meta-model weighs
+    # the features itself; this tells the human which patterns work here.
+    PATTERN_COLS = ("pinbar", "engulfing", "liquidity_sweep", "candle_pattern", "market_structure")
+    pattern_hits = {p: [] for p in PATTERN_COLS}
     lookback = int(getattr(cfg, "BTC_LEAD_LOOKBACK", 6))
     for sym, g in frames.items():
         if g is None or len(g) < 150:
@@ -122,12 +127,16 @@ def learn_profiles(df: pd.DataFrame) -> dict:
         has_time = isinstance(g.index, pd.DatetimeIndex)
         hours = g.index.hour.to_numpy() if has_time else None
         mom_by_symbol[sym] = (g.index, np.sign(g["close"].pct_change(lookback).to_numpy())) if has_time else None
+        pat_arrays = {p: g[p].to_numpy() for p in PATTERN_COLS if p in g.columns}
         for d in (1, -1):
             y = triple_barrier_labels(g, d)
             for i in range(len(y)):
                 if np.isnan(y[i]):
                     continue
                 rows.append((sym, int(hours[i]) if has_time else -1, d, float(y[i])))
+                for p, arr in pat_arrays.items():
+                    if arr[i] * d > 0:                     # pattern agrees with direction
+                        pattern_hits[p].append(float(y[i]))
     if not rows:
         return _neutral_profile("no data")
 
@@ -180,6 +189,16 @@ def learn_profiles(df: pd.DataFrame) -> dict:
                              "n_aligned": n_a, "n_opposed": n_o, "z": round(z, 2),
                              "significant": bool(significant), "penalty": round(penalty, 4)})
 
+    patterns_out = {}
+    for p, wins in pattern_hits.items():
+        n = len(wins)
+        wr = float(np.mean(wins)) if n else None
+        z = _z_two_proportions(wr, n, overall_wr, n_all) if n else 0.0
+        significant = n >= min_n and abs(z) >= z_thr
+        patterns_out[p] = {"win_rate": round(wr, 4) if wr is not None else None,
+                           "n": int(n), "z": round(z, 2), "significant": bool(significant),
+                           "edge_vs_base": round(wr - overall_wr, 4) if wr is not None else None}
+
     profile = {
         "version": 1,
         "learned_at": datetime.now(timezone.utc).isoformat(),
@@ -187,6 +206,7 @@ def learn_profiles(df: pd.DataFrame) -> dict:
         "samples": int(n_all),
         "sessions": sessions_out,
         "btc_lead": btc_lead,
+        "patterns": patterns_out,
     }
     sig_sessions = [k for k, v in sessions_out.items() if v["significant"]]
     logger.info(f"[Edge] profiles learned | overall_wr={overall_wr:.3f} n={n_all} "
@@ -275,4 +295,5 @@ def status() -> dict:
             "sessions": {k: {"multiplier": v.get("multiplier"), "significant": v.get("significant"),
                              "n": v.get("n"), "win_rate": v.get("win_rate")}
                          for k, v in (prof.get("sessions") or {}).items()},
-            "btc_lead": prof.get("btc_lead")}
+            "btc_lead": prof.get("btc_lead"),
+            "patterns": prof.get("patterns", {})}
